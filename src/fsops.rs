@@ -395,6 +395,14 @@ pub fn owner_of(dir: &Path) -> Result<u32> {
         .ctx(|| format!("inspect {}", dir.display()))
 }
 
+/// First executable file called `name` in `PATH`.
+pub fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

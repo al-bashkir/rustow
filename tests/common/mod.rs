@@ -223,3 +223,149 @@ impl Fixture {
             .unwrap_or_default()
     }
 }
+
+/// True when gpg can run. Missing gpg skips locally but fails in CI.
+pub fn require_gpg() -> bool {
+    if Command::new("gpg")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        return true;
+    }
+    assert!(std::env::var_os("CI").is_none(), "GPG REQUIRED: gpg is missing in CI");
+    eprintln!("SKIP: gpg is not installed; GPG tests did not run");
+    false
+}
+
+/// A disposable GNUPGHOME with one generated key; the agent dies on drop.
+pub struct GpgHome {
+    pub dir: PathBuf,
+    pub fpr: String,
+}
+
+impl Drop for GpgHome {
+    fn drop(&mut self) {
+        let _ = Command::new("gpgconf")
+            .arg("--homedir")
+            .arg(&self.dir)
+            .args(["--kill", "all"])
+            .output();
+    }
+}
+
+impl GpgHome {
+    pub fn gpg(&self) -> Command {
+        let mut cmd = Command::new("gpg");
+        cmd.arg("--homedir")
+            .arg(&self.dir)
+            .args(["--batch", "--no-tty", "--quiet"]);
+        cmd
+    }
+
+    /// Imports another home's public key (without trusting it).
+    pub fn import_public(&self, other: &GpgHome) {
+        let exported = other.gpg().args(["--export", &other.fpr]).output().unwrap().stdout;
+        let mut child = self
+            .gpg()
+            .arg("--import")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), &exported).unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+
+    pub fn decrypt(&self, path: &Path) -> String {
+        let out = self
+            .gpg()
+            .args(["--pinentry-mode", "loopback", "--passphrase", "pw", "--decrypt"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    }
+}
+
+impl Fixture {
+    /// A new GNUPGHOME under the fixture with a key; protected by "pw" when `locked`.
+    pub fn gpg_home(&self, name: &str, locked: bool) -> GpgHome {
+        let dir = self.base.join(format!("g-{name}"));
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut home = GpgHome {
+            dir,
+            fpr: String::new(),
+        };
+        let pass = if locked { "pw" } else { "" };
+        let uid = format!("rustow test {name} <{name}@example.invalid>");
+        let out = home
+            .gpg()
+            .args([
+                "--pinentry-mode",
+                "loopback",
+                "--passphrase",
+                pass,
+                "--quick-gen-key",
+                &uid,
+                "default",
+                "default",
+                "never",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let colons = home
+            .gpg()
+            .args(["--with-colons", "--list-keys"])
+            .output()
+            .unwrap()
+            .stdout;
+        let colons = String::from_utf8(colons).unwrap();
+        home.fpr = colons
+            .lines()
+            .find(|l| l.starts_with("fpr:"))
+            .unwrap()
+            .split(':')
+            .nth(9)
+            .unwrap()
+            .to_owned();
+        home
+    }
+
+    /// `.rustow.toml` with GPG recipients and home, plus `extra` TOML.
+    pub fn gpg_config(&self, home: &GpgHome, fprs: &[&str], extra: &str) {
+        let list = fprs.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
+        self.write(
+            ".rustow.toml",
+            &format!(
+                "version = 1\n{extra}\n[encryption.gpg]\nrecipients = [{list}]\nhomedir = \"{}\"\n",
+                home.dir.display()
+            ),
+        );
+    }
+
+    /// Writes OpenPGP ciphertext made by plain gpg to a repository path.
+    pub fn gpg_encrypt(&self, rel: &str, plaintext: &str, home: &GpgHome) -> PathBuf {
+        let path = self.repo.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut child = home
+            .gpg()
+            .args([
+                "--trust-model",
+                "always",
+                "--encrypt",
+                "--recipient",
+                &home.fpr,
+                "--output",
+            ])
+            .arg(&path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), plaintext.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+        path
+    }
+}

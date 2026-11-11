@@ -236,3 +236,15 @@ fn enc_edit_rejects_plaintext_and_nested_suffix() {
     fx.write("plain", "p");
     assert_eq!(fx.run_env(&["enc", "edit", "plain"], &[("VISUAL", "true")]).code, 2);
 }
+
+#[test]
+fn doctor_checks_identity_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let (fx, key) = keyed();
+    let ok = fx.run(&["doctor"]);
+    assert!(ok.stdout.contains("age identity"), "{ok:?}");
+    fs::set_permissions(&key.identity, fs::Permissions::from_mode(0o644)).unwrap();
+    let out = fx.run(&["doctor"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("chmod 600"), "{out:?}");
+}

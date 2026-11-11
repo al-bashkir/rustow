@@ -2,11 +2,12 @@
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nix::unistd::{AccessFlags, access, geteuid};
 use serde_json::json;
 
+use crate::crypto;
 use crate::error::Result;
 use crate::repo::Context;
 use crate::report::Printer;
@@ -44,7 +45,8 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
             format!("running as uid {uid}{}", if uid == 0 { " (root)" } else { "" }),
         ),
     ];
-    checks.push(match find_in_path("gpg") {
+    checks.extend(encryption_checks(ctx));
+    checks.push(match crate::fsops::find_in_path("gpg") {
         Some(path) => check("ok", "gpg", path.display().to_string()),
         None => check("warn", "gpg", "not found in PATH; needed only for .gpg sources"),
     });
@@ -106,10 +108,30 @@ fn writable(name: &'static str, dir: &Path, level: &'static str) -> Check {
     }
 }
 
-/// First executable file called `name` in `PATH`.
-pub fn find_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+/// Age identity files and the GPG home, without loading any key.
+fn encryption_checks(ctx: &Context) -> Vec<Check> {
+    let forbidden = [ctx.root.as_path(), ctx.cache_dir.as_path()];
+    let mut out = Vec::new();
+    match crypto::identity_paths(ctx) {
+        Err(e) => out.push(check("fail", "age identity", e)),
+        Ok(files) if files.is_empty() => out.push(check("info", "age identity", "none configured")),
+        Ok(files) => out.extend(
+            files
+                .iter()
+                .map(|f| match crypto::age::check_identity_file(f, &forbidden) {
+                    Ok(()) => check("ok", "age identity", f.display().to_string()),
+                    Err(e) => check("fail", "age identity", e),
+                }),
+        ),
+    }
+    let gpg = &ctx.config.encryption.gpg;
+    if !gpg.recipients.is_empty() || gpg.homedir.is_some() {
+        out.push(
+            match crypto::gpg_homedir(ctx).and_then(|h| crypto::gpg::check_homedir(&h, &forbidden).map(|()| h)) {
+                Ok(home) => check("ok", "gpg home", home.display().to_string()),
+                Err(e) => check("fail", "gpg home", e),
+            },
+        );
+    }
+    out
 }
