@@ -249,12 +249,28 @@ struct Want {
 }
 
 /// Collision text for every source involved in a collision.
-fn collision_details(discovery: &Discovery) -> BTreeMap<(Scope, &RelPath), String> {
+fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(Scope, &'a RelPath), String> {
     let mut collided = BTreeMap::new();
     for c in check_collisions(&discovery.sources) {
         let detail = c.to_string();
         for s in discovery.sources.iter().filter(|s| c.sources.contains(&s.path)) {
             collided.insert((s.scope, &s.dest), detail.clone());
+        }
+    }
+    // The home and root targets can overlap (`.rustowroot/home/<user>/x`).
+    let mut by_path: BTreeMap<PathBuf, Vec<&Source>> = BTreeMap::new();
+    for s in &discovery.sources {
+        by_path.entry(ctx.dest_path(s)).or_default().push(s);
+    }
+    for (path, group) in by_path.iter().filter(|(_, g)| g.len() > 1) {
+        let names: Vec<&str> = group.iter().map(|s| s.path.as_str()).collect();
+        let detail = format!(
+            "sources {} map to the same destination '{}'",
+            names.join(", "),
+            path.display()
+        );
+        for s in group {
+            collided.entry((s.scope, &s.dest)).or_insert_with(|| detail.clone());
         }
     }
     collided
@@ -264,7 +280,7 @@ fn collision_details(discovery: &Discovery) -> BTreeMap<(Scope, &RelPath), Strin
 /// `discovery`, so a selected source that collides with an unselected
 /// one is still blocked.
 pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Plan> {
-    let collided = collision_details(discovery);
+    let collided = collision_details(ctx, discovery);
     let mut folding = fold::analyze(ctx, discovery, selected, state)?;
     let mut items = Vec::with_capacity(selected.len());
     for dir in &folding.folds {

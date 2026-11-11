@@ -113,3 +113,19 @@ fn root_link_into_writable_source_tree_is_refused() {
     fx.ok(&["apply"]);
     assert!(is_symlink(&fx.root_path("etc/x.conf")));
 }
+
+/// Review M1: a home source and a .rustowroot source that land on the
+/// same file collide, instead of the last one silently winning.
+#[test]
+fn home_and_root_sources_for_one_file_collide() {
+    let fx = Fixture::new();
+    // Put HOME inside the root target so both scopes reach one path.
+    let target = fx.root.join("home/me");
+    fs::create_dir_all(&target).unwrap();
+    fx.write(".bashrc", "home\n");
+    fx.write(".rustowroot/home/me/.bashrc", "root\n");
+    let out = fx.run(&["--target", target.to_str().unwrap(), "apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("same destination"), "{out:?}");
+    assert!(!target.join(".bashrc").exists());
+}
