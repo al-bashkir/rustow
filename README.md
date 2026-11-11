@@ -50,6 +50,22 @@ An example repository is in [examples/dotfiles](examples/dotfiles). See [docs/qu
 - [Troubleshooting](docs/troubleshooting.md)
 - [Developer notes (AGENTS.md)](AGENTS.md)
 
+## Differences from GNU Stow and chezmoi
+
+rustow takes the symlink model of GNU Stow and the templates, copies, encryption and state of chezmoi. It is a separate program, not a clone of either.
+
+| Topic | GNU Stow | chezmoi | rustow |
+|---|---|---|---|
+| Repository layout | One directory per package | Source names with attribute prefixes (`dot_`, `private_`, …) | Flat: the repository mirrors `~`; `.rustowroot/` mirrors `/` |
+| Default deployment | Symlink | Copy | Symlink |
+| Copies | No | Default | Per file, with `rustow file add` |
+| Templates | No | Go `text/template` | MiniJinja, rendered into a repository-local cache, then linked; copied when the template has mode, owner or group |
+| Encryption | No | age, GPG and others | age (built in) and GPG (installed `gpg`), decrypted into a private cache |
+| System files | A separate stow directory with target `/` | Not the main use | `.rustowroot/`, with privilege hints and link trust checks |
+| Conflicts | Stop | Prompt by default | Stop and change nothing by default; `skip`, `backup` or `overwrite` on request |
+| State | None; the links are the state | Persistent state | Persistent state, plus a check of the real filesystem before every change |
+| Directory folding | On by default | No | Optional (`fold_directories`), off by default |
+
 ## Limits
 
 - rustow has no global rollback. It records state for each successful item.

@@ -50,7 +50,7 @@ mode = "0600"
 | --- | --- | --- |
 | `target` | `"~"` | Target of home sources. `--target` overrides it. |
 | `root_target` | `"/"` | Target of `.rustowroot/` sources. `--root-target` overrides it. |
-| `cache_dir` | `".rustowcache"` | Cache directory. A relative path starts at the repository. |
+| `cache_dir` | `".rustowcache"` | Cache directory. A relative path starts at the repository. An in-repository cache belongs to the repository owner: another user (normally root) uses `<state_dir>/cache` instead, and rustow prints a notice. |
 | `state_dir` | none | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`. |
 | `create_directories` | `true` | Create missing parent directories. |
 | `fold_directories` | `false` | Fold plain directories into one symlink. See below. |
@@ -64,7 +64,7 @@ When `fold_directories = true`, rustow uses one symlink for the shallowest home 
 
 rustow never folds in `.rustowroot/`.
 
-A recorded folded link that no longer qualifies becomes a real directory. This happens when you add a template, a copy, an encrypted file or an ignored file, or when you turn folding off. rustow refuses to unfold when files under the directory are not sources, because they would disappear from the destination.
+A recorded folded link that no longer qualifies becomes a real directory. This happens when you add a template, a copy, an encrypted file or an ignored file, or when you turn folding off. rustow refuses to unfold when files under the directory are not sources, because they would disappear from the destination. Files below a folded link that cannot be unfolded are blocked too. If you replace rustow's folded link yourself (with a directory or your own symlink), rustow treats it as yours: it plans the files below it against what is there, with the normal conflict rules, and `unlink` forgets the old record.
 
 `unlink` of a file inside a folded directory matches nothing. Unlink the directory.
 

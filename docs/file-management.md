@@ -26,7 +26,7 @@ rustow file remove .config/example/settings.json
 ## Copy rules
 
 - A new copy keeps the source file mode.
-- An update keeps the mode of the destination.
+- An update keeps the mode, owner and group of the destination (template metadata can set them explicitly).
 - A copy from an encrypted source gets 0600.
 - rustow writes a temporary file in the same directory (mode 0600), sets owner and mode, calls `fsync`, then renames it. It never follows a symlink at the destination.
 - If you change a copy by hand, rustow reports MODIFIED and a conflict. It does not overwrite your change unless you use `--backup` or `--force`.
