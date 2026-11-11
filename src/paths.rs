@@ -83,6 +83,19 @@ impl RelPath {
     }
 }
 
+impl serde::Serialize for RelPath {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RelPath {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        RelPath::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
 impl fmt::Display for RelPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -90,7 +103,10 @@ impl fmt::Display for RelPath {
 }
 
 /// Where a source deploys: the home target, or the root target for `.rustowroot/`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum Scope {
     Home,
     Root,

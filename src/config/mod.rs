@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, IoContext, Result};
 use crate::paths::RelPath;
@@ -12,7 +12,9 @@ pub const CONFIG_FILE: &str = ".rustow.toml";
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     #[default]
