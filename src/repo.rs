@@ -89,18 +89,10 @@ impl Context {
             private_cache,
         } = InternalDirs::resolve(&root, &home, &config, env)?;
         let ignore = Ignore::load(&root, inside)?;
-        if private_cache {
-            notices.push(format!(
-                "the repository belongs to another user; using the private cache {}",
-                cache_dir.display()
-            ));
-        }
-        if root_target != Path::new("/") {
-            notices.push(format!(
-                "system files (.rustowroot/) deploy under {}",
-                root_target.display()
-            ));
-        }
+        notices.extend(setup_notices(
+            private_cache.then_some(cache_dir.as_path()),
+            &root_target,
+        ));
         let repo_id = Hash::of(root.as_os_str().as_encoded_bytes()).short().to_owned();
         Ok(Context {
             root,
@@ -194,6 +186,24 @@ fn resolve_targets(
         }
     }
     Ok((home_target, root_target))
+}
+
+/// Notices about a private cache and a non-default root target.
+fn setup_notices(private_cache: Option<&Path>, root_target: &Path) -> Vec<String> {
+    let mut notices = Vec::new();
+    if let Some(cache) = private_cache {
+        notices.push(format!(
+            "the repository belongs to another user; using the private cache {}",
+            cache.display()
+        ));
+    }
+    if root_target != Path::new("/") {
+        notices.push(format!(
+            "system files (.rustowroot/) deploy under {}",
+            root_target.display()
+        ));
+    }
+    notices
 }
 
 fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {
