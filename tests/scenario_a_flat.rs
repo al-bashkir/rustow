@@ -27,10 +27,7 @@ fn flat_mapping() {
 fn symlink_targets_relative() {
     let fx = flat();
     fx.ok(&["apply"]);
-    assert_eq!(
-        link_text(&fx.home_path(".bashrc")),
-        PathBuf::from("dotfiles/.bashrc")
-    );
+    assert_eq!(link_text(&fx.home_path(".bashrc")), PathBuf::from("dotfiles/.bashrc"));
     assert_eq!(
         link_text(&fx.home_path(".config/nvim/init.lua")),
         PathBuf::from("../../dotfiles/.config/nvim/init.lua")
@@ -42,10 +39,7 @@ fn creates_parent_dirs() {
     let fx = flat();
     fx.ok(&["apply"]);
     let meta = fs::symlink_metadata(fx.home_path(".config/nvim")).unwrap();
-    assert!(
-        meta.is_dir(),
-        "parent must be a real directory, not a folded link"
-    );
+    assert!(meta.is_dir(), "parent must be a real directory, not a folded link");
 }
 
 #[test]
@@ -150,10 +144,7 @@ fn ancestor_symlink_dir_is_followed_when_safe() {
     fx.ok(&["apply"]);
     assert!(is_symlink(&elsewhere.join("nvim/init.lua")));
     assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "-- nvim\n");
-    assert!(
-        is_symlink(&fx.home_path(".config")),
-        "the user's symlink is kept"
-    );
+    assert!(is_symlink(&fx.home_path(".config")), "the user's symlink is kept");
 }
 
 #[test]

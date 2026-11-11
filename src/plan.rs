@@ -71,10 +71,7 @@ impl Conflict {
 
     /// Conflicts that `--backup` / `--force` may resolve.
     pub fn resolvable(self) -> bool {
-        matches!(
-            self,
-            Conflict::Unmanaged | Conflict::Modified | Conflict::FileToSymlink
-        )
+        matches!(self, Conflict::Unmanaged | Conflict::Modified | Conflict::FileToSymlink)
     }
 }
 
@@ -114,15 +111,7 @@ pub fn decide(desired: &Desired, observed: &Observed, recorded: Recorded) -> Dec
             Recorded::Link(ours) if ours == actual => Decision::Update,
             _ => Decision::Conflict(Conflict::Unmanaged),
         },
-        (
-            Desired::File { hash: want, meta },
-            Observed::File {
-                hash,
-                mode,
-                uid,
-                gid,
-            },
-        ) => {
+        (Desired::File { hash: want, meta }, Observed::File { hash, mode, uid, gid }) => {
             if hash == want {
                 match (meta.matches(*mode, *uid, *gid), recorded) {
                     (false, _) => Decision::FixMetadata,
@@ -144,12 +133,10 @@ pub fn decide(desired: &Desired, observed: &Observed, recorded: Recorded) -> Dec
 pub fn recorded(record: Option<&Record>) -> Recorded<'_> {
     match record {
         Some(Record {
-            link_target: Some(t),
-            ..
+            link_target: Some(t), ..
         }) => Recorded::Link(t),
         Some(Record {
-            applied_hash: Some(h),
-            ..
+            applied_hash: Some(h), ..
         }) => Recorded::Copy(h),
         _ => Recorded::None,
     }
@@ -221,20 +208,11 @@ struct Want {
 /// Plans `selected` sources. Collisions are checked across all of
 /// `discovery`, so a selected source that collides with an unselected
 /// one is still blocked.
-pub fn build(
-    ctx: &Context,
-    discovery: &Discovery,
-    selected: &[&Source],
-    state: &State,
-) -> Result<Plan> {
+pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Plan> {
     let mut collided: BTreeMap<(Scope, &RelPath), String> = BTreeMap::new();
     for c in check_collisions(&discovery.sources) {
         let detail = c.to_string();
-        for s in discovery
-            .sources
-            .iter()
-            .filter(|s| c.sources.contains(&s.path))
-        {
+        for s in discovery.sources.iter().filter(|s| c.sources.contains(&s.path)) {
             collided.insert((s.scope, &s.dest), detail.clone());
         }
     }
@@ -258,30 +236,29 @@ pub fn build(
 }
 
 fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>) -> Result<Step> {
-    let (path, missing_dirs) =
-        match fsops::parent_state(ctx.target_root(source.scope), &source.dest)? {
-            ParentState::Ready(parent) => (parent.join(source.dest.file_name()), None),
-            ParentState::Blocked { path, reason } => {
-                let detail = format!("{}: {reason}", path.display());
-                return Ok(Step::Blocked {
-                    conflict: Conflict::ParentBlocked,
-                    detail,
-                });
-            }
-            ParentState::Missing { .. } if !ctx.config.defaults.create_directories => {
-                return Ok(Step::Blocked {
-                    conflict: Conflict::NoParent,
-                    detail: dest.display().to_string(),
-                });
-            }
-            ParentState::Missing { existing, missing } => {
-                let path = missing
-                    .iter()
-                    .fold(existing.clone(), |p, m| p.join(m))
-                    .join(source.dest.file_name());
-                (path, Some((existing, missing)))
-            }
-        };
+    let (path, missing_dirs) = match fsops::parent_state(ctx.target_root(source.scope), &source.dest)? {
+        ParentState::Ready(parent) => (parent.join(source.dest.file_name()), None),
+        ParentState::Blocked { path, reason } => {
+            let detail = format!("{}: {reason}", path.display());
+            return Ok(Step::Blocked {
+                conflict: Conflict::ParentBlocked,
+                detail,
+            });
+        }
+        ParentState::Missing { .. } if !ctx.config.defaults.create_directories => {
+            return Ok(Step::Blocked {
+                conflict: Conflict::NoParent,
+                detail: dest.display().to_string(),
+            });
+        }
+        ParentState::Missing { existing, missing } => {
+            let path = missing
+                .iter()
+                .fold(existing.clone(), |p, m| p.join(m))
+                .join(source.dest.file_name());
+            (path, Some((existing, missing)))
+        }
+    };
     let want = match want(ctx, source, &path) {
         Ok(w) => w,
         Err(msg) => return Ok(Step::Failed(msg)),
@@ -304,11 +281,7 @@ fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>
     Ok(Step::Deploy(Box::new(Deploy {
         path,
         missing_dirs,
-        dir_mode: if source.mode.backend().is_some() {
-            0o700
-        } else {
-            0o777
-        },
+        dir_mode: if source.mode.backend().is_some() { 0o700 } else { 0o777 },
         desired: want.desired,
         observed,
         decision,
@@ -320,11 +293,7 @@ fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>
     })))
 }
 
-fn plan_cache(
-    path: PathBuf,
-    bytes: Zeroizing<Vec<u8>>,
-    record: Option<&Record>,
-) -> Result<CacheWrite> {
+fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>) -> Result<CacheWrite> {
     let observed = fsops::inspect(&path)?;
     let desired = Desired::File {
         hash: Hash::of(&bytes),
@@ -346,11 +315,8 @@ fn broken_link_detail(path: &Path, observed: &Observed, decision: Decision) -> O
     let Observed::Symlink(text) = observed else {
         return None;
     };
-    let dangling = path
-        .parent()
-        .is_some_and(|p| fs::metadata(p.join(text)).is_err());
-    (dangling && matches!(decision, Decision::Conflict(_)))
-        .then(|| format!("broken symlink to {}", text.display()))
+    let dangling = path.parent().is_some_and(|p| fs::metadata(p.join(text)).is_err());
+    (dangling && matches!(decision, Decision::Conflict(_))).then(|| format!("broken symlink to {}", text.display()))
 }
 
 /// Desired state of one source's destination at `path`.
@@ -386,8 +352,7 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
             })
         }
         Mode::FileCopy => {
-            let mode =
-                fs::symlink_metadata(&source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
+            let mode = fs::symlink_metadata(&source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
             let hash = Hash::of(&bytes);
             let record = Record {
                 applied_hash: Some(hash.clone()),
@@ -405,10 +370,7 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
                 record,
             })
         }
-        other => Err(format!(
-            "{} deployment is not implemented yet",
-            other.label()
-        )),
+        other => Err(format!("{} deployment is not implemented yet", other.label())),
     }
 }
 
@@ -437,12 +399,7 @@ pub enum Verdict {
 /// Plans removal of recorded destinations whose source matches `args`
 /// (repository-relative prefixes; all when empty) and whose mode the
 /// selector covers. Sources that no longer exist are included.
-pub fn plan_removal(
-    ctx: &Context,
-    args: &[String],
-    selector: Selector,
-    state: &State,
-) -> Result<Vec<Removal>> {
+pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &State) -> Result<Vec<Removal>> {
     let mut prefixes = Vec::new();
     for arg in args.iter().filter(|a| !matches!(a.as_str(), "." | "./")) {
         let rel = RelPath::parse(arg)?;
@@ -474,12 +431,8 @@ pub fn plan_removal(
         let verdict = match (&observed, recorded(Some(record))) {
             (Observed::Missing, _) => Verdict::Forget,
             (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => Verdict::Remove(observed),
-            (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => {
-                Verdict::Remove(observed)
-            }
-            _ => {
-                Verdict::Keep("destination changed since rustow deployed it; left in place".into())
-            }
+            (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => Verdict::Remove(observed),
+            _ => Verdict::Keep("destination changed since rustow deployed it; left in place".into()),
         };
         out.push(Removal {
             source: record.source.clone(),
@@ -534,16 +487,9 @@ mod tests {
 
     #[test]
     fn missing_is_create_for_both_kinds() {
+        assert_eq!(decide(&want_link("a"), &Observed::Missing, Recorded::None), Create);
         assert_eq!(
-            decide(&want_link("a"), &Observed::Missing, Recorded::None),
-            Create
-        );
-        assert_eq!(
-            decide(
-                &want_file("a"),
-                &Observed::Missing,
-                Recorded::Copy(&h("old"))
-            ),
+            decide(&want_file("a"), &Observed::Missing, Recorded::Copy(&h("old"))),
             Create
         );
     }
@@ -569,21 +515,14 @@ mod tests {
             decide(&want_link("dot/x"), &link("dot/x"), Recorded::Link(&t)),
             UpToDate
         );
-        assert_eq!(
-            decide(&want_link("dot/x"), &link("dot/x"), Recorded::None),
-            Adopt
-        );
+        assert_eq!(decide(&want_link("dot/x"), &link("dot/x"), Recorded::None), Adopt);
         let old = PathBuf::from("dot/old");
         assert_eq!(
             decide(&want_link("dot/x"), &link("dot/old"), Recorded::Link(&old)),
             Update
         );
         assert_eq!(
-            decide(
-                &want_link("dot/x"),
-                &link("elsewhere"),
-                Recorded::Link(&old)
-            ),
+            decide(&want_link("dot/x"), &link("elsewhere"), Recorded::Link(&old)),
             Conflict(super::Conflict::Unmanaged)
         );
         assert_eq!(
@@ -611,10 +550,7 @@ mod tests {
     #[test]
     fn our_symlink_to_file_is_update() {
         let t = PathBuf::from("dot/x");
-        assert_eq!(
-            decide(&want_file("a"), &link("dot/x"), Recorded::Link(&t)),
-            Update
-        );
+        assert_eq!(decide(&want_file("a"), &link("dot/x"), Recorded::Link(&t)), Update);
         assert_eq!(
             decide(&want_file("a"), &link("other"), Recorded::Link(&t)),
             Conflict(super::Conflict::Unmanaged)
@@ -627,10 +563,7 @@ mod tests {
 
     #[test]
     fn copy_cases() {
-        assert_eq!(
-            decide(&want_file("a"), &file("a"), Recorded::Copy(&h("a"))),
-            UpToDate
-        );
+        assert_eq!(decide(&want_file("a"), &file("a"), Recorded::Copy(&h("a"))), UpToDate);
         // Unrecorded but identical: adopt.
         assert_eq!(decide(&want_file("a"), &file("a"), Recorded::None), Adopt);
         // Source changed, destination untouched: outdated, safe update.
@@ -663,10 +596,7 @@ mod tests {
                 gid: None,
             },
         };
-        assert_eq!(
-            decide(&want, &file("a"), Recorded::Copy(&h("a"))),
-            FixMetadata
-        );
+        assert_eq!(decide(&want, &file("a"), Recorded::Copy(&h("a"))), FixMetadata);
         assert_eq!(decide(&want, &file("a"), Recorded::None), FixMetadata);
         let ok = Observed::File {
             hash: h("a"),

@@ -96,10 +96,7 @@ impl State {
             return Err(bad(format!("unsupported state version {}", state.version)));
         }
         if state.repo != repo {
-            return Err(bad(format!(
-                "it belongs to repository {}",
-                state.repo.display()
-            )));
+            return Err(bad(format!("it belongs to repository {}", state.repo.display())));
         }
         Ok(state)
     }
@@ -108,8 +105,7 @@ impl State {
     pub fn save(&self, dir: &Path, repo_id: &str) -> Result<()> {
         fsops::ensure_private_dir(dir)?;
         let file = State::file(dir, repo_id);
-        let mut bytes = serde_json::to_vec_pretty(self)
-            .map_err(|e| Error::Failed(format!("encode state: {e}")))?;
+        let mut bytes = serde_json::to_vec_pretty(self).map_err(|e| Error::Failed(format!("encode state: {e}")))?;
         bytes.push(b'\n');
         if fsops::read_file(&file).is_ok_and(|old| old == bytes) {
             return Ok(());
@@ -212,19 +208,14 @@ mod tests {
         let before = std::fs::metadata(&file).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         s.save(d.path(), "id").unwrap();
-        assert_eq!(
-            std::fs::metadata(&file).unwrap().modified().unwrap(),
-            before
-        );
+        assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before);
     }
 
     #[test]
     fn corrupt_or_foreign_state_is_an_error() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(State::file(d.path(), "id"), "{not json").unwrap();
-        let e = State::load(d.path(), "id", Path::new("/r"))
-            .unwrap_err()
-            .to_string();
+        let e = State::load(d.path(), "id", Path::new("/r")).unwrap_err().to_string();
         assert!(e.contains("id.json"), "{e}");
         let mut other = sample();
         other.repo = "/elsewhere".into();

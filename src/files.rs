@@ -32,18 +32,10 @@ pub fn add(ctx: &Context, printer: &Printer, paths: &[String], dry_run: bool) ->
                     text = updated;
                     changes.push(Change::new(rel.as_str(), "register", None));
                 }
-                None => changes.push(Change::new(
-                    rel.as_str(),
-                    "ok",
-                    Some("already registered".into()),
-                )),
+                None => changes.push(Change::new(rel.as_str(), "ok", Some("already registered".into()))),
             },
             Mode::FileCopy | Mode::DecryptCopy(_) => {
-                changes.push(Change::new(
-                    rel.as_str(),
-                    "ok",
-                    Some("already registered".into()),
-                ));
+                changes.push(Change::new(rel.as_str(), "ok", Some("already registered".into())));
             }
             Mode::TemplateLink(_) | Mode::TemplateCopy(..) => {
                 return Err(Error::Usage(format!(
@@ -73,11 +65,7 @@ pub fn remove(ctx: &Context, printer: &Printer, paths: &[String], dry_run: bool)
                     Some("deployed copy left in place".into()),
                 ));
             }
-            None => changes.push(Change::new(
-                rel.as_str(),
-                "ok",
-                Some("not registered".into()),
-            )),
+            None => changes.push(Change::new(rel.as_str(), "ok", Some("not registered".into()))),
         }
     }
     if !dry_run && changes.iter().any(|c| c.action != "ok") {
@@ -129,11 +117,5 @@ fn read_config(ctx: &Context) -> Result<(String, u32)> {
 }
 
 fn write_config(ctx: &Context, text: &str, mode: u32) -> Result<()> {
-    fsops::write_atomic(
-        &ctx.root.join(CONFIG_FILE),
-        text.as_bytes(),
-        mode,
-        None,
-        None,
-    )
+    fsops::write_atomic(&ctx.root.join(CONFIG_FILE), text.as_bytes(), mode, None, None)
 }

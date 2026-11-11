@@ -17,10 +17,7 @@ pub fn diff(plan: &Plan, printer: &Printer) -> Result<i32> {
         let label = printer.path(&item.dest);
         let text = match &item.step {
             Step::Failed(msg) => {
-                eprintln!(
-                    "rustow: {}: cannot compute desired content: {msg}",
-                    item.source.path
-                );
+                eprintln!("rustow: {}: cannot compute desired content: {msg}", item.source.path);
                 failed = true;
                 continue;
             }

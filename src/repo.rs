@@ -30,17 +30,12 @@ pub struct Env {
 
 impl Env {
     pub fn from_process() -> Result<Env> {
-        let cwd = std::env::current_dir()
-            .map_err(|e| Error::Failed(format!("current directory: {e}")))?;
+        let cwd = std::env::current_dir().map_err(|e| Error::Failed(format!("current directory: {e}")))?;
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|h| h.is_absolute())
             .ok_or_else(|| Error::Usage("HOME is not set to an absolute path".into()))?;
-        let var = |name| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
+        let var = |name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
         Ok(Env {
             cwd,
             home,
@@ -86,11 +81,7 @@ impl Context {
             None => canonical_dir(&root.join(expand_tilde(configured, &home)), what),
         };
         let home_target = target(&opts.target, &config.defaults.target, "target")?;
-        let root_target = target(
-            &opts.root_target,
-            &config.defaults.root_target,
-            "root target",
-        )?;
+        let root_target = target(&opts.root_target, &config.defaults.root_target, "root target")?;
         for (dir, what) in [(&home_target, "target"), (&root_target, "root target")] {
             if dir.starts_with(&root) {
                 return Err(Error::Usage(format!(
@@ -107,9 +98,7 @@ impl Context {
             inside,
         } = InternalDirs::resolve(&root, &home, &config, env)?;
         let ignore = Ignore::load(&root, inside)?;
-        let repo_id = Hash::of(root.as_os_str().as_encoded_bytes())
-            .short()
-            .to_owned();
+        let repo_id = Hash::of(root.as_os_str().as_encoded_bytes()).short().to_owned();
         Ok(Context {
             root,
             config,
@@ -163,9 +152,7 @@ impl Context {
                 return Err(Error::Usage(format!("'{rel}' is ignored by {IGNORE_FILE}")));
             }
             if !discovery.sources.iter().any(|s| s.path.starts_with(&rel)) {
-                return Err(Error::Usage(format!(
-                    "'{rel}' does not match any deployable source"
-                )));
+                return Err(Error::Usage(format!("'{rel}' does not match any deployable source")));
             }
             wanted.push(rel);
         }
@@ -183,10 +170,7 @@ fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {
         .canonicalize()
         .map_err(|e| Error::Usage(format!("{what} {}: {e}", path.display())))?;
     if !dir.is_dir() {
-        return Err(Error::Usage(format!(
-            "{what} {} is not a directory",
-            dir.display()
-        )));
+        return Err(Error::Usage(format!("{what} {} is not a directory", dir.display())));
     }
     Ok(dir)
 }
@@ -232,10 +216,7 @@ impl InternalDirs {
             (None, Some(xdg)) if xdg.is_absolute() => xdg.join("rustow"),
             (None, _) => home.join(".local/state/rustow"),
         };
-        let inside = internal_dirs(
-            root,
-            &[("cache_dir", &cache_dir), ("state_dir", &state_dir)],
-        )?;
+        let inside = internal_dirs(root, &[("cache_dir", &cache_dir), ("state_dir", &state_dir)])?;
         Ok(InternalDirs {
             cache_dir,
             state_dir,
@@ -249,8 +230,7 @@ impl InternalDirs {
 fn internal_dirs(root: &Path, dirs: &[(&str, &PathBuf)]) -> Result<Vec<RelPath>> {
     let mut out = Vec::new();
     for (name, dir) in dirs {
-        let bad =
-            |why: &str| Error::Config(format!("{CONFIG_FILE}: {name} {}: {why}", dir.display()));
+        let bad = |why: &str| Error::Config(format!("{CONFIG_FILE}: {name} {}: {why}", dir.display()));
         if root.starts_with(dir) {
             return Err(bad("must not be the repository or one of its parents"));
         }
@@ -309,11 +289,7 @@ mod tests {
             repo: None,
             xdg_state_home: None,
         };
-        Fx {
-            _tmp: tmp,
-            base,
-            env,
-        }
+        Fx { _tmp: tmp, base, env }
     }
 
     fn open(fx: &Fx, opts: GlobalOpts) -> Result<Context> {
@@ -342,10 +318,7 @@ mod tests {
         fs::create_dir_all(f.base.join("other/sub")).unwrap();
         fs::write(f.base.join("other/.rustowignore"), "").unwrap();
         f.env.cwd = f.base.join("other/sub");
-        assert_eq!(
-            open(&f, GlobalOpts::default()).unwrap().root,
-            f.base.join("other")
-        );
+        assert_eq!(open(&f, GlobalOpts::default()).unwrap().root, f.base.join("other"));
     }
 
     #[test]
@@ -365,10 +338,7 @@ mod tests {
         let mut f = fx();
         fs::create_dir_all(f.base.join("other")).unwrap();
         f.env.repo = Some(f.base.join("other"));
-        assert_eq!(
-            open(&f, GlobalOpts::default()).unwrap().root,
-            f.base.join("other")
-        );
+        assert_eq!(open(&f, GlobalOpts::default()).unwrap().root, f.base.join("other"));
     }
 
     #[test]
@@ -378,11 +348,7 @@ mod tests {
         f.env.cwd = f.base.join("plain");
         let ctx = open(&f, GlobalOpts::default()).unwrap();
         assert_eq!(ctx.root, f.base.join("plain"));
-        assert!(
-            ctx.notices[0].contains("current directory"),
-            "{:?}",
-            ctx.notices
-        );
+        assert!(ctx.notices[0].contains("current directory"), "{:?}", ctx.notices);
     }
 
     #[test]
@@ -438,10 +404,7 @@ mod tests {
         let ctx = open(&f, GlobalOpts::default()).unwrap();
         assert_eq!(ctx.cache_dir, f.base.join("home/dot/var/c"));
         // The configured cache is excluded, and so is the default one.
-        assert!(
-            ctx.ignore
-                .is_reserved(&RelPath::parse("var/c/x").unwrap(), false)
-        );
+        assert!(ctx.ignore.is_reserved(&RelPath::parse("var/c/x").unwrap(), false));
         assert!(
             ctx.ignore
                 .is_reserved(&RelPath::parse(".rustowcache/x").unwrap(), false)
@@ -493,10 +456,7 @@ mod tests {
             [".config/nvim/init.lua"]
         );
         assert_eq!(
-            names(
-                &ctx.select(&d, &["./.bashrc".into(), ".bashrc".into()])
-                    .unwrap()
-            ),
+            names(&ctx.select(&d, &["./.bashrc".into(), ".bashrc".into()]).unwrap()),
             [".bashrc"]
         );
     }

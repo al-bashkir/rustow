@@ -52,9 +52,7 @@ impl RelPath {
     }
 
     pub fn parent(&self) -> Option<RelPath> {
-        self.0
-            .rsplit_once('/')
-            .map(|(parent, _)| RelPath(parent.to_owned()))
+        self.0.rsplit_once('/').map(|(parent, _)| RelPath(parent.to_owned()))
     }
 
     pub fn join(&self, child: &RelPath) -> RelPath {
@@ -103,9 +101,7 @@ impl fmt::Display for RelPath {
 }
 
 /// Where a source deploys: the home target, or the root target for `.rustowroot/`.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Home,
@@ -134,9 +130,7 @@ pub fn expand_tilde(input: &str, home: &Path) -> PathBuf {
 /// are absolute and normalized. Relative when they share an ancestor below
 /// `/`, absolute otherwise.
 pub fn link_text(link: &Path, target: &Path) -> PathBuf {
-    let from: Vec<Component> = link
-        .parent()
-        .map_or(Vec::new(), |p| p.components().collect());
+    let from: Vec<Component> = link.parent().map_or(Vec::new(), |p| p.components().collect());
     let to: Vec<Component> = target.components().collect();
     let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
     // Sharing only the root component means the paths are unrelated trees.

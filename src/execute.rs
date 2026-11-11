@@ -92,12 +92,9 @@ pub fn exit_code(items: &[ItemReport]) -> i32 {
 
 /// True when the plan holds a conflict or failure that the policy does not resolve.
 pub fn blocked(plan: &Plan, policy: Policy) -> bool {
-    plan.items.iter().any(|i| {
-        matches!(
-            predict(i, policy).0,
-            Action::Conflict | Action::Skip | Action::Fail
-        )
-    })
+    plan.items
+        .iter()
+        .any(|i| matches!(predict(i, policy).0, Action::Conflict | Action::Skip | Action::Fail))
 }
 
 /// The action `execute` would take for an item, and why.
@@ -112,9 +109,7 @@ pub fn predict(item: &PlanItem, policy: Policy) -> (Action, Option<String>) {
     };
     match &item.step {
         Step::Failed(msg) => (Action::Fail, Some(msg.clone())),
-        Step::Blocked { conflict, detail } => {
-            unresolved(format!("{}: {detail}", conflict.describe()))
-        }
+        Step::Blocked { conflict, detail } => unresolved(format!("{}: {detail}", conflict.describe())),
         Step::Deploy(d) => {
             let cache_conflict = d.cache.as_ref().and_then(|c| match c.decision {
                 Decision::Conflict(conflict) => Some(conflict),
@@ -125,11 +120,7 @@ pub fn predict(item: &PlanItem, policy: Policy) -> (Action, Option<String>) {
                 _ => None,
             };
             if let Some(conflict) = dest_conflict.or(cache_conflict) {
-                let what = if dest_conflict.is_some() {
-                    ""
-                } else {
-                    "cache entry: "
-                };
+                let what = if dest_conflict.is_some() { "" } else { "cache entry: " };
                 let mut detail = format!("{what}{}", conflict.describe());
                 if let Some(extra) = &d.detail {
                     detail = format!("{detail} ({extra})");
@@ -193,13 +184,7 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
     out
 }
 
-fn apply(
-    d: &Deploy,
-    action: Action,
-    item: &PlanItem,
-    run: &Run,
-    state: &mut State,
-) -> Result<Option<String>> {
+fn apply(d: &Deploy, action: Action, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
     if let Some((existing, missing)) = &d.missing_dirs {
         state
             .created_dirs
@@ -225,9 +210,7 @@ fn apply(
             recheck(&d.path, &d.observed)?;
             if dest_conflict {
                 match run.policy {
-                    Policy::Backup => {
-                        detail = Some(backup(&d.path, &backup_path(run, item, false))?)
-                    }
+                    Policy::Backup => detail = Some(backup(&d.path, &backup_path(run, item, false))?),
                     _ => fs::remove_file(&d.path)
                         .map_err(|e| Error::Failed(format!("remove {}: {e}", d.path.display())))?,
                 }
@@ -253,11 +236,7 @@ fn backup(path: &Path, to: &Path) -> Result<String> {
 }
 
 fn backup_path(run: &Run, item: &PlanItem, cache: bool) -> PathBuf {
-    let scope = if cache {
-        "cache"
-    } else {
-        item.source.scope.name()
-    };
+    let scope = if cache { "cache" } else { item.source.scope.name() };
     run.backup_dir.join(scope).join(item.source.dest.as_path())
 }
 
@@ -266,13 +245,7 @@ fn place(d: &Deploy) -> Result<()> {
         Desired::Symlink(text) => fsops::symlink_atomic(&d.path, text),
         Desired::File { meta, .. } => {
             let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
-            fsops::write_atomic(
-                &d.path,
-                bytes,
-                meta.mode.unwrap_or(d.file_mode),
-                meta.uid,
-                meta.gid,
-            )
+            fsops::write_atomic(&d.path, bytes, meta.mode.unwrap_or(d.file_mode), meta.uid, meta.gid)
         }
     }
 }

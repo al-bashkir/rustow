@@ -22,9 +22,7 @@ pub fn minimal() -> String {
 /// Adds `version = 1` to an existing configuration that lacks it, then
 /// validates the result. Malformed or unsupported configuration is an error.
 pub fn ensure_init(text: &str) -> Result<Option<String>> {
-    let doc: DocumentMut = text
-        .parse()
-        .map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))?;
+    let doc: DocumentMut = text.parse().map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))?;
     let updated = if doc.contains_key("version") {
         None
     } else {
@@ -44,10 +42,7 @@ pub fn ensure_ignore_entry(text: &str, dir: &RelPath) -> Option<String> {
         // Git skips invalid patterns; so do we.
         let _ = builder.add_line(None, line);
     }
-    if builder
-        .build()
-        .is_ok_and(|m| crate::ignore::excludes(&m, dir, true))
-    {
+    if builder.build().is_ok_and(|m| crate::ignore::excludes(&m, dir, true)) {
         return None;
     }
     let nl = newline(text);
@@ -100,24 +95,17 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
     if !Config::parse(text)?.files.contains(source) {
         return Ok(None);
     }
-    let names = |v: Option<&Value>| {
-        v.and_then(Value::as_str)
-            .and_then(|s| RelPath::parse(s).ok())
-    };
+    let names = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| RelPath::parse(s).ok());
     let mut doc = parse_doc(text)?;
     match doc.get_mut("files") {
         Some(Item::ArrayOfTables(tables)) => {
-            tables.retain(|t| {
-                names(t.get("source").and_then(Item::as_value)).as_ref() != Some(source)
-            });
+            tables.retain(|t| names(t.get("source").and_then(Item::as_value)).as_ref() != Some(source));
             if tables.is_empty() {
                 doc.remove("files");
             }
         }
         Some(Item::Value(Value::Array(array))) => {
-            array.retain(|v| {
-                names(v.as_inline_table().and_then(|t| t.get("source"))).as_ref() != Some(source)
-            });
+            array.retain(|v| names(v.as_inline_table().and_then(|t| t.get("source"))).as_ref() != Some(source));
         }
         _ => {}
     }
@@ -127,8 +115,7 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
 }
 
 fn parse_doc(text: &str) -> Result<DocumentMut> {
-    text.parse()
-        .map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))
+    text.parse().map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))
 }
 
 fn file_table(source: &RelPath) -> Table {
@@ -187,10 +174,7 @@ mod tests {
 
     #[test]
     fn ignore_entry_appended_to_empty_and_unrelated() {
-        assert_eq!(
-            ensure_ignore_entry("", &cache()).unwrap(),
-            "/.rustowcache/\n"
-        );
+        assert_eq!(ensure_ignore_entry("", &cache()).unwrap(), "/.rustowcache/\n");
         assert_eq!(
             ensure_ignore_entry("target/\n", &cache()).unwrap(),
             "target/\n/.rustowcache/\n"
@@ -252,10 +236,7 @@ mod tests {
         let text = "# top\nversion = 1\n\n[vars]\na = 1 # note\n";
         let out = add_file(text, &rel(".config/x.json")).unwrap().unwrap();
         assert!(out.starts_with(text), "{out}");
-        assert!(
-            out.contains("[[files]]\nsource = \".config/x.json\"\n"),
-            "{out}"
-        );
+        assert!(out.contains("[[files]]\nsource = \".config/x.json\"\n"), "{out}");
         let cfg = Config::parse(&out).unwrap();
         assert!(cfg.files.contains(&rel(".config/x.json")));
     }
@@ -287,10 +268,7 @@ mod tests {
         let text = "# keep\nversion = 1\n[[files]]\nsource = \"a\"\n\n[[files]]\nsource = \"b\"\n";
         let out = remove_file(text, &rel("a")).unwrap().unwrap();
         let cfg = Config::parse(&out).unwrap();
-        assert_eq!(
-            cfg.files.iter().map(RelPath::as_str).collect::<Vec<_>>(),
-            ["b"]
-        );
+        assert_eq!(cfg.files.iter().map(RelPath::as_str).collect::<Vec<_>>(), ["b"]);
         assert!(out.contains("# keep"), "{out}");
         assert_eq!(remove_file(&out, &rel("a")).unwrap(), None);
         let out = remove_file(&out, &rel("b")).unwrap().unwrap();

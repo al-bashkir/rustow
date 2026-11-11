@@ -49,10 +49,7 @@ fn scenario_b_full_flow() {
     fs::write(fx.home_path(SRC), "{\"a\": \"mine\"}\n").unwrap();
     let out = fx.run(&["file", "apply"]);
     assert_eq!(out.code, 3, "{out:?}");
-    assert!(
-        out.stdout.contains("modified since rustow last applied"),
-        "{out:?}"
-    );
+    assert!(out.stdout.contains("modified since rustow last applied"), "{out:?}");
     assert_eq!(read(&fx.home_path(SRC)), "{\"a\": \"mine\"}\n");
     // Both changed: still a conflict.
     fx.write(SRC, "{\"a\": 3}\n");
@@ -65,10 +62,7 @@ fn scenario_b_full_flow() {
 #[test]
 fn file_add_is_idempotent_and_keeps_comments() {
     let fx = Fixture::new();
-    fx.write(
-        ".rustow.toml",
-        "# my config\nversion = 1\n[vars]\nx = 1 # note\n",
-    );
+    fx.write(".rustow.toml", "# my config\nversion = 1\n[vars]\nx = 1 # note\n");
     fx.write("a.conf", "a");
     fx.ok(&["file", "add", "a.conf"]);
     let once = read(&fx.repo.join(".rustow.toml"));
@@ -107,10 +101,7 @@ fn file_add_rejects_ineligible_sources() {
 fn file_list_shows_registrations() {
     let fx = registered();
     let out = fx.ok(&["file", "list"]);
-    assert!(
-        out.stdout.contains(SRC) && out.stdout.contains("copy"),
-        "{out:?}"
-    );
+    assert!(out.stdout.contains(SRC) && out.stdout.contains("copy"), "{out:?}");
     let json = fx.ok(&["file", "list", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
     assert_eq!(v["files"][0]["source"], SRC);
@@ -135,8 +126,7 @@ fn copy_to_symlink_after_remove_is_conflict_until_backup() {
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(
-        out.stdout
-            .contains("managed copy would be replaced by a symlink"),
+        out.stdout.contains("managed copy would be replaced by a symlink"),
         "{out:?}"
     );
     assert!(is_regular(&fx.home_path(SRC)));

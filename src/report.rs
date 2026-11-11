@@ -27,10 +27,7 @@ pub struct Printer {
 
 impl Printer {
     pub fn new(json: bool, quiet: bool, verbose: bool, no_color: bool) -> Printer {
-        let color = !no_color
-            && !json
-            && std::env::var_os("NO_COLOR").is_none()
-            && std::io::stdout().is_terminal();
+        let color = !no_color && !json && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
         Printer {
             json,
             quiet,
@@ -82,11 +79,7 @@ impl Printer {
             let problem = matches!(i.action, Action::Conflict | Action::Skip | Action::Fail);
             let show = problem || (!self.quiet && (i.action != Action::Unchanged || self.verbose));
             if show {
-                let detail = i
-                    .detail
-                    .as_deref()
-                    .map(|d| format!(": {d}"))
-                    .unwrap_or_default();
+                let detail = i.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
                 println!(
                     "{} {}  <- {} ({}){detail}",
                     self.verb(i.action),
@@ -121,11 +114,7 @@ impl Printer {
         for c in changes {
             changed += usize::from(c.action != "ok");
             if !self.quiet && (c.action != "ok" || self.verbose || c.detail.is_some()) {
-                let detail = c
-                    .detail
-                    .as_deref()
-                    .map(|d| format!(": {d}"))
-                    .unwrap_or_default();
+                let detail = c.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
                 println!("{:>8} {}{detail}", c.action, c.path);
             }
         }
@@ -192,11 +181,7 @@ fn summary_line(items: &[ItemReport], run: RunKind) -> String {
     let dry_run = run != RunKind::Applied;
     let c = count(items);
     let mut parts = vec![
-        format!(
-            "{} {}",
-            c.changed,
-            if dry_run { "to change" } else { "changed" }
-        ),
+        format!("{} {}", c.changed, if dry_run { "to change" } else { "changed" }),
         format!("{} unchanged", c.unchanged),
     ];
     if c.adopted > 0 {

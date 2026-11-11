@@ -86,10 +86,7 @@ fn open_regular(path: &Path) -> Result<(File, fs::Metadata)> {
         .ctx(|| format!("open {} (symlinks are not followed)", path.display()))?;
     let meta = file.metadata().ctx(|| format!("stat {}", path.display()))?;
     if !meta.is_file() {
-        return Err(Error::Failed(format!(
-            "{} is not a regular file",
-            path.display()
-        )));
+        return Err(Error::Failed(format!("{} is not a regular file", path.display())));
     }
     Ok((file, meta))
 }
@@ -106,13 +103,7 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
 /// Replaces `dest` with `bytes` through a same-directory temporary file
 /// that is private (0600) from creation, then gets owner and `mode`, and
 /// is renamed over `dest`. A symlink at `dest` is replaced, not followed.
-pub fn write_atomic(
-    dest: &Path,
-    bytes: &[u8],
-    mode: u32,
-    uid: Option<u32>,
-    gid: Option<u32>,
-) -> Result<()> {
+pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let parent = parent_of(dest)?;
     let what = || format!("write {}", dest.display());
     let mut tmp = tempfile::Builder::new()
@@ -121,8 +112,7 @@ pub fn write_atomic(
         .ctx(what)?;
     tmp.write_all(bytes).ctx(what)?;
     if uid.is_some() || gid.is_some() {
-        std::os::unix::fs::fchown(tmp.as_file(), uid, gid)
-            .ctx(|| format!("set owner of {}", dest.display()))?;
+        std::os::unix::fs::fchown(tmp.as_file(), uid, gid).ctx(|| format!("set owner of {}", dest.display()))?;
     }
     tmp.as_file()
         .set_permissions(fs::Permissions::from_mode(mode))
@@ -152,8 +142,7 @@ pub fn symlink_atomic(link: &Path, target: &Path) -> Result<()> {
 pub fn set_meta(path: &Path, meta: FileMeta) -> Result<()> {
     let (file, _) = open_regular(path)?;
     if meta.uid.is_some() || meta.gid.is_some() {
-        std::os::unix::fs::fchown(&file, meta.uid, meta.gid)
-            .ctx(|| format!("set owner of {}", path.display()))?;
+        std::os::unix::fs::fchown(&file, meta.uid, meta.gid).ctx(|| format!("set owner of {}", path.display()))?;
     }
     if let Some(mode) = meta.mode {
         file.set_permissions(fs::Permissions::from_mode(mode))
@@ -166,19 +155,12 @@ pub fn set_meta(path: &Path, meta: FileMeta) -> Result<()> {
 pub fn backup(path: &Path, backup: &Path) -> Result<()> {
     ensure_private_dir(parent_of(backup)?)?;
     if fs::symlink_metadata(backup).is_ok() {
-        return Err(Error::Failed(format!(
-            "backup {} already exists",
-            backup.display()
-        )));
+        return Err(Error::Failed(format!("backup {} already exists", backup.display())));
     }
     let what = || format!("back up {} to {}", path.display(), backup.display());
     match fs::rename(path, backup) {
         Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-            if fs::symlink_metadata(path)
-                .ctx(what)?
-                .file_type()
-                .is_symlink()
-            {
+            if fs::symlink_metadata(path).ctx(what)?.file_type().is_symlink() {
                 std::os::unix::fs::symlink(fs::read_link(path).ctx(what)?, backup).ctx(what)?;
             } else {
                 fs::copy(path, backup).ctx(what)?;
@@ -214,8 +196,7 @@ pub fn ensure_private_dir(dir: &Path) -> Result<()> {
         )));
     }
     if meta.mode() & 0o077 != 0 {
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-            .ctx(|| format!("restrict {}", dir.display()))?;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).ctx(|| format!("restrict {}", dir.display()))?;
     }
     Ok(())
 }
@@ -238,10 +219,7 @@ pub enum ParentState {
     /// The canonical parent directory exists.
     Ready(PathBuf),
     /// `existing` (canonical) exists; `missing` components must be created below it.
-    Missing {
-        existing: PathBuf,
-        missing: Vec<String>,
-    },
+    Missing { existing: PathBuf, missing: Vec<String> },
     /// An ancestor is a file, a dangling or unsafe symlink, or not readable.
     Blocked { path: PathBuf, reason: String },
 }
@@ -266,10 +244,7 @@ pub fn parent_state(scope_root: &Path, dest: &RelPath) -> Result<ParentState> {
         match fs::symlink_metadata(&next) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let missing = parts[i..].iter().map(|s| (*s).to_owned()).collect();
-                return Ok(ParentState::Missing {
-                    existing: cur,
-                    missing,
-                });
+                return Ok(ParentState::Missing { existing: cur, missing });
             }
             Err(e) => return blocked(e.to_string()),
             Ok(m) if m.is_dir() => cur = next,
@@ -316,8 +291,8 @@ pub fn create_dirs(existing: &Path, missing: &[String], mode: u32) -> Result<Vec
         match fs::DirBuilder::new().mode(mode).create(&cur) {
             Ok(()) => made.push(cur.clone()),
             Err(e)
-                if e.kind() == io::ErrorKind::AlreadyExists
-                    && fs::symlink_metadata(&cur).is_ok_and(|m| m.is_dir()) => {}
+                if e.kind() == io::ErrorKind::AlreadyExists && fs::symlink_metadata(&cur).is_ok_and(|m| m.is_dir()) => {
+            }
             Err(e) => return Err(e).ctx(|| format!("create directory {}", cur.display())),
         }
     }
@@ -396,9 +371,7 @@ mod tests {
         fs::write(d.join("f"), b"abc").unwrap();
         fs::set_permissions(d.join("f"), fs::Permissions::from_mode(0o640)).unwrap();
         match inspect(&d.join("f")).unwrap() {
-            Observed::File {
-                hash, mode, uid, ..
-            } => {
+            Observed::File { hash, mode, uid, .. } => {
                 assert_eq!(hash, Hash::of(b"abc"));
                 assert_eq!(mode, 0o640);
                 assert_eq!(uid, nix::unistd::geteuid().as_raw());
@@ -406,10 +379,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         symlink("nowhere", d.join("l")).unwrap();
-        assert_eq!(
-            inspect(&d.join("l")).unwrap(),
-            Observed::Symlink("nowhere".into())
-        );
+        assert_eq!(inspect(&d.join("l")).unwrap(), Observed::Symlink("nowhere".into()));
         assert_eq!(inspect(&d).unwrap(), Observed::Dir);
         nix::unistd::mkfifo(&d.join("fifo"), nix::sys::stat::Mode::S_IRWXU).unwrap();
         assert_eq!(inspect(&d.join("fifo")).unwrap(), Observed::Other);

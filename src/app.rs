@@ -131,19 +131,10 @@ fn selected<'a>(
             )));
         }
     }
-    Ok(all
-        .into_iter()
-        .filter(|s| selector.includes(&s.mode))
-        .collect())
+    Ok(all.into_iter().filter(|s| selector.includes(&s.mode)).collect())
 }
 
-fn deploy(
-    g: &Global,
-    env: &Env,
-    printer: &mut Printer,
-    paths: &[String],
-    selector: Selector,
-) -> Result<i32> {
+fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
     let Prepared {
         ctx,
         mut state,
@@ -167,22 +158,15 @@ fn deploy(
                 }
             })
             .collect();
-        printer.items(
-            &items,
-            if g.dry_run {
-                RunKind::DryRun
-            } else {
-                RunKind::Blocked
-            },
-        );
+        printer.items(&items, if g.dry_run { RunKind::DryRun } else { RunKind::Blocked });
         return Ok(execute::exit_code(&items));
     }
     let stop = interrupt_flag()?;
-    let backup_dir = ctx
-        .state_dir
-        .join("backups")
-        .join(&ctx.repo_id)
-        .join(format!("{}-{}", fsops::timestamp(), std::process::id()));
+    let backup_dir =
+        ctx.state_dir
+            .join("backups")
+            .join(&ctx.repo_id)
+            .join(format!("{}-{}", fsops::timestamp(), std::process::id()));
     let run = Run {
         policy,
         backup_dir: &backup_dir,
@@ -194,13 +178,7 @@ fn deploy(
     Ok(execute::exit_code(&items))
 }
 
-fn undeploy(
-    g: &Global,
-    env: &Env,
-    printer: &mut Printer,
-    paths: &[String],
-    selector: Selector,
-) -> Result<i32> {
+fn undeploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
     let ctx = open(g, env, printer)?;
     let _lock = lock(&ctx, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;

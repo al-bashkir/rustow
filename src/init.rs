@@ -26,29 +26,18 @@ pub fn init(opts: &GlobalOpts, env: &Env, dry_run: bool) -> Result<InitReport> {
     let mut notices = Vec::new();
     let root = repo::find_root(opts, env, &mut notices)?;
     if root.parent().is_none() {
-        return Err(Error::Usage(
-            "refusing to initialize the filesystem root".into(),
-        ));
+        return Err(Error::Usage("refusing to initialize the filesystem root".into()));
     }
     let mut changes = Vec::new();
     let config = init_config(&root, dry_run, &mut changes)?;
     let dirs = InternalDirs::resolve(&root, &env.home, &config, env)?;
     let mut wanted = vec![RelPath::parse(DEFAULT_CACHE_DIR)?];
-    wanted.extend(
-        dirs.inside
-            .iter()
-            .filter(|d| d.as_str() != DEFAULT_CACHE_DIR)
-            .cloned(),
-    );
+    wanted.extend(dirs.inside.iter().filter(|d| d.as_str() != DEFAULT_CACHE_DIR).cloned());
     for name in [".gitignore", IGNORE_FILE] {
         init_ignore_file(&root, name, &wanted, dry_run, &mut changes)?;
     }
     init_cache_dir(&root, &dirs.cache_dir, dry_run, &mut changes)?;
-    Ok(InitReport {
-        root,
-        notices,
-        changes,
-    })
+    Ok(InitReport { root, notices, changes })
 }
 
 fn init_config(root: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<Config> {
@@ -74,19 +63,10 @@ fn init_config(root: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<
     Config::parse(&text)
 }
 
-fn init_ignore_file(
-    root: &Path,
-    name: &str,
-    dirs: &[RelPath],
-    dry_run: bool,
-    changes: &mut Vec<Change>,
-) -> Result<()> {
+fn init_ignore_file(root: &Path, name: &str, dirs: &[RelPath], dry_run: bool, changes: &mut Vec<Change>) -> Result<()> {
     let path = root.join(name);
     let existing = read_text(&path)?;
-    let mut text = existing
-        .as_ref()
-        .map(|(t, _)| t.clone())
-        .unwrap_or_default();
+    let mut text = existing.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
     let mut added = Vec::new();
     for dir in dirs {
         if let Some(updated) = edit::ensure_ignore_entry(&text, dir) {
@@ -99,24 +79,15 @@ fn init_ignore_file(
         return Ok(());
     }
     write(&path, &text, existing.as_ref().map(|(_, m)| *m), dry_run)?;
-    let action = if existing.is_some() {
-        "update"
-    } else {
-        "create"
-    };
-    changes.push(Change::new(
-        name,
-        action,
-        Some(format!("added {}", added.join(" "))),
-    ));
+    let action = if existing.is_some() { "update" } else { "create" };
+    changes.push(Change::new(name, action, Some(format!("added {}", added.join(" ")))));
     Ok(())
 }
 
 fn init_cache_dir(root: &Path, dir: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<()> {
-    let name = dir.strip_prefix(root).map_or_else(
-        |_| dir.display().to_string(),
-        |r| format!("{}/", r.display()),
-    );
+    let name = dir
+        .strip_prefix(root)
+        .map_or_else(|_| dir.display().to_string(), |r| format!("{}/", r.display()));
     let action = match fs::symlink_metadata(dir) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => "create",
         Err(e) => return Err(e).ctx(|| format!("inspect {}", dir.display())),

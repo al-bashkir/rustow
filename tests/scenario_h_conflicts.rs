@@ -23,16 +23,10 @@ fn unmanaged_file_conflict_exit_3_nothing_changed() {
         "{out:?}"
     );
     assert!(out.stdout.contains("not managed by rustow"), "{out:?}");
-    assert!(
-        out.stdout.contains("conflicts found, nothing written"),
-        "{out:?}"
-    );
+    assert!(out.stdout.contains("conflicts found, nothing written"), "{out:?}");
     assert!(!out.stdout.contains("dry run"), "{out:?}");
     assert_eq!(read(&fx.home_path(".bashrc")), "mine\n");
-    assert!(
-        !fx.home_path(".zshrc").exists(),
-        "abort policy changes nothing"
-    );
+    assert!(!fx.home_path(".zshrc").exists(), "abort policy changes nothing");
 }
 
 #[test]
@@ -51,10 +45,7 @@ fn unmanaged_symlink_conflict() {
     std::os::unix::fs::symlink("/somewhere/else", fx.home_path(".bashrc")).unwrap();
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");
-    assert_eq!(
-        link_text(&fx.home_path(".bashrc")).to_str(),
-        Some("/somewhere/else")
-    );
+    assert_eq!(link_text(&fx.home_path(".bashrc")).to_str(), Some("/somewhere/else"));
 }
 
 #[test]
@@ -111,10 +102,7 @@ fn unlink_removes_only_ours() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(!fx.home_path(".bashrc").exists());
     assert_eq!(read(&fx.home_path(".zshrc")), "user replaced it\n");
-    assert!(
-        fx.repo.join(".bashrc").exists(),
-        "sources are never removed"
-    );
+    assert!(fx.repo.join(".bashrc").exists(), "sources are never removed");
 }
 
 #[test]
@@ -125,10 +113,7 @@ fn unlink_removes_created_empty_dirs_only() {
     fx.ok(&["apply"]);
     fx.write_home(".config/git/user-file", "keep");
     fx.ok(&["unlink"]);
-    assert!(
-        !fx.home_path(".config/nvim").exists(),
-        "created and now empty"
-    );
+    assert!(!fx.home_path(".config/nvim").exists(), "created and now empty");
     assert!(fx.home_path(".config/git/user-file").exists());
     assert!(fx.home_path(".config").is_dir());
 }
@@ -155,10 +140,7 @@ fn unlink_handles_removed_source() {
 #[test]
 fn missing_parent_without_create_directories_conflicts() {
     let fx = Fixture::new();
-    fx.write(
-        ".rustow.toml",
-        "version = 1\n[defaults]\ncreate_directories = false\n",
-    );
+    fx.write(".rustow.toml", "version = 1\n[defaults]\ncreate_directories = false\n");
     fx.write(".config/x", "x");
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");

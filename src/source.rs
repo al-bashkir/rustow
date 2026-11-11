@@ -31,10 +31,7 @@ impl Mode {
 
     /// True when the destination is a regular file rather than a symlink.
     pub fn is_copy(&self) -> bool {
-        matches!(
-            self,
-            Mode::FileCopy | Mode::DecryptCopy(_) | Mode::TemplateCopy(..)
-        )
+        matches!(self, Mode::FileCopy | Mode::DecryptCopy(_) | Mode::TemplateCopy(..))
     }
 
     pub fn is_template(&self) -> bool {
@@ -147,8 +144,7 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery>
         .sort_by_file_name()
         .into_iter();
     while let Some(entry) = walker.next() {
-        let entry =
-            entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
+        let entry = entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
         let rel = repo_relative(repo, entry.path())?;
         let file_type = entry.file_type();
         if ignore.is_ignored(&rel, file_type.is_dir()) {
@@ -188,12 +184,7 @@ fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
 }
 
 /// Every `[[files]]` and `[[template_rules]]` source must be discovered.
-fn check_registrations(
-    repo: &Path,
-    ignore: &Ignore,
-    cfg: &Config,
-    sources: &[Source],
-) -> Result<()> {
+fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, sources: &[Source]) -> Result<()> {
     let known: BTreeSet<&RelPath> = sources.iter().map(|s| &s.path).collect();
     let entries = cfg.files.iter().map(|p| ("[[files]]", p));
     let entries = entries.chain(cfg.template_rules.keys().map(|p| ("[[template_rules]]", p)));
@@ -221,11 +212,7 @@ fn check_registrations(
 /// Classifies one deployable repository file (spec §5 steps 3–8).
 pub fn classify(path: &RelPath, cfg: &Config) -> Result<Source> {
     let bad = |why: &str| Error::Config(format!("source '{path}': {why}"));
-    let (scope, inner) = match path
-        .as_str()
-        .strip_prefix(ROOT_DIR)
-        .and_then(|r| r.strip_prefix('/'))
-    {
+    let (scope, inner) = match path.as_str().strip_prefix(ROOT_DIR).and_then(|r| r.strip_prefix('/')) {
         Some(rest) => (Scope::Root, RelPath::parse(rest)?),
         None => (Scope::Home, path.clone()),
     };
@@ -357,26 +344,11 @@ mod tests {
         assert_eq!(mode_of(".bashrc", &c), Mode::Link);
         assert_eq!(mode_of(".config/example/settings.json", &c), Mode::FileCopy);
         assert_eq!(mode_of(".gitconfig.tmpl", &c), Mode::TemplateLink(None));
-        assert_eq!(
-            mode_of(".ssh/config.tmpl", &c),
-            Mode::TemplateCopy(None, meta600)
-        );
-        assert_eq!(
-            mode_of(".ssh/private.conf.age", &c),
-            Mode::DecryptLink(Backend::Age)
-        );
-        assert_eq!(
-            mode_of(".ssh/copied.conf.age", &c),
-            Mode::DecryptCopy(Backend::Age)
-        );
-        assert_eq!(
-            mode_of(".ssh/g.conf.gpg", &c),
-            Mode::DecryptCopy(Backend::Gpg)
-        );
-        assert_eq!(
-            mode_of(".s.json.tmpl.age", &c),
-            Mode::TemplateLink(Some(Backend::Age))
-        );
+        assert_eq!(mode_of(".ssh/config.tmpl", &c), Mode::TemplateCopy(None, meta600));
+        assert_eq!(mode_of(".ssh/private.conf.age", &c), Mode::DecryptLink(Backend::Age));
+        assert_eq!(mode_of(".ssh/copied.conf.age", &c), Mode::DecryptCopy(Backend::Age));
+        assert_eq!(mode_of(".ssh/g.conf.gpg", &c), Mode::DecryptCopy(Backend::Gpg));
+        assert_eq!(mode_of(".s.json.tmpl.age", &c), Mode::TemplateLink(Some(Backend::Age)));
         assert_eq!(
             mode_of(".x.json.tmpl.gpg", &c),
             Mode::TemplateCopy(Some(Backend::Gpg), meta_owner)
@@ -389,10 +361,7 @@ mod tests {
     fn classify_destinations() {
         let c = cfg("");
         let s = classify(&rel(".rustowroot/etc/example/config.conf.tmpl"), &c).unwrap();
-        assert_eq!(
-            (s.scope, s.dest),
-            (Scope::Root, rel("etc/example/config.conf"))
-        );
+        assert_eq!((s.scope, s.dest), (Scope::Root, rel("etc/example/config.conf")));
         let s = classify(&rel(".ssh/private.conf.age"), &c).unwrap();
         assert_eq!((s.scope, s.dest), (Scope::Home, rel(".ssh/private.conf")));
         let s = classify(&rel(".config/a.json.tmpl.gpg"), &c).unwrap();
@@ -464,12 +433,7 @@ mod tests {
         assert!(!Selector::File.includes(&Mode::DecryptLink(Backend::Age)));
         assert!(Selector::Template.includes(&tl));
         assert!(!Selector::Template.includes(&Mode::FileCopy));
-        for m in [
-            Mode::Link,
-            Mode::FileCopy,
-            Mode::DecryptLink(Backend::Gpg),
-            tl,
-        ] {
+        for m in [Mode::Link, Mode::FileCopy, Mode::DecryptLink(Backend::Gpg), tl] {
             assert!(Selector::All.includes(&m));
         }
     }
@@ -493,12 +457,7 @@ mod tests {
         let d = run(&dir, &cfg("")).unwrap();
         assert_eq!(
             paths(&d),
-            [
-                ".bashrc",
-                ".config/nvim/init.lua",
-                ".rustowroot/etc/x.conf",
-                ".zshrc"
-            ]
+            [".bashrc", ".config/nvim/init.lua", ".rustowroot/etc/x.conf", ".zshrc"]
         );
         let ignored: Vec<&str> = d.ignored.iter().map(RelPath::as_str).collect();
         assert_eq!(ignored, [".config/nvim/x.swp", "private"]);
@@ -520,10 +479,7 @@ mod tests {
         let e = run(&dir, &cfg("[[files]]\nsource = \"gone.json\"\n"))
             .unwrap_err()
             .to_string();
-        assert!(
-            e.contains("gone.json") && e.contains("does not exist"),
-            "{e}"
-        );
+        assert!(e.contains("gone.json") && e.contains("does not exist"), "{e}");
         let e = run(
             &dir,
             &cfg("[[template_rules]]\nsource = \"gone.tmpl\"\nmode = \"0600\"\n"),
@@ -567,10 +523,7 @@ mod tests {
         let c = check_collisions(&sources);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].dest, rel(".ssh/x"));
-        assert_eq!(
-            c[0].sources,
-            [rel(".ssh/x"), rel(".ssh/x.age"), rel(".ssh/x.gpg")]
-        );
+        assert_eq!(c[0].sources, [rel(".ssh/x"), rel(".ssh/x.age"), rel(".ssh/x.gpg")]);
     }
 
     #[test]

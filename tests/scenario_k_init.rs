@@ -44,14 +44,8 @@ fn existing_config_and_ignore_rules_preserved() {
     fx.write(".gitignore", "target/\n# keep\n");
     fx.ok(&["init"]);
     let after = read(&fx.repo.join(".rustow.toml"));
-    assert!(
-        after.starts_with("version = 1\n") && after.ends_with(config),
-        "{after}"
-    );
-    assert_eq!(
-        read(&fx.repo.join(".gitignore")),
-        format!("target/\n# keep\n{ENTRY}")
-    );
+    assert!(after.starts_with("version = 1\n") && after.ends_with(config), "{after}");
+    assert_eq!(read(&fx.repo.join(".gitignore")), format!("target/\n# keep\n{ENTRY}"));
 }
 
 #[test]
@@ -59,10 +53,7 @@ fn ignore_without_final_newline_appended_safely() {
     let fx = Fixture::new();
     fx.write(".gitignore", "node_modules");
     fx.ok(&["init"]);
-    assert_eq!(
-        read(&fx.repo.join(".gitignore")),
-        format!("node_modules\n{ENTRY}")
-    );
+    assert_eq!(read(&fx.repo.join(".gitignore")), format!("node_modules\n{ENTRY}"));
 }
 
 #[test]
@@ -82,13 +73,7 @@ fn equivalent_entries_kept_and_negation_repaired_once() {
 fn repeat_init_preserves_contents_and_mtimes() {
     let fx = Fixture::new();
     fx.ok(&["init"]);
-    let files = [
-        ".rustow.toml",
-        ".gitignore",
-        ".rustowignore",
-        ".rustowcache",
-    ]
-    .map(|f| fx.repo.join(f));
+    let files = [".rustow.toml", ".gitignore", ".rustowignore", ".rustowcache"].map(|f| fx.repo.join(f));
     let before: Vec<_> = files.iter().map(|f| (mtime(f), fs::read(f).ok())).collect();
     std::thread::sleep(std::time::Duration::from_millis(20));
     let out = fx.ok(&["init"]);
@@ -173,19 +158,10 @@ fn repo_flag_and_subdirectory_resolve_root() {
 #[test]
 fn custom_cache_dir_is_created_and_ignored() {
     let fx = Fixture::new();
-    fx.write(
-        ".rustow.toml",
-        "version = 1\n[defaults]\ncache_dir = \"var/cache\"\n",
-    );
+    fx.write(".rustow.toml", "version = 1\n[defaults]\ncache_dir = \"var/cache\"\n");
     fx.ok(&["init"]);
-    assert_eq!(
-        read(&fx.repo.join(".gitignore")),
-        "/.rustowcache/\n/var/cache/\n"
-    );
-    assert_eq!(
-        read(&fx.repo.join(".rustowignore")),
-        "/.rustowcache/\n/var/cache/\n"
-    );
+    assert_eq!(read(&fx.repo.join(".gitignore")), "/.rustowcache/\n/var/cache/\n");
+    assert_eq!(read(&fx.repo.join(".rustowignore")), "/.rustowcache/\n/var/cache/\n");
     assert_eq!(mode(&fx.repo.join("var/cache")), 0o700);
 }
 

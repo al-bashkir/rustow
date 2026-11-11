@@ -20,13 +20,7 @@ impl Hash {
             hasher.update((part.len() as u64).to_le_bytes());
             hasher.update(part);
         }
-        Hash(
-            hasher
-                .finalize()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect(),
-        )
+        Hash(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
     }
 
     pub fn as_str(&self) -> &str {
@@ -55,9 +49,6 @@ mod tests {
         assert_eq!(h, Hash::of(b"abc"));
         assert_ne!(h, Hash::of(b"abd"));
         assert_eq!(h.short().len(), 16);
-        assert_ne!(
-            Hash::of_parts(&[b"ab", b"c"]),
-            Hash::of_parts(&[b"a", b"bc"])
-        );
+        assert_ne!(Hash::of_parts(&[b"ab", b"c"]), Hash::of_parts(&[b"a", b"bc"]));
     }
 }

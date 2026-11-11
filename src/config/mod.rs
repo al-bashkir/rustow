@@ -14,9 +14,7 @@ pub const CONFIG_FILE: &str = ".rustow.toml";
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     #[default]
@@ -134,8 +132,7 @@ impl Config {
 
     /// Parses the text of an existing `.rustow.toml`.
     pub fn parse(text: &str) -> Result<Config> {
-        let raw: Raw =
-            toml_edit::de::from_str(text).map_err(|e| invalid(e.to_string().trim_end()))?;
+        let raw: Raw = toml_edit::de::from_str(text).map_err(|e| invalid(e.to_string().trim_end()))?;
         match raw.version {
             Some(SCHEMA_VERSION) => {}
             Some(v) => {
@@ -155,13 +152,9 @@ impl Config {
 
         let mut files = BTreeSet::new();
         for (i, f) in raw.files.iter().enumerate() {
-            let path = RelPath::parse(&f.source)
-                .map_err(|e| invalid(&format!("files[{i}].source: {e}")))?;
+            let path = RelPath::parse(&f.source).map_err(|e| invalid(&format!("files[{i}].source: {e}")))?;
             if !files.insert(path) {
-                return Err(invalid(&format!(
-                    "duplicate [[files]] entry for '{}'",
-                    f.source
-                )));
+                return Err(invalid(&format!("duplicate [[files]] entry for '{}'", f.source)));
             }
         }
         let mut template_rules = BTreeMap::new();
@@ -170,9 +163,7 @@ impl Config {
                 .validate()
                 .map_err(|e| invalid(&format!("template_rules[{i}]: {e}")))?;
             if template_rules.insert(path.clone(), meta).is_some() {
-                return Err(invalid(&format!(
-                    "duplicate [[template_rules]] entry for '{path}'"
-                )));
+                return Err(invalid(&format!("duplicate [[template_rules]] entry for '{path}'")));
             }
         }
         Ok(Config {
@@ -245,16 +236,8 @@ impl RawRule {
         let path = RelPath::parse(&self.source).map_err(|e| format!("source: {e}"))?;
         let meta = Metadata {
             mode: self.mode.as_deref().map(parse_mode).transpose()?,
-            owner: self
-                .owner
-                .as_deref()
-                .map(|o| parse_owner("owner", o))
-                .transpose()?,
-            group: self
-                .group
-                .as_deref()
-                .map(|g| parse_owner("group", g))
-                .transpose()?,
+            owner: self.owner.as_deref().map(|o| parse_owner("owner", o)).transpose()?,
+            group: self.group.as_deref().map(|g| parse_owner("group", g)).transpose()?,
         };
         if meta.mode.is_none() && meta.owner.is_none() && meta.group.is_none() {
             return Err(format!("'{path}' sets none of mode, owner or group"));
@@ -266,9 +249,7 @@ impl RawRule {
 /// Parses an octal permission string such as "0600". Special bits
 /// (setuid, setgid, sticky) are rejected: dotfiles never need them.
 fn parse_mode(text: &str) -> std::result::Result<u32, String> {
-    let bad = || {
-        format!("mode \"{text}\" must be 3 or 4 octal digits no greater than 0777, e.g. \"0600\"")
-    };
+    let bad = || format!("mode \"{text}\" must be 3 or 4 octal digits no greater than 0777, e.g. \"0600\"");
     if !(3..=4).contains(&text.len()) {
         return Err(bad());
     }
@@ -281,9 +262,7 @@ fn parse_mode(text: &str) -> std::result::Result<u32, String> {
 
 fn parse_owner(field: &str, text: &str) -> std::result::Result<Owner, String> {
     if text.is_empty() || text.contains([':', '/']) || text.chars().any(char::is_whitespace) {
-        return Err(format!(
-            "{field} \"{text}\" is not a valid user or group name"
-        ));
+        return Err(format!("{field} \"{text}\" is not a valid user or group name"));
     }
     Ok(match text.parse::<u32>() {
         Ok(id) => Owner::Id(id),
@@ -295,9 +274,7 @@ fn validate_extension(ext: &str) -> Result<()> {
     let ok = ext.len() > 1
         && ext.starts_with('.')
         && !ext.contains('/')
-        && ![Backend::Age, Backend::Gpg]
-            .iter()
-            .any(|b| ext.ends_with(b.suffix()));
+        && ![Backend::Age, Backend::Gpg].iter().any(|b| ext.ends_with(b.suffix()));
     if ok {
         Ok(())
     } else {
@@ -388,20 +365,13 @@ group = "root"
         assert!(cfg.present);
         assert_eq!(cfg.vars["git"]["user_name"], "Example User");
         assert_eq!(cfg.files.len(), 3);
-        assert!(
-            cfg.files
-                .contains(&RelPath::parse(".ssh/private.conf.age").unwrap())
-        );
-        let root = &cfg.template_rules
-            [&RelPath::parse(".rustowroot/etc/example/config.conf.tmpl").unwrap()];
+        assert!(cfg.files.contains(&RelPath::parse(".ssh/private.conf.age").unwrap()));
+        let root = &cfg.template_rules[&RelPath::parse(".rustowroot/etc/example/config.conf.tmpl").unwrap()];
         assert_eq!(root.mode, Some(0o640));
         assert_eq!(root.owner, Some(Owner::Name("root".into())));
         assert_eq!(cfg.encryption.backend, Backend::Age);
         assert_eq!(cfg.encryption.gpg.homedir.as_deref(), Some("~/.gnupg"));
-        assert_eq!(
-            cfg.defaults.state_dir.as_deref(),
-            Some("~/.local/state/rustow")
-        );
+        assert_eq!(cfg.defaults.state_dir.as_deref(), Some("~/.local/state/rustow"));
     }
 
     #[test]
@@ -438,15 +408,7 @@ group = "root"
 
     #[test]
     fn mode_parses_octal() {
-        let p = |m| {
-            rule_mode(m)
-                .unwrap()
-                .template_rules
-                .values()
-                .next()
-                .unwrap()
-                .mode
-        };
+        let p = |m| rule_mode(m).unwrap().template_rules.values().next().unwrap().mode;
         assert_eq!(p("0600"), Some(0o600));
         assert_eq!(p("644"), Some(0o644));
         assert_eq!(p("0755"), Some(0o755));
@@ -462,7 +424,9 @@ group = "root"
 
     #[test]
     fn owner_numeric_is_id() {
-        let cfg = Config::parse("version = 1\n[[template_rules]]\nsource = \"a.tmpl\"\nowner = \"0\"\ngroup = \"wheel\"\n").unwrap();
+        let cfg =
+            Config::parse("version = 1\n[[template_rules]]\nsource = \"a.tmpl\"\nowner = \"0\"\ngroup = \"wheel\"\n")
+                .unwrap();
         let m = cfg.template_rules.values().next().unwrap();
         assert_eq!(m.owner, Some(Owner::Id(0)));
         assert_eq!(m.group, Some(Owner::Name("wheel".into())));
@@ -494,9 +458,7 @@ group = "root"
     #[test]
     fn extension_rules() {
         for bad in ["tmpl", ".", ".age", ".gpg", ".tmpl.age", ".a/b"] {
-            let e = err(&format!(
-                "version = 1\n[templates]\nextension = \"{bad}\"\n"
-            ));
+            let e = err(&format!("version = 1\n[templates]\nextension = \"{bad}\"\n"));
             assert!(e.contains("extension"), "{bad}: {e}");
         }
         let cfg = Config::parse("version = 1\n[templates]\nextension = \".j2\"\n").unwrap();
@@ -505,10 +467,7 @@ group = "root"
 
     #[test]
     fn backend_defaults_to_age_and_accepts_gpg() {
-        assert_eq!(
-            Config::parse("version = 1\n").unwrap().encryption.backend,
-            Backend::Age
-        );
+        assert_eq!(Config::parse("version = 1\n").unwrap().encryption.backend, Backend::Age);
         let cfg = Config::parse("version = 1\n[encryption]\nbackend = \"gpg\"\n").unwrap();
         assert_eq!(cfg.encryption.backend, Backend::Gpg);
         assert!(err("version = 1\n[encryption]\nbackend = \"pgp\"\n").contains("pgp"));
