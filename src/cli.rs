@@ -87,6 +87,9 @@ pub enum Command {
     /// Manage sources deployed by copying instead of symlinking
     #[command(subcommand)]
     File(FileCommand),
+    /// Render and deploy templates
+    #[command(subcommand)]
+    Template(TemplateCommand),
     /// Show differences between deployed and desired content (may print secrets)
     Diff(Paths),
 }
@@ -103,6 +106,14 @@ pub enum FileCommand {
     Apply(Paths),
     /// Diff registered copies against their destinations (may print secrets)
     Diff(Paths),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TemplateCommand {
+    /// List template sources and how they deploy
+    List,
+    /// Deploy templates only (including encrypted templates)
+    Apply(Paths),
 }
 
 #[derive(Debug, Default, Args)]

@@ -220,3 +220,30 @@ impl Change {
         }
     }
 }
+
+impl Printer {
+    /// Lists sources with destination and mode (`template list`).
+    pub fn sources(&self, ctx: &crate::repo::Context, sources: &[&crate::source::Source], key: &str) {
+        let rows: Vec<(String, String, String)> = sources
+            .iter()
+            .map(|s| {
+                let mode = match s.mode.backend() {
+                    Some(b) => format!("{}, {}", s.mode.label(), b.suffix().trim_start_matches('.')),
+                    None => s.mode.label().to_owned(),
+                };
+                (s.path.to_string(), self.path(&ctx.dest_path(s)), mode)
+            })
+            .collect();
+        if self.json {
+            let list: Vec<_> = rows
+                .iter()
+                .map(|(s, d, m)| json!({ "source": s, "dest": d, "mode": m }))
+                .collect();
+            println!("{}", json!({ key: list }));
+        } else {
+            for (source, dest, mode) in &rows {
+                println!("{source} -> {dest} ({mode})");
+            }
+        }
+    }
+}

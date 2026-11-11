@@ -151,6 +151,8 @@ pub fn predict(item: &PlanItem, policy: Policy) -> (Action, Option<String>) {
 pub struct Run<'a> {
     pub policy: Policy,
     pub backup_dir: &'a Path,
+    /// Cache root; checked (real 0700 directory owned by the user) before any cache write.
+    pub cache_dir: &'a Path,
     pub stop: &'a AtomicBool,
 }
 
@@ -194,6 +196,7 @@ fn apply(d: &Deploy, action: Action, item: &PlanItem, run: &Run, state: &mut Sta
     if let Some(cache) = &d.cache
         && !matches!(cache.decision, Decision::UpToDate | Decision::Adopt)
     {
+        fsops::ensure_private_dir(run.cache_dir)?;
         recheck(&cache.path, &cache.observed)?;
         if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
             detail = Some(backup(&cache.path, &backup_path(run, item, true))?);

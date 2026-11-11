@@ -1,6 +1,7 @@
 //! rustow: a flat-repository dotfiles and configuration manager.
 
 pub mod app;
+pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod diff;
@@ -18,3 +19,4 @@ pub mod repo;
 pub mod report;
 pub mod source;
 pub mod state;
+pub mod template;

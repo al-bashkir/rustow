@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::cli::{Cli, Command, FileCommand, Global, Paths};
+use crate::cli::{Cli, Command, FileCommand, Global, Paths, TemplateCommand};
 use crate::error::{Error, Result};
 use crate::execute::{self, ItemReport, Policy, Run};
 use crate::plan::{self, Plan};
@@ -47,6 +47,14 @@ pub fn run(cli: Cli) -> Result<i32> {
             let prepared = prepare(g, &env, p, &a.paths, Selector::File, false)?;
             inspect::diff(&prepared.plan, p)
         }
+        Command::Template(TemplateCommand::List) => {
+            let ctx = open(g, &env, p)?;
+            let discovery = ctx.discover()?;
+            let templates: Vec<&Source> = discovery.sources.iter().filter(|s| s.mode.is_template()).collect();
+            p.sources(&ctx, &templates, "templates");
+            Ok(0)
+        }
+        Command::Template(TemplateCommand::Apply(a)) => deploy(g, &env, p, &a.paths, Selector::Template),
         Command::Diff(a) => {
             let prepared = prepare(g, &env, p, &a.paths, Selector::All, false)?;
             inspect::diff(&prepared.plan, p)
@@ -170,6 +178,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     let run = Run {
         policy,
         backup_dir: &backup_dir,
+        cache_dir: &ctx.cache_dir,
         stop: &stop,
     };
     let items = execute::execute(plan, &run, &mut state);

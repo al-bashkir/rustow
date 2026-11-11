@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
+use crate::config::{Metadata, Owner};
 use crate::error::{Error, Result};
 use crate::fsops::{self, FileMeta, Observed, ParentState};
 use crate::hash::Hash;
@@ -15,6 +16,7 @@ use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
 use crate::source::{Discovery, Mode, Selector, Source, check_collisions};
 use crate::state::{Record, State};
+use crate::{cache, template};
 
 /// What a path should be after deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,7 +273,7 @@ fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>
     let decision = decide(&want.desired, &observed, recorded(record));
     let detail = broken_link_detail(&path, &observed, decision);
     let cache = match want.cache {
-        Some((cache_path, bytes)) => Some(plan_cache(cache_path, bytes, record)?),
+        Some((cache_path, bytes)) => Some(plan_cache(cache_path, bytes, record, !source.mode.is_copy())?),
         None => None,
     };
     let file_mode = match (&observed, &want.desired) {
@@ -293,15 +295,21 @@ fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>
     })))
 }
 
-fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>) -> Result<CacheWrite> {
+/// Decision for a cache entry. A `guarded` entry backs a symlink, so a
+/// change rustow did not make is a user edit (conflict); an entry that
+/// only feeds a copy may simply be refreshed.
+fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>, guarded: bool) -> Result<CacheWrite> {
     let observed = fsops::inspect(&path)?;
     let desired = Desired::File {
         hash: Hash::of(&bytes),
         meta: FileMeta::default(),
     };
-    let previous = record
-        .and_then(|r| r.applied_hash.as_ref())
-        .map_or(Recorded::None, Recorded::Copy);
+    let previous = match (&observed, guarded) {
+        (Observed::File { hash, .. }, false) => Recorded::Copy(hash),
+        _ => record
+            .and_then(|r| r.applied_hash.as_ref())
+            .map_or(Recorded::None, Recorded::Copy),
+    };
     let decision = decide(&desired, &observed, previous);
     Ok(CacheWrite {
         path,
@@ -370,8 +378,101 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
                 record,
             })
         }
+        Mode::TemplateLink(None) | Mode::TemplateCopy(None, _) => {
+            let text =
+                std::str::from_utf8(&bytes).map_err(|_| format!("template {} is not valid UTF-8", source.path))?;
+            let context = template::context(&ctx.config.vars, &ctx.home_target);
+            let rendered = template::render(source.path.as_str(), text, &context)?;
+            let record = Record {
+                render_id: Some(template::render_id(&bytes, &context)),
+                ..record
+            };
+            transformed(ctx, source, path, Zeroizing::new(rendered.into_bytes()), record)
+        }
         other => Err(format!("{} deployment is not implemented yet", other.label())),
     }
+}
+
+/// Desired state for content that goes through the cache: a symlink to
+/// the cache entry, or a copy of it with explicit metadata.
+fn transformed(
+    ctx: &Context,
+    source: &Source,
+    path: &Path,
+    content: Zeroizing<Vec<u8>>,
+    record: Record,
+) -> std::result::Result<Want, String> {
+    let cache_path = cache::entry(ctx, source).ok_or("this mode has no cache entry")?;
+    let hash = Hash::of(&content);
+    let record = Record {
+        applied_hash: Some(hash.clone()),
+        cache_path: Some(cache_path.clone()),
+        ..record
+    };
+    if source.mode.is_copy() {
+        let meta = match &source.mode {
+            Mode::TemplateCopy(_, m) => resolve_meta(m)?,
+            _ => FileMeta::default(),
+        };
+        let file_mode = if source.mode.backend().is_some() { 0o600 } else { 0o644 };
+        let record = Record {
+            meta: Some(meta),
+            ..record
+        };
+        let cache = Some((cache_path, content.clone()));
+        Ok(Want {
+            desired: Desired::File { hash, meta },
+            content: Some(content),
+            file_mode,
+            cache,
+            record,
+        })
+    } else {
+        let text = link_text(path, &cache_path);
+        let record = Record {
+            link_target: Some(text.clone()),
+            ..record
+        };
+        let cache = Some((cache_path, content));
+        Ok(Want {
+            desired: Desired::Symlink(text),
+            content: None,
+            file_mode: 0o600,
+            cache,
+            record,
+        })
+    }
+}
+
+/// Resolves owner and group names to ids on this system.
+fn resolve_meta(meta: &Metadata) -> std::result::Result<FileMeta, String> {
+    let uid = match &meta.owner {
+        None => None,
+        Some(Owner::Id(id)) => Some(*id),
+        Some(Owner::Name(name)) => Some(
+            nix::unistd::User::from_name(name)
+                .ok()
+                .flatten()
+                .map(|u| u.uid.as_raw())
+                .ok_or_else(|| format!("unknown user '{name}'"))?,
+        ),
+    };
+    let gid = match &meta.group {
+        None => None,
+        Some(Owner::Id(id)) => Some(*id),
+        Some(Owner::Name(name)) => Some(
+            nix::unistd::Group::from_name(name)
+                .ok()
+                .flatten()
+                .map(|g| g.gid.as_raw())
+                .ok_or_else(|| format!("unknown group '{name}'"))?,
+        ),
+    };
+    Ok(FileMeta {
+        mode: meta.mode,
+        uid,
+        gid,
+    })
 }
 
 /// One managed destination to remove.

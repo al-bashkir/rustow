@@ -12,7 +12,8 @@ keywords = ["dotfiles", "stow", "symlink", "templates", "age"]
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 ignore = "0.4.34"
-nix = { version = "0.31.3", features = ["fs", "user"] }
+minijinja = { version = "3.1.0", features = ["serde"] }
+nix = { version = "0.31.3", features = ["fs", "hostname", "user"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
@@ -26,3 +27,4 @@ zeroize = "1.9.1"
 
 [profile.release]
 lto = "thin"
+
