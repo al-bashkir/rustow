@@ -109,6 +109,10 @@ pub fn predict(item: &PlanItem, policy: Policy) -> (Action, Option<String>) {
     };
     match &item.step {
         Step::Failed(msg) => (Action::Fail, Some(msg.clone())),
+        Step::Unfold { .. } => (
+            Action::Update,
+            Some("unfold the folded directory link into a real directory".into()),
+        ),
         Step::Blocked { conflict, detail } => unresolved(format!("{}: {detail}", conflict.describe())),
         Step::Deploy(d) => {
             let cache_conflict = d.cache.as_ref().and_then(|c| match c.decision {
@@ -174,6 +178,10 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
                 Ok(None) => {}
                 Err(e) => (action, detail) = (Action::Fail, Some(crate::plan::with_privilege_hint(e))),
             }
+        } else if let Step::Unfold { path, observed } = &item.step
+            && let Err(e) = unfold(path, observed, &item.dest, state)
+        {
+            (action, detail) = (Action::Fail, Some(crate::plan::with_privilege_hint(e)));
         }
         out.push(ItemReport {
             source: item.source.path.clone(),
@@ -355,4 +363,13 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
             }
         })
         .collect()
+}
+/// Replaces rustow's folded directory symlink by a real directory.
+fn unfold(path: &Path, observed: &Observed, dest: &Path, state: &mut State) -> Result<()> {
+    recheck(path, observed)?;
+    fs::remove_file(path).map_err(|e| Error::Failed(format!("remove folded link {}: {e}", path.display())))?;
+    fs::create_dir(path).map_err(|e| Error::Failed(format!("create directory {}: {e}", path.display())))?;
+    state.created_dirs.insert(path.to_path_buf());
+    state.entries.remove(dest);
+    Ok(())
 }

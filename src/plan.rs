@@ -16,7 +16,7 @@ use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
 use crate::source::{Discovery, Mode, Selector, Source, check_collisions};
 use crate::state::{Record, State};
-use crate::{cache, template};
+use crate::{cache, fold, template};
 
 /// What a path should be after deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +57,8 @@ pub enum Conflict {
     NoParent,
     /// A system symlink would point into a cache that other users control.
     UntrustedCache,
+    /// A folded directory holds files that are not sources.
+    FoldedStrays,
 }
 
 impl Conflict {
@@ -71,6 +73,7 @@ impl Conflict {
             Conflict::ParentBlocked => "a parent directory is blocked",
             Conflict::NoParent => "parent directory is missing and create_directories = false",
             Conflict::UntrustedCache => "cache entry is not safe to link from a system path",
+            Conflict::FoldedStrays => "cannot unfold the folded directory",
         }
     }
 
@@ -186,6 +189,11 @@ pub enum Step {
     },
     /// Desired content could not be computed (render or decrypt failed).
     Failed(String),
+    /// Replace rustow's folded directory symlink at `path` by a real directory.
+    Unfold {
+        path: PathBuf,
+        observed: Observed,
+    },
 }
 
 #[derive(Debug)]
@@ -221,15 +229,22 @@ pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: 
             collided.insert((s.scope, &s.dest), detail.clone());
         }
     }
+    let folding = fold::analyze(ctx, discovery, selected, state)?;
     let mut items = Vec::with_capacity(selected.len());
-    for source in selected {
+    for dir in &folding.folds {
+        items.push(plan_fold(ctx, dir, state)?);
+    }
+    for dir in &folding.unfolds {
+        items.push(plan_unfold(ctx, discovery, dir, state)?);
+    }
+    for source in selected.iter().filter(|s| !folding.covered(s)) {
         let dest = ctx.dest_path(source);
         let step = match collided.get(&(source.scope, &source.dest)) {
             Some(detail) => Step::Blocked {
                 conflict: Conflict::Collision,
                 detail: detail.clone(),
             },
-            None => plan_one(ctx, source, &dest, state.entries.get(&dest))?,
+            None => plan_one(ctx, source, &dest, state.entries.get(&dest), folding.unfolding(source))?,
         };
         items.push(PlanItem {
             source: (*source).clone(),
@@ -237,11 +252,97 @@ pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: 
             step,
         });
     }
+    items.sort_by(|a, b| (a.source.scope, &a.source.path).cmp(&(b.source.scope, &b.source.path)));
     Ok(Plan { items })
 }
 
-fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>) -> Result<Step> {
-    let (path, missing_dirs) = match fsops::parent_state(ctx.target_root(source.scope), &source.dest)? {
+/// A whole directory deployed as one symlink into the repository.
+fn plan_fold(ctx: &Context, dir: &RelPath, state: &State) -> Result<PlanItem> {
+    let source = Source {
+        path: dir.clone(),
+        scope: Scope::Home,
+        dest: dir.clone(),
+        mode: Mode::Link,
+    };
+    let dest = ctx.dest_path(&source);
+    let mut step = plan_one(ctx, &source, &dest, state.entries.get(&dest), None)?;
+    if let Step::Deploy(d) = &mut step {
+        d.record.folded_dir = true;
+        d.detail = Some("folded directory".into());
+    }
+    Ok(PlanItem { source, dest, step })
+}
+
+/// Replaces rustow's folded directory link by a real directory, unless
+/// files written through the link would disappear from view.
+fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &State) -> Result<PlanItem> {
+    let source = Source {
+        path: dir.clone(),
+        scope: Scope::Home,
+        dest: dir.clone(),
+        mode: Mode::Link,
+    };
+    let dest = ctx.dest_path(&source);
+    let strays = fold::strays(ctx, discovery, dir)?;
+    let link = state.entries.get(&dest).and_then(|r| r.link_target.clone());
+    let step = match (fsops::parent_state(&ctx.home_target, dir)?, strays.is_empty()) {
+        (_, false) => {
+            let list: Vec<&str> = strays.iter().take(3).map(RelPath::as_str).collect();
+            let detail = format!(
+                "files that are not sources would disappear from view: {}",
+                list.join(", ")
+            );
+            Step::Blocked {
+                conflict: Conflict::FoldedStrays,
+                detail,
+            }
+        }
+        (ParentState::Ready(parent), true) => {
+            let path = parent.join(dir.file_name());
+            match fsops::inspect(&path)? {
+                observed @ Observed::Symlink(_) if Some(&observed) == link.map(Observed::Symlink).as_ref() => {
+                    Step::Unfold { path, observed }
+                }
+                _ => Step::Blocked {
+                    conflict: Conflict::Unmanaged,
+                    detail: "folded link changed".into(),
+                },
+            }
+        }
+        _ => Step::Blocked {
+            conflict: Conflict::ParentBlocked,
+            detail: dest.display().to_string(),
+        },
+    };
+    Ok(PlanItem { source, dest, step })
+}
+
+/// Real destination path and the directories to create for it. Below an
+/// unfolding directory, that directory counts as missing.
+fn locate(ctx: &Context, source: &Source, unfolding: Option<&RelPath>) -> Result<ParentState> {
+    let root = ctx.target_root(source.scope);
+    let Some(dir) = unfolding else {
+        return fsops::parent_state(root, &source.dest);
+    };
+    match fsops::parent_state(root, dir)? {
+        ParentState::Ready(existing) => {
+            let below = source.dest.parent().and_then(|p| p.strip_prefix(dir));
+            let mut missing = vec![dir.file_name().to_owned()];
+            missing.extend(below.iter().flat_map(|b| b.components().map(str::to_owned)));
+            Ok(ParentState::Missing { existing, missing })
+        }
+        other => Ok(other),
+    }
+}
+
+fn plan_one(
+    ctx: &Context,
+    source: &Source,
+    dest: &Path,
+    record: Option<&Record>,
+    unfolding: Option<&RelPath>,
+) -> Result<Step> {
+    let (path, missing_dirs) = match locate(ctx, source, unfolding)? {
         ParentState::Ready(parent) => (parent.join(source.dest.file_name()), None),
         ParentState::Blocked { path, reason } => {
             let detail = format!("{}: {reason}", path.display());
@@ -264,6 +365,13 @@ fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>
             (path, Some((existing, missing)))
         }
     };
+    if path.starts_with(&ctx.root) || path.starts_with(&ctx.cache_dir) {
+        let detail = format!("{} resolves inside the repository or its cache", path.display());
+        return Ok(Step::Blocked {
+            conflict: Conflict::ParentBlocked,
+            detail,
+        });
+    }
     let want = match want(ctx, source, &path) {
         Ok(w) => w,
         Err(msg) => return Ok(Step::Failed(msg)),
@@ -347,7 +455,11 @@ fn broken_link_detail(path: &Path, observed: &Observed, decision: Decision) -> O
 /// Desired state of one source's destination at `path`.
 fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want, String> {
     let source_abs = ctx.root.join(source.path.as_path());
-    let bytes = fsops::read_file(&source_abs).map_err(|e| e.to_string())?;
+    // A folded directory has no content of its own.
+    let bytes = match source_abs.is_dir() {
+        true => Vec::new(),
+        false => fsops::read_file(&source_abs).map_err(|e| e.to_string())?,
+    };
     let record = Record {
         source: source.path.clone(),
         scope: source.scope,

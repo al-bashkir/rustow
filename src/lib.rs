@@ -8,6 +8,7 @@ pub mod diff;
 pub mod error;
 pub mod execute;
 pub mod files;
+pub mod fold;
 pub mod fsops;
 pub mod hash;
 pub mod ignore;

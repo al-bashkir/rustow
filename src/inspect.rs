@@ -24,6 +24,7 @@ pub fn diff(plan: &Plan, printer: &Printer) -> Result<i32> {
             Step::Blocked { conflict, detail } => {
                 format!("{label}: {}: {detail}\n", conflict.describe())
             }
+            Step::Unfold { .. } => format!("{label}: folded directory link; would become a real directory\n"),
             Step::Deploy(d) => describe(&label, d)?,
         };
         if !text.is_empty() {
