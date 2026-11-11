@@ -39,7 +39,12 @@ impl Folding {
 }
 
 pub fn analyze(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Folding> {
-    let recorded = recorded_folds(ctx, state);
+    // A recorded fold whose link was replaced is stale: what is there now
+    // belongs to the user, and files below it are planned against it.
+    let recorded: BTreeMap<RelPath, &Record> = recorded_folds(ctx, state)
+        .into_iter()
+        .filter(|(dir, r)| still_linked(ctx, dir, r))
+        .collect();
     let folds = if ctx.config.defaults.fold_directories {
         fold_candidates(ctx, discovery, selected, &recorded)?
     } else {
@@ -135,6 +140,12 @@ fn ancestors(path: &RelPath) -> Vec<RelPath> {
 
 /// The destination of `dir` is missing (with usable parents) or is still
 /// rustow's own folded link.
+/// The destination of `dir` is still exactly the symlink rustow recorded.
+fn still_linked(ctx: &Context, dir: &RelPath, record: &Record) -> bool {
+    let text = fs::read_link(ctx.home_target.join(dir.as_path())).ok();
+    text.is_some() && text == record.link_target
+}
+
 fn dest_allows_fold(ctx: &Context, dir: &RelPath, record: Option<&Record>) -> Result<bool> {
     let dest = ctx.home_target.join(dir.as_path());
     match fs::symlink_metadata(&dest) {

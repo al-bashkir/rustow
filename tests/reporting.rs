@@ -117,7 +117,7 @@ fn doctor_flags_relative_identity_path() {
 }
 
 #[test]
-fn replaced_folded_link_is_not_unfolded() {
+fn replaced_folded_link_becomes_the_users_own_directory() {
     let fx = Fixture::new();
     fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = true\n");
     fx.write(".config/nvim/init.lua", "x");
@@ -131,8 +131,11 @@ fn replaced_folded_link_is_not_unfolded() {
     std::os::unix::fs::symlink(&theirs, fx.home_path(".config/nvim")).unwrap();
     fx.write(".rustow.toml", "version = 1\n");
     let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 3, "{out:?}");
-    assert!(out.stdout.contains("folded link changed"), "{out:?}");
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        is_symlink(&theirs.join("init.lua")),
+        "deployed into the user's directory: {out:?}"
+    );
     assert_eq!(link_text(&fx.home_path(".config/nvim")), theirs);
 }
 

@@ -144,3 +144,73 @@ fn destination_resolving_into_repository_is_blocked() {
     assert!(is_regular(&fx.repo.join(".config/nvim/init.lua")));
     assert_eq!(read(&fx.repo.join(".config/nvim/init.lua")), "precious\n");
 }
+
+/// Review C1: a folded link replaced by a real directory with user files
+/// must never lose those files, whatever the conflict policy.
+#[test]
+fn user_directory_in_place_of_folded_link_keeps_its_files() {
+    for policy in ["skip", "backup"] {
+        let fx = nvim(FOLD);
+        fx.ok(&["apply"]);
+        assert!(is_symlink(&fx.home_path(".config/nvim")));
+        fs::remove_file(fx.home_path(".config/nvim")).unwrap();
+        fx.write_home(".config/nvim/init.lua", "MY LOCAL EDITS\n");
+        let out = fx.run(&["apply", "--on-conflict", policy]);
+        assert!(
+            !out.stdout.contains("create ~/.config/nvim/init.lua"),
+            "{policy}: {out:?}"
+        );
+        match policy {
+            "skip" => {
+                assert_eq!(out.code, 3, "{out:?}");
+                assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "MY LOCAL EDITS\n");
+            }
+            _ => {
+                assert!(out.stdout.contains("backup saved"), "{out:?}");
+                let backup = walk_files(&fx.state.join("rustow/backups"));
+                assert_eq!(backup.len(), 1, "{backup:?}");
+                assert_eq!(read(&backup[0]), "MY LOCAL EDITS\n");
+            }
+        }
+    }
+}
+
+#[test]
+fn blocked_unfold_blocks_files_below_it() {
+    let fx = nvim(FOLD);
+    fx.write(".rustowignore", "*.log\n");
+    fx.ok(&["apply"]);
+    fs::write(fx.home_path(".config/nvim/app.log"), "log").unwrap();
+    fx.write(".config/nvim/new.lua", "new\n");
+    let out = fx.run(&["apply", "--on-conflict", "skip"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(!out.stdout.contains("create ~/.config/nvim/"), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/nvim")), "the folded link stays");
+}
+
+fn walk_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk_files(&p))
+        } else {
+            out.push(p)
+        }
+    }
+    out
+}
+
+#[test]
+fn unlink_forgets_a_fold_record_whose_link_the_user_replaced() {
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    fs::remove_file(fx.home_path(".config/nvim")).unwrap();
+    fx.write_home(".config/nvim/init.lua", "mine\n");
+    let out = fx.run(&["unlink", ".config/nvim"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("forget"), "{out:?}");
+    assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "mine\n");
+    let again = fx.run(&["unlink", ".config/nvim"]);
+    assert_eq!(again.code, 2, "record is gone: {again:?}");
+}

@@ -263,16 +263,17 @@ fn collision_details(discovery: &Discovery) -> BTreeMap<(Scope, &RelPath), Strin
 /// one is still blocked.
 pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Plan> {
     let collided = collision_details(discovery);
-    let folding = fold::analyze(ctx, discovery, selected, state)?;
+    let mut folding = fold::analyze(ctx, discovery, selected, state)?;
     let mut items = Vec::with_capacity(selected.len());
     for dir in &folding.folds {
         items.push(plan_fold(ctx, dir, state)?);
     }
-    for dir in &folding.unfolds {
-        items.push(plan_unfold(ctx, discovery, dir, state)?);
-    }
+    let blocked = plan_unfolds(ctx, discovery, &mut folding, state, &mut items)?;
     for source in selected.iter().filter(|s| !folding.covered(s)) {
-        items.push(plan_source(ctx, source, state, &collided, &folding)?);
+        items.push(match below_blocked_unfold(ctx, source, &blocked) {
+            Some(item) => item,
+            None => plan_source(ctx, source, state, &collided, &folding)?,
+        });
     }
     items.sort_by(|a, b| (a.source.scope, &a.source.path).cmp(&(b.source.scope, &b.source.path)));
     Ok(Plan { items })
@@ -317,6 +318,45 @@ fn plan_fold(ctx: &Context, dir: &RelPath, state: &State) -> Result<PlanItem> {
 
 /// Replaces rustow's folded directory link by a real directory, unless
 /// files written through the link would disappear from view.
+/// Plans every unfold and returns the directories that cannot be
+/// unfolded; only real unfolds stay in `folding.unfolds`.
+fn plan_unfolds(
+    ctx: &Context,
+    discovery: &Discovery,
+    folding: &mut fold::Folding,
+    state: &State,
+    items: &mut Vec<PlanItem>,
+) -> Result<Vec<RelPath>> {
+    let mut blocked = Vec::new();
+    for dir in &folding.unfolds {
+        let item = plan_unfold(ctx, discovery, dir, state)?;
+        if !matches!(item.step, Step::Unfold { .. }) {
+            blocked.push(dir.clone());
+        }
+        items.push(item);
+    }
+    folding.unfolds.retain(|d| !blocked.contains(d));
+    Ok(blocked)
+}
+
+/// A source below a folded directory that cannot be unfolded is blocked
+/// too: its destination path still runs through rustow's folded link.
+fn below_blocked_unfold(ctx: &Context, source: &Source, blocked: &[RelPath]) -> Option<PlanItem> {
+    let dir = blocked
+        .iter()
+        .find(|d| source.scope == Scope::Home && source.dest.strip_prefix(d).is_some())?;
+    let detail = format!("the folded directory {dir} cannot be unfolded yet");
+    let step = Step::Blocked {
+        conflict: Conflict::ParentBlocked,
+        detail,
+    };
+    Some(PlanItem {
+        source: source.clone(),
+        dest: ctx.dest_path(source),
+        step,
+    })
+}
+
 fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &State) -> Result<PlanItem> {
     let source = Source {
         path: dir.clone(),
@@ -812,6 +852,8 @@ fn removal_verdict(observed: Observed, record: &Record) -> Verdict {
         (Observed::Missing, _) => Verdict::Forget,
         (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => Verdict::Remove(observed),
         (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => Verdict::Remove(observed),
+        // The user replaced rustow's folded link: nothing there is rustow's any more.
+        _ if record.folded_dir => Verdict::Forget,
         _ => Verdict::Keep("destination changed since rustow deployed it; left in place".into()),
     }
 }
