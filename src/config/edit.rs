@@ -67,6 +67,14 @@ pub fn add_file(text: &str, source: &RelPath) -> Result<Option<String>> {
         return Ok(None);
     }
     let mut doc = parse_doc(&base)?;
+    append_entry(&mut doc, source)?;
+    let out = doc.to_string();
+    Config::parse(&out)?;
+    Ok(Some(out))
+}
+
+/// Appends a `[[files]]` entry to the document, in the form its `files` key already has.
+fn append_entry(doc: &mut DocumentMut, source: &RelPath) -> Result<()> {
     match doc.get_mut("files") {
         None => {
             let mut tables = ArrayOfTables::new();
@@ -85,9 +93,7 @@ pub fn add_file(text: &str, source: &RelPath) -> Result<Option<String>> {
             )));
         }
     }
-    let out = doc.to_string();
-    Config::parse(&out)?;
-    Ok(Some(out))
+    Ok(())
 }
 
 /// Removes every `[[files]]` entry for `source`. `None` when not registered.
@@ -118,38 +124,52 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
 /// `to`, keeping the other keys of the entry. `None` when nothing refers to `from`.
 pub fn rename_source(text: &str, from: &RelPath, to: &RelPath) -> Result<Option<String>> {
     Config::parse(text)?;
-    let matches =
-        |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| RelPath::parse(s).ok()).as_ref() == Some(from);
     let mut doc = parse_doc(text)?;
-    let mut renamed = 0;
-    for key in ["files", "template_rules"] {
-        match doc.get_mut(key) {
-            Some(Item::ArrayOfTables(tables)) => {
-                for t in tables
-                    .iter_mut()
-                    .filter(|t| matches(t.get("source").and_then(Item::as_value)))
-                {
-                    t.insert("source", toml_edit::value(to.as_str()));
-                    renamed += 1;
-                }
-            }
-            Some(Item::Value(Value::Array(array))) => {
-                for t in array.iter_mut().filter_map(Value::as_inline_table_mut) {
-                    if matches(t.get("source")) {
-                        t.insert("source", to.as_str().into());
-                        renamed += 1;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    let renamed: usize = ["files", "template_rules"]
+        .into_iter()
+        .map(|key| rename_in_key(doc.get_mut(key), from, to))
+        .sum();
     if renamed == 0 {
         return Ok(None);
     }
     let out = doc.to_string();
     Config::parse(&out)?;
     Ok(Some(out))
+}
+
+/// True when the TOML value is a path equal to `source`.
+fn names_source(value: Option<&Value>, source: &RelPath) -> bool {
+    value
+        .and_then(Value::as_str)
+        .and_then(|s| RelPath::parse(s).ok())
+        .as_ref()
+        == Some(source)
+}
+
+/// Renames the matching entries of one array key; returns how many changed.
+fn rename_in_key(item: Option<&mut Item>, from: &RelPath, to: &RelPath) -> usize {
+    let mut renamed = 0;
+    match item {
+        Some(Item::ArrayOfTables(tables)) => {
+            for t in tables
+                .iter_mut()
+                .filter(|t| names_source(t.get("source").and_then(Item::as_value), from))
+            {
+                t.insert("source", toml_edit::value(to.as_str()));
+                renamed += 1;
+            }
+        }
+        Some(Item::Value(Value::Array(array))) => {
+            for t in array.iter_mut().filter_map(Value::as_inline_table_mut) {
+                if names_source(t.get("source"), from) {
+                    t.insert("source", to.as_str().into());
+                    renamed += 1;
+                }
+            }
+        }
+        _ => {}
+    }
+    renamed
 }
 
 fn parse_doc(text: &str) -> Result<DocumentMut> {

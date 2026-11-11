@@ -25,6 +25,36 @@ use crate::state::{EncRecord, State};
 pub const HISTORY_NOTE: &str =
     "encryption does not remove earlier plaintext from Git history, backups or deployed files";
 
+/// An encrypted copy of a source, ready to be published.
+struct Sealed {
+    backend: Backend,
+    out_rel: RelPath,
+    out: PathBuf,
+    plaintext: Zeroizing<Vec<u8>>,
+    ciphertext: Vec<u8>,
+    /// Whether a private key here could decrypt the result.
+    verified: bool,
+    mode: u32,
+}
+
+/// The configuration file before and after moving registrations to the encrypted name.
+struct ConfigMigration {
+    path: PathBuf,
+    mode: u32,
+    old: Option<String>,
+    new: Option<String>,
+}
+
+impl ConfigMigration {
+    /// Puts the old configuration back when it was rewritten.
+    fn rollback(&self) -> Result<()> {
+        if let (Some(_), Some(old)) = (&self.new, &self.old) {
+            fsops::write_atomic(&self.path, old.as_bytes(), self.mode, None, None)?;
+        }
+        Ok(())
+    }
+}
+
 /// Encrypts `arg` to `<arg>.age` or `<arg>.gpg`, migrates registrations,
 /// then removes the plaintext source.
 pub fn encrypt_source(
@@ -36,60 +66,89 @@ pub fn encrypt_source(
 ) -> Result<i32> {
     let rel = RelPath::parse(arg)?;
     let abs = ctx.root.join(rel.as_path());
-    check_plain_source(ctx, &rel, &abs)?;
+    let sealed = seal_source(ctx, &rel, &abs, backend)?;
+    publish_new(&sealed.out, &sealed.ciphertext, sealed.mode)?;
+    let migration = migrate_config(ctx, &rel, &sealed)?;
+    retire_plaintext(&rel, &abs, &sealed, &migration)?;
+    state.encryption.insert(
+        sealed.out_rel.clone(),
+        EncRecord {
+            ciphertext_hash: Hash::of(&sealed.ciphertext),
+            recipients_id: crypto::recipients_id(sealed.backend, ctx),
+        },
+    );
+    report_encrypted(&rel, &sealed, migration.new.is_some(), printer);
+    Ok(0)
+}
+
+/// Validates the source and encrypts it (without writing anything).
+fn seal_source(ctx: &Context, rel: &RelPath, abs: &Path, backend: Option<Backend>) -> Result<Sealed> {
+    check_plain_source(ctx, rel, abs)?;
     let backend = backend.unwrap_or(ctx.config.encryption.backend);
     let out_rel = rel.with_file_name(&format!("{}{}", rel.file_name(), backend.suffix()));
     let out = ctx.root.join(out_rel.as_path());
     if fs::symlink_metadata(&out).is_ok() {
         return Err(Error::Conflict(format!("{out_rel} already exists; nothing changed")));
     }
-    let plaintext = Zeroizing::new(fsops::read_file(&abs)?);
+    let plaintext = Zeroizing::new(fsops::read_file(abs)?);
     let ciphertext = crypto::encrypt(backend, &plaintext, ctx)?;
     let verified = crypto::verify(backend, &ciphertext, &plaintext, ctx)?;
-    let mode = fs::metadata(&abs)
-        .ctx(|| format!("inspect {rel}"))?
-        .permissions()
-        .mode()
-        & 0o777;
-    publish_new(&out, &ciphertext, mode)?;
+    let mode = file_mode(abs, rel)?;
+    Ok(Sealed {
+        backend,
+        out_rel,
+        out,
+        plaintext,
+        ciphertext,
+        verified,
+        mode,
+    })
+}
 
-    let config_path = ctx.root.join(CONFIG_FILE);
-    let old_config = fs::read_to_string(&config_path).ok();
-    let config_mode = fs::metadata(&config_path).map_or(0o644, |m| m.permissions().mode() & 0o7777);
-    let migrated = match &old_config {
-        Some(text) => edit::rename_source(text, &rel, &out_rel).inspect_err(|_| drop(fs::remove_file(&out)))?,
+/// Permission bits of the file at `abs`.
+fn file_mode(abs: &Path, rel: &RelPath) -> Result<u32> {
+    let meta = fs::metadata(abs).ctx(|| format!("inspect {rel}"))?;
+    Ok(meta.permissions().mode() & 0o777)
+}
+
+/// Moves registrations of `rel` to the encrypted name; removes the new file when that fails.
+fn migrate_config(ctx: &Context, rel: &RelPath, sealed: &Sealed) -> Result<ConfigMigration> {
+    let path = ctx.root.join(CONFIG_FILE);
+    let old = fs::read_to_string(&path).ok();
+    let mode = fs::metadata(&path).map_or(0o644, |m| m.permissions().mode() & 0o7777);
+    let discard = |_: &Error| drop(fs::remove_file(&sealed.out));
+    let new = match &old {
+        Some(text) => edit::rename_source(text, rel, &sealed.out_rel).inspect_err(discard)?,
         None => None,
     };
-    if let Some(text) = &migrated {
-        fsops::write_atomic(&config_path, text.as_bytes(), config_mode, None, None)
-            .inspect_err(|_| drop(fs::remove_file(&out)))?;
+    if let Some(text) = &new {
+        fsops::write_atomic(&path, text.as_bytes(), mode, None, None).inspect_err(discard)?;
     }
-    if fsops::read_file(&abs).map(|now| Hash::of(&now)).ok() != Some(Hash::of(&plaintext)) {
-        if let (Some(_), Some(old)) = (&migrated, &old_config) {
-            fsops::write_atomic(&config_path, old.as_bytes(), config_mode, None, None)?;
-        }
-        fs::remove_file(&out).ctx(|| format!("remove {out_rel}"))?;
+    Ok(ConfigMigration { path, mode, old, new })
+}
+
+/// Removes the plaintext, unless it changed meanwhile: then undo everything and fail.
+fn retire_plaintext(rel: &RelPath, abs: &Path, sealed: &Sealed, migration: &ConfigMigration) -> Result<()> {
+    if fsops::read_file(abs).map(|now| Hash::of(&now)).ok() != Some(Hash::of(&sealed.plaintext)) {
+        migration.rollback()?;
+        fs::remove_file(&sealed.out).ctx(|| format!("remove {}", sealed.out_rel))?;
         return Err(Error::Conflict(format!(
             "{rel} changed while it was being encrypted; nothing changed"
         )));
     }
-    fs::remove_file(&abs).ctx(|| format!("remove plaintext {rel}"))?;
-    let record = EncRecord {
-        ciphertext_hash: Hash::of(&ciphertext),
-        recipients_id: crypto::recipients_id(backend, ctx),
-    };
-    state.encryption.insert(out_rel.clone(), record);
+    fs::remove_file(abs).ctx(|| format!("remove plaintext {rel}"))
+}
 
-    let mut detail = format!("-> {out_rel}; plaintext source removed");
-    if migrated.is_some() {
+fn report_encrypted(rel: &RelPath, sealed: &Sealed, migrated: bool, printer: &Printer) {
+    let mut detail = format!("-> {}; plaintext source removed", sealed.out_rel);
+    if migrated {
         detail.push_str("; registrations moved");
     }
-    if !verified {
+    if !sealed.verified {
         detail.push_str("; not verified: no matching private key available here");
     }
     printer.changes(None, &[Change::new(rel.as_str(), "encrypt", Some(detail))], false);
     printer.notice(HISTORY_NOTE);
-    Ok(0)
 }
 
 fn check_plain_source(ctx: &Context, rel: &RelPath, abs: &Path) -> Result<()> {
@@ -131,9 +190,47 @@ fn publish_new(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     Ok(())
 }
 
+/// An encrypted source opened for editing.
+struct Opened {
+    rel: RelPath,
+    backend: Backend,
+    abs: PathBuf,
+    original: Vec<u8>,
+    original_hash: Hash,
+    plaintext: Zeroizing<Vec<u8>>,
+}
+
+impl Opened {
+    /// True while the encrypted file is the one that was opened.
+    fn unchanged(&self) -> bool {
+        fsops::read_file(&self.abs).is_ok_and(|now| Hash::of(&now) == self.original_hash)
+    }
+}
+
 /// Decrypts `arg` into a private workspace, runs the editor, and
 /// re-encrypts with the source's own backend when content or recipients changed.
 pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool, printer: &Printer) -> Result<i32> {
+    let src = open_encrypted(ctx, arg)?;
+    let workspace = Workspace::create(ctx, &src.rel, src.backend, &src.plaintext)?;
+    let edited = edit_in_workspace(&src.rel, &workspace)?;
+    if !src.unchanged() {
+        return Err(conflict(&src.rel, workspace.keep()));
+    }
+    let recipients = crypto::recipients_id(src.backend, ctx);
+    if !needs_rewrite(ctx, state, &src, &edited, reencrypt, &recipients) {
+        let detail = Some("unchanged; ciphertext not rewritten".into());
+        printer.changes(None, &[Change::new(src.rel.as_str(), "ok", detail)], false);
+        return Ok(0);
+    }
+    let ciphertext = encrypt_edited(ctx, &src, &edited, workspace)?;
+    write_back(state, &src, &ciphertext, recipients)?;
+    let detail = "re-encrypted; deployed files change on the next `rustow apply`".to_owned();
+    printer.changes(None, &[Change::new(src.rel.as_str(), "update", Some(detail))], false);
+    Ok(0)
+}
+
+/// Checks that `arg` is an encrypted source file and decrypts it.
+fn open_encrypted(ctx: &Context, arg: &str) -> Result<Opened> {
     let rel = RelPath::parse(arg)?;
     let backend = suffix_backend(&rel)
         .ok_or_else(|| Error::Usage(format!("'{rel}' is not an encrypted source (*.age or *.gpg)")))?;
@@ -144,64 +241,81 @@ pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool,
     let original = fsops::read_file(&abs)?;
     let original_hash = Hash::of(&original);
     let plaintext = crypto::decrypt(backend, &rel, &original, ctx).map_err(Error::Failed)?;
-    let workspace = Workspace::create(ctx, &rel, backend, &plaintext)?;
+    Ok(Opened {
+        rel,
+        backend,
+        abs,
+        original,
+        original_hash,
+        plaintext,
+    })
+}
+
+/// Runs the editor on the workspace file and reads the result.
+fn edit_in_workspace(rel: &RelPath, workspace: &Workspace) -> Result<Zeroizing<Vec<u8>>> {
     let status = run_editor(&workspace.file)?;
     if !status.success() {
         return Err(Error::Failed(format!(
             "editor exited with {status}; {rel} is unchanged"
         )));
     }
-    let edited = Zeroizing::new(fs::read(&workspace.file).ctx(|| "read the edited file".into())?);
-    let unchanged_source = || fsops::read_file(&abs).is_ok_and(|now| Hash::of(&now) == original_hash);
-    if !unchanged_source() {
-        return Err(conflict(&rel, workspace.keep()));
+    Ok(Zeroizing::new(
+        fs::read(&workspace.file).ctx(|| "read the edited file".into())?,
+    ))
+}
+
+/// True when the content or the recipients changed, or a rewrite was asked for.
+fn needs_rewrite(
+    ctx: &Context,
+    state: &State,
+    src: &Opened,
+    edited: &[u8],
+    reencrypt: bool,
+    recipients: &Hash,
+) -> bool {
+    *edited != **src.plaintext || reencrypt || recipients_changed(ctx, state, src, recipients)
+}
+
+/// True when the recipient set differs from the one the file was encrypted to.
+fn recipients_changed(ctx: &Context, state: &State, src: &Opened, recipients: &Hash) -> bool {
+    match state.encryption.get(&src.rel) {
+        Some(r) if r.ciphertext_hash == src.original_hash => r.recipients_id != *recipients,
+        _ => crypto::recipients_differ(src.backend, &src.original, ctx),
     }
-    let recipients = crypto::recipients_id(backend, ctx);
-    let recipients_changed = match state.encryption.get(&rel) {
-        Some(r) if r.ciphertext_hash == original_hash => r.recipients_id != recipients,
-        _ => crypto::recipients_differ(backend, &original, ctx),
-    };
-    if *edited == *plaintext && !recipients_changed && !reencrypt {
-        printer.changes(
-            None,
-            &[Change::new(
-                rel.as_str(),
-                "ok",
-                Some("unchanged; ciphertext not rewritten".into()),
-            )],
-            false,
-        );
-        return Ok(0);
-    }
-    let ciphertext = match crypto::encrypt(backend, &edited, ctx).and_then(|c| verified(backend, c, &edited, ctx)) {
+}
+
+/// Encrypts the edit. On failure or a concurrent change, the workspace is kept.
+fn encrypt_edited(ctx: &Context, src: &Opened, edited: &[u8], workspace: Workspace) -> Result<Vec<u8>> {
+    let encrypted = crypto::encrypt(src.backend, edited, ctx).and_then(|c| verified(src.backend, c, edited, ctx));
+    let ciphertext = match encrypted {
         Ok(c) => c,
         Err(e) => {
             let kept = workspace.keep();
             return Err(Error::Failed(format!(
-                "{e}; {rel} is unchanged; your edit is kept in {}",
+                "{e}; {} is unchanged; your edit is kept in {}",
+                src.rel,
                 kept.display()
             )));
         }
     };
-    if !unchanged_source() {
-        return Err(conflict(&rel, workspace.keep()));
+    if !src.unchanged() {
+        return Err(conflict(&src.rel, workspace.keep()));
     }
-    let mode = fs::metadata(&abs)
-        .ctx(|| format!("inspect {rel}"))?
-        .permissions()
-        .mode()
-        & 0o777;
-    fsops::write_atomic(&abs, &ciphertext, mode, None, None)?;
+    Ok(ciphertext)
+}
+
+/// Replaces the encrypted source and records the new ciphertext.
+fn write_back(state: &mut State, src: &Opened, ciphertext: &[u8], recipients: Hash) -> Result<()> {
+    let mode = file_mode(&src.abs, &src.rel)?;
+    fsops::write_atomic(&src.abs, ciphertext, mode, None, None)?;
     state.encryption.insert(
-        rel.clone(),
+        src.rel.clone(),
         EncRecord {
-            ciphertext_hash: Hash::of(&ciphertext),
+            ciphertext_hash: Hash::of(ciphertext),
             recipients_id: recipients,
         },
     );
-    let detail = "re-encrypted; deployed files change on the next `rustow apply`".to_owned();
-    printer.changes(None, &[Change::new(rel.as_str(), "update", Some(detail))], false);
-    Ok(0)
+    Ok(())
 }
 
 fn verified(backend: Backend, ciphertext: Vec<u8>, plaintext: &[u8], ctx: &Context) -> Result<Vec<u8>> {

@@ -80,21 +80,7 @@ impl Context {
             ));
         }
         let config = Config::load(&root)?;
-        let target = |flag: &Option<PathBuf>, configured: &str, what: &str| match flag {
-            Some(p) => canonical_dir(&env.cwd.join(p), what),
-            None => canonical_dir(&root.join(expand_tilde(configured, &home)), what),
-        };
-        let home_target = target(&opts.target, &config.defaults.target, "target")?;
-        let root_target = target(&opts.root_target, &config.defaults.root_target, "root target")?;
-        for (dir, what) in [(&home_target, "target"), (&root_target, "root target")] {
-            if dir.starts_with(&root) {
-                return Err(Error::Usage(format!(
-                    "{what} {} is inside the repository {}",
-                    dir.display(),
-                    root.display()
-                )));
-            }
-        }
+        let (home_target, root_target) = resolve_targets(opts, env, &root, &config, &home)?;
 
         let InternalDirs {
             cache_dir,
@@ -175,6 +161,32 @@ impl Context {
             .filter(|s| all || wanted.iter().any(|w| s.path.starts_with(w)))
             .collect())
     }
+}
+
+/// Canonical home and root targets (flag, else configuration); neither may lie inside the repository.
+fn resolve_targets(
+    opts: &GlobalOpts,
+    env: &Env,
+    root: &Path,
+    config: &Config,
+    home: &Path,
+) -> Result<(PathBuf, PathBuf)> {
+    let target = |flag: &Option<PathBuf>, configured: &str, what: &str| match flag {
+        Some(p) => canonical_dir(&env.cwd.join(p), what),
+        None => canonical_dir(&root.join(expand_tilde(configured, home)), what),
+    };
+    let home_target = target(&opts.target, &config.defaults.target, "target")?;
+    let root_target = target(&opts.root_target, &config.defaults.root_target, "root target")?;
+    for (dir, what) in [(&home_target, "target"), (&root_target, "root target")] {
+        if dir.starts_with(root) {
+            return Err(Error::Usage(format!(
+                "{what} {} is inside the repository {}",
+                dir.display(),
+                root.display()
+            )));
+        }
+    }
+    Ok((home_target, root_target))
 }
 
 fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {

@@ -64,6 +64,11 @@ pub fn inspect(path: &Path) -> Result<Observed> {
     if !kind.is_file() {
         return Ok(Observed::Other);
     }
+    inspect_file(path)
+}
+
+/// Hash and metadata of a regular file.
+fn inspect_file(path: &Path) -> Result<Observed> {
     let (mut file, meta) = open_regular(path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
@@ -105,11 +110,27 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
 /// is renamed over `dest`. A symlink at `dest` is replaced, not followed.
 pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let parent = parent_of(dest)?;
-    let what = || format!("write {}", dest.display());
     let mut tmp = tempfile::Builder::new()
         .prefix(".rustow-")
         .tempfile_in(parent)
-        .ctx(what)?;
+        .ctx(|| format!("write {}", dest.display()))?;
+    fill_temp(&mut tmp, dest, bytes, mode, (uid, gid))?;
+    tmp.persist(dest)
+        .map_err(|e| e.error)
+        .ctx(|| format!("replace {}", dest.display()))?;
+    sync_dir(parent);
+    Ok(())
+}
+
+/// Writes the content, sets owner and mode, and syncs the temporary file of `dest`.
+fn fill_temp(
+    tmp: &mut tempfile::NamedTempFile,
+    dest: &Path,
+    bytes: &[u8],
+    mode: u32,
+    (uid, gid): (Option<u32>, Option<u32>),
+) -> Result<()> {
+    let what = || format!("write {}", dest.display());
     tmp.write_all(bytes).ctx(what)?;
     if uid.is_some() || gid.is_some() {
         std::os::unix::fs::fchown(tmp.as_file(), uid, gid).ctx(|| format!("set owner of {}", dest.display()))?;
@@ -117,12 +138,7 @@ pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid:
     tmp.as_file()
         .set_permissions(fs::Permissions::from_mode(mode))
         .ctx(what)?;
-    tmp.as_file().sync_all().ctx(what)?;
-    tmp.persist(dest)
-        .map_err(|e| e.error)
-        .ctx(|| format!("replace {}", dest.display()))?;
-    sync_dir(parent);
-    Ok(())
+    tmp.as_file().sync_all().ctx(what)
 }
 
 /// Creates or replaces the symlink `link` (never a directory) atomically.
@@ -159,16 +175,19 @@ pub fn backup(path: &Path, backup: &Path) -> Result<()> {
     }
     let what = || format!("back up {} to {}", path.display(), backup.display());
     match fs::rename(path, backup) {
-        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-            if fs::symlink_metadata(path).ctx(what)?.file_type().is_symlink() {
-                std::os::unix::fs::symlink(fs::read_link(path).ctx(what)?, backup).ctx(what)?;
-            } else {
-                fs::copy(path, backup).ctx(what)?;
-            }
-            fs::remove_file(path).ctx(what)
-        }
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => move_across_devices(path, backup).ctx(what),
         other => other.ctx(what),
     }
+}
+
+/// Copies a file or symlink to `backup`, then removes `path`.
+fn move_across_devices(path: &Path, backup: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        std::os::unix::fs::symlink(fs::read_link(path)?, backup)?;
+    } else {
+        fs::copy(path, backup)?;
+    }
+    fs::remove_file(path)
 }
 
 /// Creates `dir` and missing parents with mode 0700, and checks that the
@@ -346,25 +365,29 @@ pub struct Owned {
 /// (sticky root-owned directories such as /tmp excepted). Directories
 /// still to be created by `creator` must be created by a trusted user.
 pub fn check_chain(chain: &[Owned], creator: Option<u32>, owner: u32) -> std::result::Result<(), String> {
-    for dir in chain {
-        if dir.uid != 0 && dir.uid != owner {
-            return Err(format!(
-                "{} is owned by uid {}, but the destination directory belongs to uid {owner}",
-                dir.path.display(),
-                dir.uid
-            ));
-        }
-        let sticky_root = dir.mode & 0o1000 != 0 && dir.uid == 0;
-        if dir.mode & 0o022 != 0 && !sticky_root {
-            return Err(format!("{} is writable by group or others", dir.path.display()));
-        }
-    }
+    chain.iter().try_for_each(|dir| check_dir(dir, owner))?;
     match creator {
         Some(uid) if uid != 0 && uid != owner => Err(format!(
             "cache directories would be created by uid {uid}, not by uid {owner} or root"
         )),
         _ => Ok(()),
     }
+}
+
+/// One directory of the chain: trusted owner, not writable by group or others.
+fn check_dir(dir: &Owned, owner: u32) -> std::result::Result<(), String> {
+    if dir.uid != 0 && dir.uid != owner {
+        return Err(format!(
+            "{} is owned by uid {}, but the destination directory belongs to uid {owner}",
+            dir.path.display(),
+            dir.uid
+        ));
+    }
+    let sticky_root = dir.mode & 0o1000 != 0 && dir.uid == 0;
+    if dir.mode & 0o022 != 0 && !sticky_root {
+        return Err(format!("{} is writable by group or others", dir.path.display()));
+    }
+    Ok(())
 }
 
 /// Applies `check_chain` to the real path of a cache entry, which may not

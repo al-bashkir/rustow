@@ -135,39 +135,9 @@ impl Config {
     /// Parses the text of an existing `.rustow.toml`.
     pub fn parse(text: &str) -> Result<Config> {
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| invalid(e.to_string().trim_end()))?;
-        match raw.version {
-            Some(SCHEMA_VERSION) => {}
-            Some(v) => {
-                return Err(invalid(&format!(
-                    "unsupported schema version {v}; this rustow supports version {SCHEMA_VERSION}"
-                )));
-            }
-            None => return Err(invalid(&format!("missing 'version = {SCHEMA_VERSION}'"))),
-        }
-        if raw.templates.engine != "minijinja" {
-            return Err(invalid(&format!(
-                "unsupported template engine '{}'; only \"minijinja\" is available",
-                raw.templates.engine
-            )));
-        }
-        validate_extension(&raw.templates.extension)?;
-
-        let mut files = BTreeSet::new();
-        for (i, f) in raw.files.iter().enumerate() {
-            let path = RelPath::parse(&f.source).map_err(|e| invalid(&format!("files[{i}].source: {e}")))?;
-            if !files.insert(path) {
-                return Err(invalid(&format!("duplicate [[files]] entry for '{}'", f.source)));
-            }
-        }
-        let mut template_rules = BTreeMap::new();
-        for (i, r) in raw.template_rules.into_iter().enumerate() {
-            let (path, meta) = r
-                .validate()
-                .map_err(|e| invalid(&format!("template_rules[{i}]: {e}")))?;
-            if template_rules.insert(path.clone(), meta).is_some() {
-                return Err(invalid(&format!("duplicate [[template_rules]] entry for '{path}'")));
-            }
-        }
+        check_header(&raw)?;
+        let files = parse_files(&raw.files)?;
+        let template_rules = parse_template_rules(raw.template_rules)?;
         Ok(Config {
             present: true,
             defaults: raw.defaults,
@@ -178,6 +148,50 @@ impl Config {
             template_rules,
         })
     }
+}
+
+/// Checks the schema version, template engine and template extension.
+fn check_header(raw: &Raw) -> Result<()> {
+    match raw.version {
+        Some(SCHEMA_VERSION) => {}
+        Some(v) => {
+            return Err(invalid(&format!(
+                "unsupported schema version {v}; this rustow supports version {SCHEMA_VERSION}"
+            )));
+        }
+        None => return Err(invalid(&format!("missing 'version = {SCHEMA_VERSION}'"))),
+    }
+    if raw.templates.engine != "minijinja" {
+        return Err(invalid(&format!(
+            "unsupported template engine '{}'; only \"minijinja\" is available",
+            raw.templates.engine
+        )));
+    }
+    validate_extension(&raw.templates.extension)
+}
+
+fn parse_files(raw: &[RawFile]) -> Result<BTreeSet<RelPath>> {
+    let mut files = BTreeSet::new();
+    for (i, f) in raw.iter().enumerate() {
+        let path = RelPath::parse(&f.source).map_err(|e| invalid(&format!("files[{i}].source: {e}")))?;
+        if !files.insert(path) {
+            return Err(invalid(&format!("duplicate [[files]] entry for '{}'", f.source)));
+        }
+    }
+    Ok(files)
+}
+
+fn parse_template_rules(raw: Vec<RawRule>) -> Result<BTreeMap<RelPath, Metadata>> {
+    let mut template_rules = BTreeMap::new();
+    for (i, r) in raw.into_iter().enumerate() {
+        let (path, meta) = r
+            .validate()
+            .map_err(|e| invalid(&format!("template_rules[{i}]: {e}")))?;
+        if template_rules.insert(path.clone(), meta).is_some() {
+            return Err(invalid(&format!("duplicate [[template_rules]] entry for '{path}'")));
+        }
+    }
+    Ok(template_rules)
 }
 
 fn invalid(msg: &str) -> Error {

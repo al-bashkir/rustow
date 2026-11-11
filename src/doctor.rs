@@ -111,27 +111,35 @@ fn writable(name: &'static str, dir: &Path, level: &'static str) -> Check {
 /// Age identity files and the GPG home, without loading any key.
 fn encryption_checks(ctx: &Context) -> Vec<Check> {
     let forbidden = [ctx.root.as_path(), ctx.cache_dir.as_path()];
-    let mut out = Vec::new();
-    match crypto::identity_paths(ctx) {
-        Err(e) => out.push(check("fail", "age identity", e)),
-        Ok(files) if files.is_empty() => out.push(check("info", "age identity", "none configured")),
-        Ok(files) => out.extend(
-            files
-                .iter()
-                .map(|f| match crypto::age::check_identity_file(f, &forbidden) {
-                    Ok(()) => check("ok", "age identity", f.display().to_string()),
-                    Err(e) => check("fail", "age identity", e),
-                }),
-        ),
-    }
-    let gpg = &ctx.config.encryption.gpg;
-    if !gpg.recipients.is_empty() || gpg.homedir.is_some() {
-        out.push(
-            match crypto::gpg_homedir(ctx).and_then(|h| crypto::gpg::check_homedir(&h, &forbidden).map(|()| h)) {
-                Ok(home) => check("ok", "gpg home", home.display().to_string()),
-                Err(e) => check("fail", "gpg home", e),
-            },
-        );
-    }
+    let mut out = age_checks(ctx, &forbidden);
+    out.extend(gpg_check(ctx, &forbidden));
     out
+}
+
+fn age_checks(ctx: &Context, forbidden: &[&Path]) -> Vec<Check> {
+    match crypto::identity_paths(ctx) {
+        Err(e) => vec![check("fail", "age identity", e)],
+        Ok(files) if files.is_empty() => vec![check("info", "age identity", "none configured")],
+        Ok(files) => files
+            .iter()
+            .map(|f| match crypto::age::check_identity_file(f, forbidden) {
+                Ok(()) => check("ok", "age identity", f.display().to_string()),
+                Err(e) => check("fail", "age identity", e),
+            })
+            .collect(),
+    }
+}
+
+/// The GPG home check, only when GPG is configured.
+fn gpg_check(ctx: &Context, forbidden: &[&Path]) -> Option<Check> {
+    let gpg = &ctx.config.encryption.gpg;
+    if gpg.recipients.is_empty() && gpg.homedir.is_none() {
+        return None;
+    }
+    Some(
+        match crypto::gpg_homedir(ctx).and_then(|h| crypto::gpg::check_homedir(&h, forbidden).map(|()| h)) {
+            Ok(home) => check("ok", "gpg home", home.display().to_string()),
+            Err(e) => check("fail", "gpg home", e),
+        },
+    )
 }

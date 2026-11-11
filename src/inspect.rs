@@ -198,12 +198,16 @@ fn row(item: &PlanItem) -> Row {
 }
 
 fn classify_item(item: &PlanItem) -> (&'static str, Option<String>) {
-    let d = match &item.step {
-        Step::Failed(msg) => return ("ERROR", Some(msg.clone())),
-        Step::Blocked { conflict, detail } => return ("CONFLICT", Some(format!("{}: {detail}", conflict.describe()))),
-        Step::Unfold { .. } => return ("OUTDATED", Some("folded directory will be unfolded".into())),
-        Step::Deploy(d) => d,
-    };
+    match &item.step {
+        Step::Failed(msg) => ("ERROR", Some(msg.clone())),
+        Step::Blocked { conflict, detail } => ("CONFLICT", Some(format!("{}: {detail}", conflict.describe()))),
+        Step::Unfold { .. } => ("OUTDATED", Some("folded directory will be unfolded".into())),
+        Step::Deploy(d) => classify_deploy(d, &item.source.mode),
+    }
+}
+
+/// Status of a deploy step from its destination and cache decisions.
+fn classify_deploy(d: &Deploy, mode: &Mode) -> (&'static str, Option<String>) {
     let cache = d.cache.as_ref().map(|c| c.decision);
     match (d.decision, cache) {
         (Decision::Conflict(Conflict::Modified), _) | (_, Some(Decision::Conflict(Conflict::Modified))) => {
@@ -218,11 +222,16 @@ fn classify_item(item: &PlanItem) -> (&'static str, Option<String>) {
             "UNMANAGED",
             Some("already correct but not recorded; apply adopts it".into()),
         ),
-        _ => match item.source.mode {
-            Mode::Link | Mode::DecryptLink(_) => ("LINKED", None),
-            Mode::FileCopy | Mode::DecryptCopy(_) => ("COPIED", None),
-            Mode::TemplateLink(_) | Mode::TemplateCopy(..) => ("TEMPLATED", None),
-        },
+        _ => (deployed_status(mode), None),
+    }
+}
+
+/// Status of an up-to-date destination, by mode.
+fn deployed_status(mode: &Mode) -> &'static str {
+    match mode {
+        Mode::Link | Mode::DecryptLink(_) => "LINKED",
+        Mode::FileCopy | Mode::DecryptCopy(_) => "COPIED",
+        Mode::TemplateLink(_) | Mode::TemplateCopy(..) => "TEMPLATED",
     }
 }
 

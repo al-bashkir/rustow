@@ -144,26 +144,35 @@ pub fn encrypt(backend: Backend, plaintext: &[u8], ctx: &Context) -> Result<Vec<
 /// Decrypts fresh ciphertext and compares it with `plaintext` when a
 /// matching private key is available. `Ok(false)`: nothing to verify with.
 pub fn verify(backend: Backend, ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<bool> {
-    let mismatch = || Error::Failed("new ciphertext does not decrypt to the input; nothing changed".into());
     match backend {
-        Backend::Age => match age_identities(ctx) {
-            Err(_) => Ok(false),
-            Ok(ids) => match age::decrypt(ciphertext, ids) {
-                Ok(p) if *p == *plaintext => Ok(true),
-                Ok(_) => Err(mismatch()),
-                Err(age::Failure::NoMatchingKey) => Ok(false),
-                Err(age::Failure::Corrupt(why)) => {
-                    Err(Error::Failed(format!("new ciphertext failed verification: {why}")))
-                }
-            },
-        },
-        // A locked or absent secret key only means "not verified"; the
-        // status records already confirmed encryption completed.
-        Backend::Gpg => match gpg(ctx).and_then(|g| g.decrypt(ciphertext)) {
-            Ok(p) if *p == *plaintext => Ok(true),
-            Ok(_) => Err(mismatch()),
-            Err(_) => Ok(false),
-        },
+        Backend::Age => verify_age(ciphertext, plaintext, ctx),
+        Backend::Gpg => verify_gpg(ciphertext, plaintext, ctx),
+    }
+}
+
+fn mismatch() -> Error {
+    Error::Failed("new ciphertext does not decrypt to the input; nothing changed".into())
+}
+
+fn verify_age(ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<bool> {
+    let Ok(ids) = age_identities(ctx) else {
+        return Ok(false);
+    };
+    match age::decrypt(ciphertext, ids) {
+        Ok(p) if *p == *plaintext => Ok(true),
+        Ok(_) => Err(mismatch()),
+        Err(age::Failure::NoMatchingKey) => Ok(false),
+        Err(age::Failure::Corrupt(why)) => Err(Error::Failed(format!("new ciphertext failed verification: {why}"))),
+    }
+}
+
+/// A locked or absent secret key only means "not verified"; the
+/// status records already confirmed encryption completed.
+fn verify_gpg(ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<bool> {
+    match gpg(ctx).and_then(|g| g.decrypt(ciphertext)) {
+        Ok(p) if *p == *plaintext => Ok(true),
+        Ok(_) => Err(mismatch()),
+        Err(_) => Ok(false),
     }
 }
 

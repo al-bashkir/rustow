@@ -146,30 +146,42 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery>
     while let Some(entry) = walker.next() {
         let entry = entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
         let rel = repo_relative(repo, entry.path())?;
-        let file_type = entry.file_type();
-        if ignore.is_ignored(&rel, file_type.is_dir()) {
-            if file_type.is_dir() {
-                walker.skip_current_dir();
-            }
-            if !ignore.is_reserved(&rel, file_type.is_dir()) {
-                out.ignored.push(rel);
-            }
-        } else if file_type.is_file() {
-            out.sources.push(classify(&rel, cfg)?);
-        } else if !file_type.is_dir() {
-            let what = if file_type.is_symlink() {
-                "a symbolic link"
-            } else {
-                "not a regular file"
-            };
-            return Err(Error::Config(format!(
-                "source '{rel}' is {what}; rustow deploys regular files only. Add it to {} to skip it",
-                crate::ignore::IGNORE_FILE
-            )));
+        if visit_entry(rel, entry.file_type(), ignore, cfg, &mut out)? {
+            walker.skip_current_dir();
         }
     }
     check_registrations(repo, ignore, cfg, &out.sources)?;
     Ok(out)
+}
+
+/// Sorts one walked entry into sources or ignored paths. True when the walker must skip the directory.
+fn visit_entry(
+    rel: RelPath,
+    file_type: std::fs::FileType,
+    ignore: &Ignore,
+    cfg: &Config,
+    out: &mut Discovery,
+) -> Result<bool> {
+    if ignore.is_ignored(&rel, file_type.is_dir()) {
+        if !ignore.is_reserved(&rel, file_type.is_dir()) {
+            out.ignored.push(rel);
+        }
+        return Ok(file_type.is_dir());
+    }
+    if file_type.is_file() {
+        out.sources.push(classify(&rel, cfg)?);
+    } else if !file_type.is_dir() {
+        let what = if file_type.is_symlink() {
+            "a symbolic link"
+        } else {
+            "not a regular file"
+        };
+        return Err(Error::Config(format!(
+            "source '{rel}' is {what}; rustow deploys regular files only. Add it to {} to skip it",
+            crate::ignore::IGNORE_FILE
+        )));
+    }
+    Ok(false)
 }
 
 fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
@@ -212,59 +224,101 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, sources: &[So
 /// Classifies one deployable repository file (spec §5 steps 3–8).
 pub fn classify(path: &RelPath, cfg: &Config) -> Result<Source> {
     let bad = |why: &str| Error::Config(format!("source '{path}': {why}"));
-    let (scope, inner) = match path.as_str().strip_prefix(ROOT_DIR).and_then(|r| r.strip_prefix('/')) {
-        Some(rest) => (Scope::Root, RelPath::parse(rest)?),
-        None => (Scope::Home, path.clone()),
-    };
-    let mut name = inner.file_name();
+    let (scope, inner) = split_scope(path)?;
+    let (backend, template, name) = split_suffixes(inner.file_name(), &cfg.template_extension).map_err(bad)?;
+    let mode = select_mode(path, cfg, backend, template).map_err(|why| bad(&why))?;
+    Ok(Source {
+        path: path.clone(),
+        scope,
+        dest: inner.with_file_name(name),
+        mode,
+    })
+}
+
+/// Splits off the `.rustow-root/` prefix: the scope and the path below it.
+fn split_scope(path: &RelPath) -> Result<(Scope, RelPath)> {
+    match path.as_str().strip_prefix(ROOT_DIR).and_then(|r| r.strip_prefix('/')) {
+        Some(rest) => Ok((Scope::Root, RelPath::parse(rest)?)),
+        None => Ok((Scope::Home, path.clone())),
+    }
+}
+
+/// Strips the encryption and template suffixes from a file name: the
+/// backend, whether it is a template, and the logical destination name.
+fn split_suffixes<'a>(
+    file_name: &'a str,
+    template_extension: &str,
+) -> std::result::Result<(Option<Backend>, bool, &'a str), &'static str> {
+    let mut name = file_name;
     let backend = [Backend::Age, Backend::Gpg]
         .into_iter()
         .find(|b| name.ends_with(b.suffix()));
     if let Some(b) = backend {
         name = &name[..name.len() - b.suffix().len()];
         if name.ends_with(Backend::Age.suffix()) || name.ends_with(Backend::Gpg.suffix()) {
-            return Err(bad("nested encryption suffixes are not supported"));
+            return Err("nested encryption suffixes are not supported");
         }
     }
-    let template = name.strip_suffix(cfg.template_extension.as_str());
+    let template = name.strip_suffix(template_extension);
     if let Some(stripped) = template {
         name = stripped;
     }
     if name.is_empty() {
-        return Err(bad("the destination name is empty after removing suffixes"));
+        return Err("the destination name is empty after removing suffixes");
     }
+    Ok((backend, template.is_some(), name))
+}
 
+/// Picks the mode from the suffixes and the configuration; the error is the reason text.
+fn select_mode(
+    path: &RelPath,
+    cfg: &Config,
+    backend: Option<Backend>,
+    template: bool,
+) -> std::result::Result<Mode, String> {
     let registered = cfg.files.contains(path);
     let rule = cfg.template_rules.get(path);
-    let mode = if template.is_some() {
-        if registered {
-            return Err(bad(
-                "templates cannot be registered with `rustow file add`; use [[template_rules]] metadata to copy them",
-            ));
-        }
-        match rule {
-            Some(meta) => Mode::TemplateCopy(backend, meta.clone()),
-            None => Mode::TemplateLink(backend),
-        }
+    if template {
+        template_mode(backend, registered, rule)
     } else {
-        if rule.is_some() {
-            return Err(bad(&format!(
-                "has a [[template_rules]] entry but is not a template (no '{}' suffix)",
-                cfg.template_extension
-            )));
-        }
-        match (backend, registered) {
-            (None, false) => Mode::Link,
-            (None, true) => Mode::FileCopy,
-            (Some(b), false) => Mode::DecryptLink(b),
-            (Some(b), true) => Mode::DecryptCopy(b),
-        }
-    };
-    Ok(Source {
-        path: path.clone(),
-        scope,
-        dest: inner.with_file_name(name),
-        mode,
+        plain_mode(cfg, backend, registered, rule.is_some())
+    }
+}
+
+fn template_mode(
+    backend: Option<Backend>,
+    registered: bool,
+    rule: Option<&Metadata>,
+) -> std::result::Result<Mode, String> {
+    if registered {
+        return Err(
+            "templates cannot be registered with `rustow file add`; use [[template_rules]] metadata to copy them"
+                .into(),
+        );
+    }
+    Ok(match rule {
+        Some(meta) => Mode::TemplateCopy(backend, meta.clone()),
+        None => Mode::TemplateLink(backend),
+    })
+}
+
+fn plain_mode(
+    cfg: &Config,
+    backend: Option<Backend>,
+    registered: bool,
+    has_rule: bool,
+) -> std::result::Result<Mode, String> {
+    if has_rule {
+        return Err(format!(
+            "has a [[template_rules]] entry but is not a template (no '{}' suffix)",
+            cfg.template_extension
+        ));
+    }
+    Ok(match (backend, registered) {
+        (None, false) => Mode::Link,
+        (None, true) => Mode::FileCopy,
+        (Some(b), false) => Mode::DecryptLink(b),
+        (Some(b), true) => Mode::DecryptCopy(b),
     })
 }
 

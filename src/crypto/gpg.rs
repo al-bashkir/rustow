@@ -56,58 +56,87 @@ fn records(lines: &[String]) -> Vec<(&str, Vec<&str>)> {
         .collect()
 }
 
+type Record<'a> = (&'a str, Vec<&'a str>);
+
+fn has(recs: &[Record], keyword: &str) -> bool {
+    recs.iter().any(|(w, _)| *w == keyword)
+}
+
 /// Decryption succeeded only with a zero exit status, public-key
 /// encryption, integrity protection (MDC or AEAD), DECRYPTION_OKAY and
 /// END_DECRYPTION, and no failure record.
 pub fn check_decrypt_status(lines: &[String], exit_ok: bool) -> Result<(), String> {
     let recs = records(lines);
-    let has = |k: &str| recs.iter().any(|(w, _)| *w == k);
-    if has("NEED_PASSPHRASE_SYM") || !has("ENC_TO") {
+    check_decrypt_keys(&recs)?;
+    check_integrity(&recs)?;
+    if !(has(&recs, "BEGIN_DECRYPTION") && has(&recs, "DECRYPTION_OKAY") && has(&recs, "END_DECRYPTION")) || !exit_ok {
+        return Err("decryption did not complete successfully".into());
+    }
+    Ok(())
+}
+
+/// Public-key data, a usable secret key, and no failure record.
+fn check_decrypt_keys(recs: &[Record]) -> Result<(), String> {
+    if has(recs, "NEED_PASSPHRASE_SYM") || !has(recs, "ENC_TO") {
         return Err("not public-key encrypted OpenPGP data (symmetric-only ciphertext is not supported)".into());
     }
-    if has("NO_SECKEY") && !has("DECRYPTION_OKAY") {
+    if has(recs, "NO_SECKEY") && !has(recs, "DECRYPTION_OKAY") {
         return Err("no usable secret key for any recipient in the keyring".into());
     }
-    if has("DECRYPTION_FAILED") || has("FAILURE") || has("ERROR") {
+    if has(recs, "DECRYPTION_FAILED") || has(recs, "FAILURE") || has(recs, "ERROR") {
         return Err("decryption failed".into());
     }
+    Ok(())
+}
+
+/// The DECRYPTION_INFO record must show MDC or AEAD protection.
+fn check_integrity(recs: &[Record]) -> Result<(), String> {
     let protected = recs.iter().find(|(w, _)| *w == "DECRYPTION_INFO").map(|(_, args)| {
         let mdc = args.first().is_some_and(|m| *m != "0");
         let aead = args.get(2).is_some_and(|a| *a != "0");
         mdc || aead
     });
     match protected {
-        None => return Err("integrity protection could not be confirmed".into()),
-        Some(false) => return Err("message is not integrity protected; refused".into()),
-        Some(true) => {}
+        None => Err("integrity protection could not be confirmed".into()),
+        Some(false) => Err("message is not integrity protected; refused".into()),
+        Some(true) => Ok(()),
     }
-    if !(has("BEGIN_DECRYPTION") && has("DECRYPTION_OKAY") && has("END_DECRYPTION")) || !exit_ok {
-        return Err("decryption did not complete successfully".into());
-    }
-    Ok(())
 }
 
 /// Encryption succeeded only with a zero exit status, END_ENCRYPTION, and
 /// no invalid-recipient or failure record.
 pub fn check_encrypt_status(lines: &[String], exit_ok: bool) -> Result<(), String> {
     let recs = records(lines);
-    if let Some((_, args)) = recs.iter().find(|(w, _)| *w == "INV_RECP") {
-        let why = match args.first().copied().unwrap_or("0") {
-            "1" => "not found",
-            "2" => "ambiguous",
-            "4" => "key revoked",
-            "5" => "key expired",
-            "10" => "key not trusted (rustow never overrides GPG trust; certify or trust the key in your keyring)",
-            "13" => "key disabled",
-            _ => "no usable encryption key",
-        };
-        return Err(format!("recipient {} rejected: {why}", args.get(1).unwrap_or(&"?")));
-    }
-    let has = |k: &str| recs.iter().any(|(w, _)| *w == k);
-    if has("FAILURE") || has("ERROR") || !has("END_ENCRYPTION") || !exit_ok {
+    check_recipients(&recs)?;
+    if has(&recs, "FAILURE") || has(&recs, "ERROR") || !has(&recs, "END_ENCRYPTION") || !exit_ok {
         return Err("gpg encryption did not complete successfully".into());
     }
     Ok(())
+}
+
+/// Fails on the first INV_RECP record, naming the recipient and the reason.
+fn check_recipients(recs: &[Record]) -> Result<(), String> {
+    match recs.iter().find(|(w, _)| *w == "INV_RECP") {
+        Some((_, args)) => Err(format!(
+            "recipient {} rejected: {}",
+            args.get(1).unwrap_or(&"?"),
+            inv_recp_reason(args.first().copied().unwrap_or("0"))
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Text for an INV_RECP reason code.
+fn inv_recp_reason(code: &str) -> &'static str {
+    match code {
+        "1" => "not found",
+        "2" => "ambiguous",
+        "4" => "key revoked",
+        "5" => "key expired",
+        "10" => "key not trusted (rustow never overrides GPG trust; certify or trust the key in your keyring)",
+        "13" => "key disabled",
+        _ => "no usable encryption key",
+    }
 }
 
 impl Gpg {

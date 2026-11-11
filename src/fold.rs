@@ -39,40 +39,65 @@ impl Folding {
 }
 
 pub fn analyze(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Folding> {
-    let home = |s: &&Source| s.scope == Scope::Home;
+    let recorded = recorded_folds(ctx, state);
+    let folds = if ctx.config.defaults.fold_directories {
+        fold_candidates(ctx, discovery, selected, &recorded)?
+    } else {
+        Vec::new()
+    };
+    let unfolds = select_unfolds(selected, &recorded, &folds);
+    Ok(Folding { folds, unfolds })
+}
+
+fn is_home(source: &Source) -> bool {
+    source.scope == Scope::Home
+}
+
+/// Directories above the selected link sources that can be one symlink; the outermost wins.
+fn fold_candidates(
+    ctx: &Context,
+    discovery: &Discovery,
+    selected: &[&Source],
+    recorded: &BTreeMap<RelPath, &Record>,
+) -> Result<Vec<RelPath>> {
     let link_sources: BTreeSet<&RelPath> = discovery
         .sources
         .iter()
-        .filter(|s| home(s) && s.mode == Mode::Link)
+        .filter(|s| is_home(s) && s.mode == Mode::Link)
         .map(|s| &s.path)
         .collect();
-    let recorded = recorded_folds(ctx, state);
-    let mut folding = Folding::default();
-    if ctx.config.defaults.fold_directories {
-        let mut candidates: Vec<RelPath> = selected
-            .iter()
-            .filter(|s| home(s) && s.mode == Mode::Link)
-            .flat_map(|s| ancestors(&s.path))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        candidates.sort_by_key(|d| (d.components().count(), d.clone()));
-        for dir in candidates {
-            if folding.folds.iter().any(|f| dir.starts_with(f)) {
-                continue;
-            }
-            if dest_allows_fold(ctx, &dir, recorded.get(&dir).copied())? && holds_only(ctx, &dir, &link_sources)? {
-                folding.folds.push(dir);
-            }
+    let mut candidates: Vec<RelPath> = selected
+        .iter()
+        .filter(|s| is_home(s) && s.mode == Mode::Link)
+        .flat_map(|s| ancestors(&s.path))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    candidates.sort_by_key(|d| (d.components().count(), d.clone()));
+    let mut folds: Vec<RelPath> = Vec::new();
+    for dir in candidates {
+        if folds.iter().any(|f| dir.starts_with(f)) {
+            continue;
+        }
+        if dest_allows_fold(ctx, &dir, recorded.get(&dir).copied())? && holds_only(ctx, &dir, &link_sources)? {
+            folds.push(dir);
         }
     }
-    for dir in recorded.keys() {
-        let touched = selected.iter().any(|s| home(s) && s.dest.strip_prefix(dir).is_some());
-        if touched && !folding.folds.contains(dir) {
-            folding.unfolds.push(dir.clone());
-        }
-    }
-    Ok(folding)
+    Ok(folds)
+}
+
+/// Recorded folded links that a selected source now lies below and that are no longer folded.
+fn select_unfolds(selected: &[&Source], recorded: &BTreeMap<RelPath, &Record>, folds: &[RelPath]) -> Vec<RelPath> {
+    recorded
+        .keys()
+        .filter(|dir| {
+            selected
+                .iter()
+                .any(|s| is_home(s) && s.dest.strip_prefix(dir).is_some())
+        })
+        .filter(|dir| !folds.contains(dir))
+        .cloned()
+        .collect()
 }
 
 /// Repository files below `dir` that are not discovered sources: they

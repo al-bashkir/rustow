@@ -34,15 +34,8 @@ pub fn entry(ctx: &Context, source: &Source) -> Option<PathBuf> {
 /// symlink uses (entries behind copies are regenerated on demand), then
 /// empty directories. Never follows symlinks.
 pub fn clean(ctx: &Context, state: &State, dry_run: bool) -> Result<Vec<Change>> {
-    match fs::symlink_metadata(&ctx.cache_dir) {
-        Err(_) => return Ok(Vec::new()),
-        Ok(m) if !m.is_dir() => {
-            let shown = ctx.cache_dir.display();
-            return Err(Error::Conflict(format!(
-                "{shown} is not a directory (symlinks are not followed)"
-            )));
-        }
-        Ok(_) => {}
+    if !cache_root_present(&ctx.cache_dir)? {
+        return Ok(Vec::new());
     }
     let live: BTreeSet<&Path> = state
         .entries
@@ -52,32 +45,58 @@ pub fn clean(ctx: &Context, state: &State, dry_run: bool) -> Result<Vec<Change>>
         .collect();
     let mut changes = Vec::new();
     for kind in ["rendered", "decrypted"] {
-        let base = ctx.cache_dir.join(kind).join(&ctx.repo_id);
-        if !fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(&base).follow_links(false).contents_first(true) {
-            let entry = entry.map_err(|e| Error::Failed(format!("scan {}: {e}", base.display())))?;
-            let path = entry.path();
-            if entry.file_type().is_dir() {
-                if path != base && !dry_run {
-                    // Fails, harmlessly, while the directory still has entries.
-                    let _ = fs::remove_dir(path);
-                }
-                continue;
-            }
-            if live.contains(path) {
-                continue;
-            }
-            if !dry_run {
-                fs::remove_file(path).ctx(|| format!("remove {}", path.display()))?;
-            }
-            let shown = path.strip_prefix(&ctx.cache_dir).unwrap_or(path).display().to_string();
-            changes.push(Change::new(&shown, "remove", None));
-        }
+        changes.extend(clean_kind(ctx, kind, &live, dry_run)?);
     }
     changes.extend(clean_workspaces(&ctx.cache_dir.join("edit"), dry_run)?);
     Ok(changes)
+}
+
+/// False when there is no cache directory; an error when it is not a real directory.
+fn cache_root_present(cache_dir: &Path) -> Result<bool> {
+    match fs::symlink_metadata(cache_dir) {
+        Err(_) => Ok(false),
+        Ok(m) if !m.is_dir() => {
+            let shown = cache_dir.display();
+            Err(Error::Conflict(format!(
+                "{shown} is not a directory (symlinks are not followed)"
+            )))
+        }
+        Ok(_) => Ok(true),
+    }
+}
+
+/// Walks this repository's entries of one cache kind and removes the unused ones.
+fn clean_kind(ctx: &Context, kind: &str, live: &BTreeSet<&Path>, dry_run: bool) -> Result<Vec<Change>> {
+    let base = ctx.cache_dir.join(kind).join(&ctx.repo_id);
+    let mut changes = Vec::new();
+    if !fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
+        return Ok(changes);
+    }
+    for entry in walkdir::WalkDir::new(&base).follow_links(false).contents_first(true) {
+        let entry = entry.map_err(|e| Error::Failed(format!("scan {}: {e}", base.display())))?;
+        let path = entry.path();
+        if entry.file_type().is_dir() {
+            if path != base && !dry_run {
+                // Fails, harmlessly, while the directory still has entries.
+                let _ = fs::remove_dir(path);
+            }
+        } else if let Some(change) = clean_file(ctx, path, live, dry_run)? {
+            changes.push(change);
+        }
+    }
+    Ok(changes)
+}
+
+/// Removes one cache file unless a managed symlink uses it.
+fn clean_file(ctx: &Context, path: &Path, live: &BTreeSet<&Path>, dry_run: bool) -> Result<Option<Change>> {
+    if live.contains(path) {
+        return Ok(None);
+    }
+    if !dry_run {
+        fs::remove_file(path).ctx(|| format!("remove {}", path.display()))?;
+    }
+    let shown = path.strip_prefix(&ctx.cache_dir).unwrap_or(path).display().to_string();
+    Ok(Some(Change::new(&shown, "remove", None)))
 }
 
 /// Removes `enc edit` workspaces whose lock no running edit holds.

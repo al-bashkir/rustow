@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::error::{Error, Result};
 use crate::fsops::{self, Observed};
 use crate::paths::RelPath;
-use crate::plan::{Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
+use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
 
 /// What to do with a resolvable conflict.
@@ -99,55 +99,69 @@ pub fn blocked(plan: &Plan, policy: Policy) -> bool {
 
 /// The action `execute` would take for an item, and why.
 pub fn predict(item: &PlanItem, policy: Policy) -> (Action, Option<String>) {
-    let unresolved = |detail: String| {
-        let action = if policy == Policy::Skip {
-            Action::Skip
-        } else {
-            Action::Conflict
-        };
-        (action, Some(detail))
-    };
     match &item.step {
         Step::Failed(msg) => (Action::Fail, Some(msg.clone())),
         Step::Unfold { .. } => (
             Action::Update,
             Some("unfold the folded directory link into a real directory".into()),
         ),
-        Step::Blocked { conflict, detail } => unresolved(format!("{}: {detail}", conflict.describe())),
-        Step::Deploy(d) => {
-            let cache_conflict = d.cache.as_ref().and_then(|c| match c.decision {
-                Decision::Conflict(conflict) => Some(conflict),
-                _ => None,
-            });
-            let dest_conflict = match d.decision {
-                Decision::Conflict(conflict) => Some(conflict),
-                _ => None,
-            };
-            if let Some(conflict) = dest_conflict.or(cache_conflict) {
-                let what = if dest_conflict.is_some() { "" } else { "cache entry: " };
-                let mut detail = format!("{what}{}", conflict.describe());
-                if let Some(extra) = &d.detail {
-                    detail = format!("{detail} ({extra})");
-                }
-                if conflict.resolvable() && matches!(policy, Policy::Backup | Policy::Overwrite) {
-                    return (Action::Replace, Some(detail));
-                }
-                return unresolved(detail);
-            }
-            let cache_changes = d
-                .cache
-                .as_ref()
-                .is_some_and(|c| c.decision != Decision::UpToDate && c.decision != Decision::Adopt);
-            let action = match d.decision {
-                Decision::Create => Action::Create,
-                Decision::Update => Action::Update,
-                Decision::FixMetadata => Action::Metadata,
-                _ if cache_changes => Action::Update,
-                Decision::Adopt => Action::Adopt,
-                _ => Action::Unchanged,
-            };
-            (action, d.detail.clone())
+        Step::Blocked { conflict, detail } => unresolved(policy, format!("{}: {detail}", conflict.describe())),
+        Step::Deploy(d) => predict_deploy(d, policy),
+    }
+}
+
+/// A conflict the policy cannot resolve: skipped under `Skip`, else a conflict.
+fn unresolved(policy: Policy, detail: String) -> (Action, Option<String>) {
+    let action = if policy == Policy::Skip {
+        Action::Skip
+    } else {
+        Action::Conflict
+    };
+    (action, Some(detail))
+}
+
+fn conflict_of(decision: Decision) -> Option<Conflict> {
+    match decision {
+        Decision::Conflict(conflict) => Some(conflict),
+        _ => None,
+    }
+}
+
+/// The conflict of a deploy step (destination first, then cache) with its detail text.
+fn deploy_conflict(d: &Deploy) -> Option<(Conflict, String)> {
+    let dest = conflict_of(d.decision);
+    let conflict = dest.or_else(|| d.cache.as_ref().and_then(|c| conflict_of(c.decision)))?;
+    let what = if dest.is_some() { "" } else { "cache entry: " };
+    let mut detail = format!("{what}{}", conflict.describe());
+    if let Some(extra) = &d.detail {
+        detail = format!("{detail} ({extra})");
+    }
+    Some((conflict, detail))
+}
+
+fn predict_deploy(d: &Deploy, policy: Policy) -> (Action, Option<String>) {
+    if let Some((conflict, detail)) = deploy_conflict(d) {
+        if conflict.resolvable() && matches!(policy, Policy::Backup | Policy::Overwrite) {
+            return (Action::Replace, Some(detail));
         }
+        return unresolved(policy, detail);
+    }
+    (deploy_action(d), d.detail.clone())
+}
+
+/// The action for a deploy step without conflicts.
+fn deploy_action(d: &Deploy) -> Action {
+    let cache_changes = d
+        .cache
+        .as_ref()
+        .is_some_and(|c| c.decision != Decision::UpToDate && c.decision != Decision::Adopt);
+    match d.decision {
+        Decision::Create => Action::Create,
+        Decision::Update => Action::Update,
+        Decision::FixMetadata => Action::Metadata,
+        _ if cache_changes => Action::Update,
+        Decision::Adopt => Action::Adopt,
+        _ => Action::Unchanged,
     }
 }
 
@@ -200,45 +214,74 @@ fn apply(d: &Deploy, action: Action, item: &PlanItem, run: &Run, state: &mut Sta
             .created_dirs
             .extend(fsops::create_dirs(existing, missing, d.dir_mode)?);
     }
-    let mut detail = None;
-    if let Some(cache) = &d.cache
-        && !matches!(cache.decision, Decision::UpToDate | Decision::Adopt)
-    {
-        fsops::ensure_private_dir(run.cache_dir)?;
-        recheck(&cache.path, &cache.observed)?;
-        if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
-            detail = Some(backup(&cache.path, &backup_path(run, item, true))?);
-        }
-        if let Some(parent) = cache.path.parent() {
-            fsops::ensure_private_dir(parent)?;
-        }
-        fsops::write_atomic(&cache.path, &cache.bytes, 0o600, None, None)?;
-    }
-    let dest_conflict = matches!(d.decision, Decision::Conflict(_));
-    match action {
-        Action::Create => place(d)?,
-        Action::Update | Action::Replace if d.decision == Decision::Update || dest_conflict => {
-            recheck(&d.path, &d.observed)?;
-            if dest_conflict {
-                match run.policy {
-                    Policy::Backup => detail = Some(backup(&d.path, &backup_path(run, item, false))?),
-                    _ => fs::remove_file(&d.path)
-                        .map_err(|e| Error::Failed(format!("remove {}: {e}", d.path.display())))?,
-                }
-            }
-            place(d)?;
-        }
-        Action::Metadata => {
-            recheck(&d.path, &d.observed)?;
-            if let Desired::File { meta, .. } = &d.desired {
-                fsops::set_meta(&d.path, *meta)?;
-            }
-        }
-        _ => {}
+    let mut detail = apply_cache(d, item, run)?;
+    if let Some(extra) = apply_dest(d, action, item, run)? {
+        detail = Some(extra);
     }
     verify(d)?;
     state.entries.insert(item.dest.clone(), d.record.clone());
     Ok(detail)
+}
+
+/// Writes the cache entry when it changes; returns the backup note, if any.
+fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+    let Some(cache) = &d.cache else { return Ok(None) };
+    if matches!(cache.decision, Decision::UpToDate | Decision::Adopt) {
+        return Ok(None);
+    }
+    fsops::ensure_private_dir(run.cache_dir)?;
+    recheck(&cache.path, &cache.observed)?;
+    let mut detail = None;
+    if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
+        detail = Some(backup(&cache.path, &backup_path(run, item, true))?);
+    }
+    if let Some(parent) = cache.path.parent() {
+        fsops::ensure_private_dir(parent)?;
+    }
+    fsops::write_atomic(&cache.path, &cache.bytes, 0o600, None, None)?;
+    Ok(detail)
+}
+
+/// Performs the destination action; returns the backup note, if any.
+fn apply_dest(d: &Deploy, action: Action, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+    let dest_conflict = matches!(d.decision, Decision::Conflict(_));
+    match action {
+        Action::Create => place(d).map(|()| None),
+        Action::Update | Action::Replace if d.decision == Decision::Update || dest_conflict => {
+            replace_dest(d, item, run, dest_conflict)
+        }
+        Action::Metadata => fix_metadata(d).map(|()| None),
+        _ => Ok(None),
+    }
+}
+
+/// Replaces the destination, first clearing a conflicting object when there is one.
+fn replace_dest(d: &Deploy, item: &PlanItem, run: &Run, dest_conflict: bool) -> Result<Option<String>> {
+    recheck(&d.path, &d.observed)?;
+    let detail = if dest_conflict {
+        clear_conflict(d, item, run)?
+    } else {
+        None
+    };
+    place(d)?;
+    Ok(detail)
+}
+
+fn fix_metadata(d: &Deploy) -> Result<()> {
+    recheck(&d.path, &d.observed)?;
+    if let Desired::File { meta, .. } = &d.desired {
+        fsops::set_meta(&d.path, *meta)?;
+    }
+    Ok(())
+}
+
+/// Moves the conflicting destination to the backup dir, or removes it.
+fn clear_conflict(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+    if run.policy == Policy::Backup {
+        return backup(&d.path, &backup_path(run, item, false)).map(Some);
+    }
+    fs::remove_file(&d.path).map_err(|e| Error::Failed(format!("remove {}: {e}", d.path.display())))?;
+    Ok(None)
 }
 
 fn backup(path: &Path, to: &Path) -> Result<String> {
