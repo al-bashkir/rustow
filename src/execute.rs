@@ -247,19 +247,25 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
 fn apply_dest(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
     match d.decision {
         Decision::Create => create(d).map(|()| None),
-        Decision::Update => {
-            recheck(&d.path, &d.observed)?;
-            place(d).map(|()| None)
-        }
-        Decision::Conflict(_) => {
-            recheck(&d.path, &d.observed)?;
-            let detail = clear_conflict(d, item, run)?;
-            create(d)?;
-            Ok(detail)
-        }
+        Decision::Update => update(d).map(|()| None),
+        Decision::Conflict(_) => replace_conflicting(d, item, run),
         Decision::FixMetadata => fix_metadata(d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
+}
+
+/// Replaces rustow's own unchanged object at the destination.
+fn update(d: &Deploy) -> Result<()> {
+    recheck(&d.path, &d.observed)?;
+    place(d)
+}
+
+/// Moves away (backup) or removes the conflicting object, then creates.
+fn replace_conflicting(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+    recheck(&d.path, &d.observed)?;
+    let detail = clear_conflict(d, item, run)?;
+    create(d)?;
+    Ok(detail)
 }
 
 /// Creates the destination; fails if anything appeared there since planning.
