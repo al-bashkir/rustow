@@ -1,0 +1,12 @@
+# Advisories in transitive dependencies of `age` 0.12.1, the newest release.
+# Re-check both when `age` is updated.
+[advisories]
+ignore = [
+    # crypto-bigint 0.5.5 timing variability, via p256 (age P-256/HPKE
+    # recipients). rustow accepts and uses only X25519 recipients and
+    # identities, so this code path never runs.
+    "RUSTSEC-2026-0387",
+    # basic-toml is unmaintained: build-time proc-macro dependency of
+    # age's i18n support; it does not process user input at run time.
+    "RUSTSEC-2026-0374",
+]
