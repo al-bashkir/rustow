@@ -422,6 +422,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "signal-hook",
+ "similar",
  "tempfile",
  "thiserror",
  "toml_edit",
@@ -519,6 +520,15 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "similar"
+version = "3.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f8bec09ae8fae0f4f265a4559a9334be3929d8504e9b536df0a41302bd1733"
+dependencies = [
+ "bstr",
 ]
 
 [[package]]

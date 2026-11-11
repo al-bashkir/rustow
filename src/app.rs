@@ -3,41 +3,53 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::cli::{Cli, Command, Global};
+use crate::cli::{Cli, Command, FileCommand, Global, Paths};
 use crate::error::{Error, Result};
-use crate::execute::{self, Policy, Run};
-use crate::fsops;
-use crate::plan;
+use crate::execute::{self, ItemReport, Policy, Run};
+use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
 use crate::report::{Printer, RunKind};
-use crate::source::{Selector, Source};
-use crate::state::{self, State};
+use crate::source::{Discovery, Selector, Source};
+use crate::state::{self, Lock, State};
+use crate::{files, fsops, inspect};
 
 /// Runs the parsed command and returns the process exit code.
 pub fn run(cli: Cli) -> Result<i32> {
     let env = Env::from_process()?;
-    let mut printer = Printer::new(
-        cli.global.json,
-        cli.global.quiet,
-        cli.global.verbose,
-        cli.global.no_color,
-    );
     let g = &cli.global;
-    match cli
-        .command
-        .unwrap_or(Command::Apply(crate::cli::Paths { paths: Vec::new() }))
-    {
-        Command::Apply(p) => deploy(g, &env, &mut printer, &p.paths, Selector::All),
-        Command::Link(p) => deploy(g, &env, &mut printer, &p.paths, Selector::Link),
-        Command::Unlink(p) => undeploy(g, &env, &mut printer, &p.paths, Selector::Link),
+    let mut printer = Printer::new(g.json, g.quiet, g.verbose, g.no_color);
+    let p = &mut printer;
+    match cli.command.unwrap_or(Command::Apply(Paths::default())) {
+        Command::Apply(a) => deploy(g, &env, p, &a.paths, Selector::All),
+        Command::Link(a) => deploy(g, &env, p, &a.paths, Selector::Link),
+        Command::Unlink(a) => undeploy(g, &env, p, &a.paths, Selector::Link),
         Command::Init => {
-            let opts = global_opts(g);
-            let report = crate::init::init(&opts, &env, g.dry_run)?;
+            let report = crate::init::init(&global_opts(g), &env, g.dry_run)?;
             for notice in &report.notices {
-                printer.notice(notice);
+                p.notice(notice);
             }
-            printer.init(&report, g.dry_run);
+            p.changes(Some(&report.root), &report.changes, g.dry_run);
             Ok(0)
+        }
+        Command::File(FileCommand::Add(a)) => {
+            let ctx = open(g, &env, p)?;
+            let _lock = lock(&ctx, g.dry_run)?;
+            files::add(&ctx, p, &a.paths, g.dry_run)
+        }
+        Command::File(FileCommand::Remove(a)) => {
+            let ctx = open(g, &env, p)?;
+            let _lock = lock(&ctx, g.dry_run)?;
+            files::remove(&ctx, p, &a.paths, g.dry_run)
+        }
+        Command::File(FileCommand::List) => files::list(&open(g, &env, p)?, p),
+        Command::File(FileCommand::Apply(a)) => deploy(g, &env, p, &a.paths, Selector::File),
+        Command::File(FileCommand::Diff(a)) => {
+            let prepared = prepare(g, &env, p, &a.paths, Selector::File, false)?;
+            inspect::diff(&prepared.plan, p)
+        }
+        Command::Diff(a) => {
+            let prepared = prepare(g, &env, p, &a.paths, Selector::All, false)?;
+            inspect::diff(&prepared.plan, p)
         }
     }
 }
@@ -59,11 +71,52 @@ fn open(g: &Global, env: &Env, printer: &mut Printer) -> Result<Context> {
     Ok(ctx)
 }
 
+/// The repository lock, unless nothing will be written.
+fn lock(ctx: &Context, dry_run: bool) -> Result<Option<Lock>> {
+    if dry_run {
+        Ok(None)
+    } else {
+        state::lock(&ctx.state_dir, &ctx.repo_id).map(Some)
+    }
+}
+
+/// A plan with the context and state it was made from.
+pub struct Prepared {
+    pub ctx: Context,
+    pub state: State,
+    pub plan: Plan,
+    _lock: Option<Lock>,
+}
+
+/// Context, state and plan for the sources a command selects. Takes the
+/// repository lock first when `locked`.
+fn prepare(
+    g: &Global,
+    env: &Env,
+    printer: &mut Printer,
+    paths: &[String],
+    selector: Selector,
+    locked: bool,
+) -> Result<Prepared> {
+    let ctx = open(g, env, printer)?;
+    let lock = lock(&ctx, !locked)?;
+    let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
+    let discovery = ctx.discover()?;
+    let sources = selected(&ctx, &discovery, paths, selector)?;
+    let plan = plan::build(&ctx, &discovery, &sources, &state)?;
+    Ok(Prepared {
+        ctx,
+        state,
+        plan,
+        _lock: lock,
+    })
+}
+
 /// Selected sources the command deploys. A path argument that matches
 /// only sources of other modes is a usage error.
 fn selected<'a>(
     ctx: &Context,
-    discovery: &'a crate::source::Discovery,
+    discovery: &'a Discovery,
     paths: &[String],
     selector: Selector,
 ) -> Result<Vec<&'a Source>> {
@@ -91,27 +144,24 @@ fn deploy(
     paths: &[String],
     selector: Selector,
 ) -> Result<i32> {
-    let ctx = open(g, env, printer)?;
-    let _lock = if g.dry_run {
-        None
-    } else {
-        Some(state::lock(&ctx.state_dir, &ctx.repo_id)?)
-    };
-    let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
-    let discovery = ctx.discover()?;
-    let sources = selected(&ctx, &discovery, paths, selector)?;
-    let plan = plan::build(&ctx, &discovery, &sources, &state)?;
+    let Prepared {
+        ctx,
+        mut state,
+        plan,
+        _lock,
+    } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
     let policy = g.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {
-        let items: Vec<_> = plan
+        let items: Vec<ItemReport> = plan
             .items
             .iter()
             .map(|i| {
                 let (action, detail) = execute::predict(i, policy);
-                execute::ItemReport {
+                let mode = i.source.mode.label().to_owned();
+                ItemReport {
                     source: i.source.path.clone(),
                     dest: i.dest.clone(),
-                    mode: i.source.mode.label().to_owned(),
+                    mode,
                     action,
                     detail,
                 }
@@ -152,11 +202,7 @@ fn undeploy(
     selector: Selector,
 ) -> Result<i32> {
     let ctx = open(g, env, printer)?;
-    let _lock = if g.dry_run {
-        None
-    } else {
-        Some(state::lock(&ctx.state_dir, &ctx.repo_id)?)
-    };
+    let _lock = lock(&ctx, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let removals = plan::plan_removal(&ctx, paths, selector, &state)?;
     if g.dry_run {

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
@@ -380,6 +381,26 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
                 desired: Desired::Symlink(text),
                 content: None,
                 file_mode: 0o644,
+                cache: None,
+                record,
+            })
+        }
+        Mode::FileCopy => {
+            let mode =
+                fs::symlink_metadata(&source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
+            let hash = Hash::of(&bytes);
+            let record = Record {
+                applied_hash: Some(hash.clone()),
+                ..record
+            };
+            let desired = Desired::File {
+                hash,
+                meta: FileMeta::default(),
+            };
+            Ok(Want {
+                desired,
+                content: Some(Zeroizing::new(bytes)),
+                file_mode: mode,
                 cache: None,
                 record,
             })

@@ -84,11 +84,37 @@ pub enum Command {
     Unlink(Paths),
     /// Prepare a new or existing repository (config, ignore files, private cache); deploys nothing
     Init,
+    /// Manage sources deployed by copying instead of symlinking
+    #[command(subcommand)]
+    File(FileCommand),
+    /// Show differences between deployed and desired content (may print secrets)
+    Diff(Paths),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Subcommand)]
+pub enum FileCommand {
+    /// Register sources for copy deployment; deploys nothing
+    Add(RequiredPaths),
+    /// Remove copy registrations; deployed copies stay in place
+    Remove(RequiredPaths),
+    /// List registered sources
+    List,
+    /// Deploy registered copies only
+    Apply(Paths),
+    /// Diff registered copies against their destinations (may print secrets)
+    Diff(Paths),
+}
+
+#[derive(Debug, Default, Args)]
 pub struct Paths {
     /// Repository-relative files or directories (default: all)
     #[arg(value_name = "PATH")]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RequiredPaths {
+    /// Repository-relative source files
+    #[arg(value_name = "PATH", required = true)]
     pub paths: Vec<String>,
 }

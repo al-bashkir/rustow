@@ -13,16 +13,7 @@ use crate::fsops;
 use crate::ignore::{DEFAULT_CACHE_DIR, IGNORE_FILE};
 use crate::paths::RelPath;
 use crate::repo::{self, Env, GlobalOpts, InternalDirs};
-
-/// One file or directory `init` looked at.
-#[derive(Debug, Clone)]
-pub struct Change {
-    /// Repository-relative name.
-    pub path: String,
-    /// "create", "update" or "ok".
-    pub action: &'static str,
-    pub detail: Option<String>,
-}
+use crate::report::Change;
 
 #[derive(Debug)]
 pub struct InitReport {
@@ -66,17 +57,17 @@ fn init_config(root: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<
         None => {
             let text = edit::minimal();
             write(&path, &text, None, dry_run)?;
-            (text, change(CONFIG_FILE, "create", None))
+            (text, Change::new(CONFIG_FILE, "create", None))
         }
         Some((text, mode)) => match edit::ensure_init(&text)? {
             Some(new) => {
                 write(&path, &new, Some(mode), dry_run)?;
                 (
                     new,
-                    change(CONFIG_FILE, "update", Some("added version = 1".into())),
+                    Change::new(CONFIG_FILE, "update", Some("added version = 1".into())),
                 )
             }
-            None => (text, change(CONFIG_FILE, "ok", None)),
+            None => (text, Change::new(CONFIG_FILE, "ok", None)),
         },
     };
     changes.push(change);
@@ -104,7 +95,7 @@ fn init_ignore_file(
         }
     }
     if added.is_empty() {
-        changes.push(change(name, "ok", None));
+        changes.push(Change::new(name, "ok", None));
         return Ok(());
     }
     write(&path, &text, existing.as_ref().map(|(_, m)| *m), dry_run)?;
@@ -113,7 +104,7 @@ fn init_ignore_file(
     } else {
         "create"
     };
-    changes.push(change(
+    changes.push(Change::new(
         name,
         action,
         Some(format!("added {}", added.join(" "))),
@@ -142,16 +133,8 @@ fn init_cache_dir(root: &Path, dir: &Path, dry_run: bool, changes: &mut Vec<Chan
         fsops::ensure_private_dir(dir)?;
     }
     let detail = (action != "ok").then(|| "mode 0700".to_owned());
-    changes.push(change(&name, action, detail));
+    changes.push(Change::new(&name, action, detail));
     Ok(())
-}
-
-fn change(path: &str, action: &'static str, detail: Option<String>) -> Change {
-    Change {
-        path: path.to_owned(),
-        action,
-        detail,
-    }
 }
 
 /// Text and mode of an existing regular file; `None` when absent. Any

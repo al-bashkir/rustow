@@ -3,12 +3,15 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod diff;
 pub mod error;
 pub mod execute;
+pub mod files;
 pub mod fsops;
 pub mod hash;
 pub mod ignore;
 pub mod init;
+pub mod inspect;
 pub mod paths;
 pub mod plan;
 pub mod repo;

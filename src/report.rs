@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::execute::{Action, ItemReport};
-use crate::init::InitReport;
 
 /// Whether the reported items were applied or only planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,26 +101,26 @@ impl Printer {
         }
     }
 
-    pub fn init(&self, report: &InitReport, dry_run: bool) {
+    /// Prints per-file changes of init and file registration commands.
+    pub fn changes(&self, repository: Option<&Path>, changes: &[Change], dry_run: bool) {
         if self.json {
-            let changes: Vec<_> = report
-                .changes
+            let list: Vec<_> = changes
                 .iter()
                 .map(|c| json!({ "path": c.path, "action": c.action, "detail": c.detail }))
                 .collect();
             println!(
                 "{}",
-                json!({ "repository": report.root, "dry_run": dry_run, "changes": changes })
+                json!({ "repository": repository, "dry_run": dry_run, "changes": list })
             );
             return;
         }
-        if !self.quiet {
-            println!("repository: {}", report.root.display());
+        if let (false, Some(root)) = (self.quiet, repository) {
+            println!("repository: {}", root.display());
         }
         let mut changed = 0;
-        for c in &report.changes {
+        for c in changes {
             changed += usize::from(c.action != "ok");
-            if !self.quiet && (c.action != "ok" || self.verbose) {
+            if !self.quiet && (c.action != "ok" || self.verbose || c.detail.is_some()) {
                 let detail = c
                     .detail
                     .as_deref()
@@ -131,10 +130,7 @@ impl Printer {
             }
         }
         if !self.quiet {
-            let line = format!(
-                "{changed} changed, {} unchanged",
-                report.changes.len() - changed
-            );
+            let line = format!("{changed} changed, {} unchanged", changes.len() - changed);
             println!(
                 "{}",
                 if dry_run {
@@ -217,5 +213,25 @@ fn summary_line(items: &[ItemReport], run: RunKind) -> String {
         RunKind::Applied => line,
         RunKind::DryRun => format!("dry run, nothing written: {line}"),
         RunKind::Blocked => format!("conflicts found, nothing written: {line}"),
+    }
+}
+
+/// One file or registration a command looked at.
+#[derive(Debug, Clone)]
+pub struct Change {
+    /// Repository-relative name.
+    pub path: String,
+    /// "ok" when nothing changed; otherwise the verb.
+    pub action: &'static str,
+    pub detail: Option<String>,
+}
+
+impl Change {
+    pub fn new(path: &str, action: &'static str, detail: Option<String>) -> Change {
+        Change {
+            path: path.to_owned(),
+            action,
+            detail,
+        }
     }
 }
