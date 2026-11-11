@@ -1,10 +1,19 @@
 //! Deployment planning. `decide` is the pure rule table that says what
 //! may happen at one path; the planner feeds it real filesystem state.
 
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::fsops::{FileMeta, Observed};
+use zeroize::Zeroizing;
+
+use crate::error::{Error, Result};
+use crate::fsops::{self, FileMeta, Observed, ParentState};
 use crate::hash::Hash;
+use crate::paths::{RelPath, Scope, link_text};
+use crate::repo::Context;
+use crate::source::{Discovery, Mode, Selector, Source, check_collisions};
+use crate::state::{Record, State};
 
 /// What a path should be after deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +46,12 @@ pub enum Conflict {
     Directory,
     /// A FIFO, socket or device is in the way; never replaced.
     Special,
+    /// Several sources map to this destination.
+    Collision,
+    /// An ancestor directory is a file or an unsafe symlink.
+    ParentBlocked,
+    /// Parent directories are missing and `create_directories = false`.
+    NoParent,
 }
 
 impl Conflict {
@@ -47,12 +62,18 @@ impl Conflict {
             Conflict::FileToSymlink => "managed copy would be replaced by a symlink",
             Conflict::Directory => "a directory is in the way",
             Conflict::Special => "a special file is in the way",
+            Conflict::Collision => "several sources map to this destination",
+            Conflict::ParentBlocked => "a parent directory is blocked",
+            Conflict::NoParent => "parent directory is missing and create_directories = false",
         }
     }
 
     /// Conflicts that `--backup` / `--force` may resolve.
     pub fn resolvable(self) -> bool {
-        !matches!(self, Conflict::Directory | Conflict::Special)
+        matches!(
+            self,
+            Conflict::Unmanaged | Conflict::Modified | Conflict::FileToSymlink
+        )
     }
 }
 
@@ -116,6 +137,345 @@ pub fn decide(desired: &Desired, observed: &Observed, recorded: Recorded) -> Dec
             }
         }
     }
+}
+
+/// What a planner reads from the record of one destination.
+pub fn recorded(record: Option<&Record>) -> Recorded<'_> {
+    match record {
+        Some(Record {
+            link_target: Some(t),
+            ..
+        }) => Recorded::Link(t),
+        Some(Record {
+            applied_hash: Some(h),
+            ..
+        }) => Recorded::Copy(h),
+        _ => Recorded::None,
+    }
+}
+
+/// A planned cache write behind a cache-backed destination.
+#[derive(Debug)]
+pub struct CacheWrite {
+    pub path: PathBuf,
+    pub bytes: Zeroizing<Vec<u8>>,
+    pub observed: Observed,
+    pub decision: Decision,
+}
+
+/// Everything the executor needs to deploy one source.
+#[derive(Debug)]
+pub struct Deploy {
+    /// Real destination path (ancestor symlinks resolved).
+    pub path: PathBuf,
+    /// Deepest existing ancestor and the directories to create below it.
+    pub missing_dirs: Option<(PathBuf, Vec<String>)>,
+    pub dir_mode: u32,
+    pub desired: Desired,
+    pub observed: Observed,
+    pub decision: Decision,
+    /// Content for a regular-file destination.
+    pub content: Option<Zeroizing<Vec<u8>>>,
+    /// Mode for a regular-file destination when `desired` sets none.
+    pub file_mode: u32,
+    pub cache: Option<CacheWrite>,
+    pub record: Record,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum Step {
+    Deploy(Box<Deploy>),
+    /// Cannot be planned because of the destination's surroundings.
+    Blocked {
+        conflict: Conflict,
+        detail: String,
+    },
+    /// Desired content could not be computed (render or decrypt failed).
+    Failed(String),
+}
+
+#[derive(Debug)]
+pub struct PlanItem {
+    pub source: Source,
+    /// Destination as configured (target root + relative path); state key.
+    pub dest: PathBuf,
+    pub step: Step,
+}
+
+#[derive(Debug, Default)]
+pub struct Plan {
+    pub items: Vec<PlanItem>,
+}
+
+/// What the desired destination looks like for one source.
+struct Want {
+    desired: Desired,
+    content: Option<Zeroizing<Vec<u8>>>,
+    file_mode: u32,
+    cache: Option<(PathBuf, Zeroizing<Vec<u8>>)>,
+    record: Record,
+}
+
+/// Plans `selected` sources. Collisions are checked across all of
+/// `discovery`, so a selected source that collides with an unselected
+/// one is still blocked.
+pub fn build(
+    ctx: &Context,
+    discovery: &Discovery,
+    selected: &[&Source],
+    state: &State,
+) -> Result<Plan> {
+    let mut collided: BTreeMap<(Scope, &RelPath), String> = BTreeMap::new();
+    for c in check_collisions(&discovery.sources) {
+        let detail = c.to_string();
+        for s in discovery
+            .sources
+            .iter()
+            .filter(|s| c.sources.contains(&s.path))
+        {
+            collided.insert((s.scope, &s.dest), detail.clone());
+        }
+    }
+    let mut items = Vec::with_capacity(selected.len());
+    for source in selected {
+        let dest = ctx.dest_path(source);
+        let step = match collided.get(&(source.scope, &source.dest)) {
+            Some(detail) => Step::Blocked {
+                conflict: Conflict::Collision,
+                detail: detail.clone(),
+            },
+            None => plan_one(ctx, source, &dest, state.entries.get(&dest))?,
+        };
+        items.push(PlanItem {
+            source: (*source).clone(),
+            dest,
+            step,
+        });
+    }
+    Ok(Plan { items })
+}
+
+fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>) -> Result<Step> {
+    let (path, missing_dirs) =
+        match fsops::parent_state(ctx.target_root(source.scope), &source.dest)? {
+            ParentState::Ready(parent) => (parent.join(source.dest.file_name()), None),
+            ParentState::Blocked { path, reason } => {
+                let detail = format!("{}: {reason}", path.display());
+                return Ok(Step::Blocked {
+                    conflict: Conflict::ParentBlocked,
+                    detail,
+                });
+            }
+            ParentState::Missing { .. } if !ctx.config.defaults.create_directories => {
+                return Ok(Step::Blocked {
+                    conflict: Conflict::NoParent,
+                    detail: dest.display().to_string(),
+                });
+            }
+            ParentState::Missing { existing, missing } => {
+                let path = missing
+                    .iter()
+                    .fold(existing.clone(), |p, m| p.join(m))
+                    .join(source.dest.file_name());
+                (path, Some((existing, missing)))
+            }
+        };
+    let want = match want(ctx, source, &path) {
+        Ok(w) => w,
+        Err(msg) => return Ok(Step::Failed(msg)),
+    };
+    let observed = if missing_dirs.is_some() {
+        Observed::Missing
+    } else {
+        fsops::inspect(&path)?
+    };
+    let decision = decide(&want.desired, &observed, recorded(record));
+    let detail = broken_link_detail(&path, &observed, decision);
+    let cache = match want.cache {
+        Some((cache_path, bytes)) => Some(plan_cache(cache_path, bytes, record)?),
+        None => None,
+    };
+    let file_mode = match (&observed, &want.desired) {
+        (Observed::File { mode, .. }, Desired::File { meta, .. }) if meta.mode.is_none() => *mode,
+        _ => want.file_mode,
+    };
+    Ok(Step::Deploy(Box::new(Deploy {
+        path,
+        missing_dirs,
+        dir_mode: if source.mode.backend().is_some() {
+            0o700
+        } else {
+            0o777
+        },
+        desired: want.desired,
+        observed,
+        decision,
+        content: want.content,
+        file_mode,
+        cache,
+        record: want.record,
+        detail,
+    })))
+}
+
+fn plan_cache(
+    path: PathBuf,
+    bytes: Zeroizing<Vec<u8>>,
+    record: Option<&Record>,
+) -> Result<CacheWrite> {
+    let observed = fsops::inspect(&path)?;
+    let desired = Desired::File {
+        hash: Hash::of(&bytes),
+        meta: FileMeta::default(),
+    };
+    let previous = record
+        .and_then(|r| r.applied_hash.as_ref())
+        .map_or(Recorded::None, Recorded::Copy);
+    let decision = decide(&desired, &observed, previous);
+    Ok(CacheWrite {
+        path,
+        bytes,
+        observed,
+        decision,
+    })
+}
+
+fn broken_link_detail(path: &Path, observed: &Observed, decision: Decision) -> Option<String> {
+    let Observed::Symlink(text) = observed else {
+        return None;
+    };
+    let dangling = path
+        .parent()
+        .is_some_and(|p| fs::metadata(p.join(text)).is_err());
+    (dangling && matches!(decision, Decision::Conflict(_)))
+        .then(|| format!("broken symlink to {}", text.display()))
+}
+
+/// Desired state of one source's destination at `path`.
+fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want, String> {
+    let source_abs = ctx.root.join(source.path.as_path());
+    let bytes = fsops::read_file(&source_abs).map_err(|e| e.to_string())?;
+    let record = Record {
+        source: source.path.clone(),
+        scope: source.scope,
+        mode: source.mode.label().to_owned(),
+        backend: source.mode.backend(),
+        source_hash: Hash::of(&bytes),
+        applied_hash: None,
+        render_id: None,
+        link_target: None,
+        cache_path: None,
+        meta: None,
+        folded_dir: false,
+    };
+    match &source.mode {
+        Mode::Link => {
+            let text = link_text(path, &source_abs);
+            let record = Record {
+                link_target: Some(text.clone()),
+                ..record
+            };
+            Ok(Want {
+                desired: Desired::Symlink(text),
+                content: None,
+                file_mode: 0o644,
+                cache: None,
+                record,
+            })
+        }
+        other => Err(format!(
+            "{} deployment is not implemented yet",
+            other.label()
+        )),
+    }
+}
+
+/// One managed destination to remove.
+#[derive(Debug)]
+pub struct Removal {
+    pub source: RelPath,
+    pub mode: String,
+    /// State key.
+    pub dest: PathBuf,
+    /// Real path.
+    pub path: PathBuf,
+    pub verdict: Verdict,
+}
+
+#[derive(Debug)]
+pub enum Verdict {
+    /// Remove the object, which must still look like this.
+    Remove(Observed),
+    /// Already gone: only forget the record.
+    Forget,
+    /// Changed since rustow created it: left in place.
+    Keep(String),
+}
+
+/// Plans removal of recorded destinations whose source matches `args`
+/// (repository-relative prefixes; all when empty) and whose mode the
+/// selector covers. Sources that no longer exist are included.
+pub fn plan_removal(
+    ctx: &Context,
+    args: &[String],
+    selector: Selector,
+    state: &State,
+) -> Result<Vec<Removal>> {
+    let mut prefixes = Vec::new();
+    for arg in args.iter().filter(|a| !matches!(a.as_str(), "." | "./")) {
+        let rel = RelPath::parse(arg)?;
+        if ctx.ignore.is_reserved(&rel, false) {
+            return Err(Error::Usage(format!(
+                "'{rel}' is reserved by rustow and is never deployed"
+            )));
+        }
+        prefixes.push(rel);
+    }
+    let mut out = Vec::new();
+    for (dest, record) in &state.entries {
+        let wanted = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
+        let Ok(rel) = dest.strip_prefix(ctx.target_root(record.scope)) else {
+            continue;
+        };
+        if !wanted || !selector.includes_label(&record.mode) {
+            continue;
+        }
+        let rel = RelPath::parse(&rel.to_string_lossy())?;
+        let (path, observed) = match fsops::parent_state(ctx.target_root(record.scope), &rel)? {
+            ParentState::Ready(parent) => {
+                let path = parent.join(rel.file_name());
+                let observed = fsops::inspect(&path)?;
+                (path, observed)
+            }
+            _ => (dest.clone(), Observed::Missing),
+        };
+        let verdict = match (&observed, recorded(Some(record))) {
+            (Observed::Missing, _) => Verdict::Forget,
+            (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => Verdict::Remove(observed),
+            (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => {
+                Verdict::Remove(observed)
+            }
+            _ => {
+                Verdict::Keep("destination changed since rustow deployed it; left in place".into())
+            }
+        };
+        out.push(Removal {
+            source: record.source.clone(),
+            mode: record.mode.clone(),
+            dest: dest.clone(),
+            path,
+            verdict,
+        });
+    }
+    if out.is_empty() && !prefixes.is_empty() {
+        let list: Vec<&str> = prefixes.iter().map(RelPath::as_str).collect();
+        return Err(Error::Usage(format!(
+            "nothing deployed by rustow matches {}",
+            list.join(", ")
+        )));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

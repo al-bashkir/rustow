@@ -68,6 +68,24 @@ pub enum Selector {
 }
 
 impl Selector {
+    /// Same as `includes`, for a `Mode::label()` read back from state.
+    pub fn includes_label(self, label: &str) -> bool {
+        let known = [
+            "link",
+            "copy",
+            "decrypt+link",
+            "decrypt+copy",
+            "template+link",
+            "template+copy",
+        ];
+        match self {
+            Selector::All => known.contains(&label),
+            Selector::Link => label == "link",
+            Selector::File => matches!(label, "copy" | "decrypt+copy"),
+            Selector::Template => label.starts_with("template+"),
+        }
+    }
+
     pub fn includes(self, mode: &Mode) -> bool {
         match self {
             Selector::All => true,
@@ -420,6 +438,19 @@ mod tests {
         let c = cfg("[[template_rules]]\nsource = \"a.conf\"\nmode = \"0600\"\n");
         let e = classify(&rel("a.conf"), &c).unwrap_err().to_string();
         assert!(e.contains("a.conf"), "{e}");
+    }
+
+    #[test]
+    fn selector_filters_recorded_labels() {
+        assert!(Selector::Link.includes_label("link"));
+        assert!(!Selector::Link.includes_label("decrypt+link"));
+        assert!(Selector::File.includes_label("copy"));
+        assert!(Selector::File.includes_label("decrypt+copy"));
+        assert!(Selector::Template.includes_label("template+link"));
+        assert!(Selector::Template.includes_label("template+copy"));
+        assert!(!Selector::Template.includes_label("copy"));
+        assert!(Selector::All.includes_label("decrypt+link"));
+        assert!(!Selector::All.includes_label("bogus"));
     }
 
     #[test]
