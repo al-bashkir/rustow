@@ -459,14 +459,27 @@ fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&R
 }
 
 /// Root-scope symlinks into the cache need a cache entry that the destination's owner can trust.
-fn check_cache_trust(source: &Source, path: &Path, missing_dirs: &MissingDirs, want: &Want) -> Result<Option<Step>> {
-    let (Scope::Root, false, Some((cache_path, _))) = (source.scope, source.mode.is_copy(), &want.cache) else {
+/// A system symlink must point only at a file that nobody but root or the
+/// destination directory's owner can change: the cache entry of a
+/// cache-backed link, or the repository source of an ordinary link.
+fn check_link_trust(
+    ctx: &Context,
+    source: &Source,
+    path: &Path,
+    missing_dirs: &MissingDirs,
+    want: &Want,
+) -> Result<Option<Step>> {
+    if source.scope != Scope::Root || source.mode.is_copy() {
         return Ok(None);
+    }
+    let target = match &want.cache {
+        Some((cache_path, _)) => cache_path.clone(),
+        None => ctx.root.join(source.path.as_path()),
     };
     let dir = missing_dirs
         .as_ref()
         .map_or_else(|| path.parent().unwrap_or(path), |(existing, _)| existing);
-    Ok(fsops::trust_cache(cache_path, fsops::owner_of(dir)?).err().map(|why| {
+    Ok(fsops::trust_cache(&target, fsops::owner_of(dir)?).err().map(|why| {
         let detail = format!("{why}; copy it instead with [[template_rules]] metadata or `rustow file add`");
         blocked(Conflict::UntrustedCache, detail)
     }))
@@ -482,12 +495,13 @@ fn observe_dest(path: &Path, missing_dirs: &MissingDirs) -> std::result::Result<
 
 /// Checks the cache trust, then reads the destination; `Err` carries the step that ends planning.
 fn inspect_dest(
+    ctx: &Context,
     source: &Source,
     path: &Path,
     missing_dirs: &MissingDirs,
     want: &Want,
 ) -> Result<std::result::Result<Observed, Step>> {
-    if let Some(step) = check_cache_trust(source, path, missing_dirs, want)? {
+    if let Some(step) = check_link_trust(ctx, source, path, missing_dirs, want)? {
         return Ok(Err(step));
     }
     Ok(observe_dest(path, missing_dirs))
@@ -529,7 +543,7 @@ fn plan_one(
         Ok(w) => w,
         Err(msg) => return Ok(Step::Failed(msg)),
     };
-    let observed = match inspect_dest(source, &path, &missing_dirs, &want)? {
+    let observed = match inspect_dest(ctx, source, &path, &missing_dirs, &want)? {
         Ok(o) => o,
         Err(step) => return Ok(step),
     };
