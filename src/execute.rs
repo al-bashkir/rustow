@@ -268,7 +268,13 @@ fn create(d: &Deploy) -> Result<()> {
         Desired::Symlink(text) => fsops::symlink_new(&d.path, text),
         Desired::File { meta, .. } => {
             let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
-            fsops::write_new(&d.path, bytes, meta.mode.unwrap_or(d.file_mode), meta.uid, meta.gid)
+            fsops::write_new(
+                &d.path,
+                bytes,
+                meta.mode.unwrap_or(d.file_mode),
+                d.file_owner.0,
+                d.file_owner.1,
+            )
         }
     }
 }
@@ -305,7 +311,13 @@ fn place(d: &Deploy) -> Result<()> {
         Desired::Symlink(text) => fsops::symlink_atomic(&d.path, text),
         Desired::File { meta, .. } => {
             let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
-            fsops::write_atomic(&d.path, bytes, meta.mode.unwrap_or(d.file_mode), meta.uid, meta.gid)
+            fsops::write_atomic(
+                &d.path,
+                bytes,
+                meta.mode.unwrap_or(d.file_mode),
+                d.file_owner.0,
+                d.file_owner.1,
+            )
         }
     }
 }
@@ -466,6 +478,7 @@ mod tests {
             decision: Decision::Create,
             content: content.map(|c| zeroize::Zeroizing::new(c.to_vec())),
             file_mode: 0o644,
+            file_owner: (None, None),
             cache: None,
             record: record(),
             detail: None,

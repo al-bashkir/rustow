@@ -202,6 +202,8 @@ pub struct Deploy {
     pub content: Option<Zeroizing<Vec<u8>>>,
     /// Mode for a regular-file destination when `desired` sets none.
     pub file_mode: u32,
+    /// Owner and group for a regular-file destination (see `kept_owner`).
+    pub file_owner: (Option<u32>, Option<u32>),
     pub cache: Option<CacheWrite>,
     pub record: Record,
     pub detail: Option<String>,
@@ -492,6 +494,19 @@ fn inspect_dest(
 }
 
 /// Mode for a regular-file destination: keep the existing mode unless one is set.
+/// Owner and group for a rewritten regular file: explicit metadata wins;
+/// otherwise an existing file keeps its owner and group (a root-run update
+/// of /etc/app.conf must not turn root:app into root:root).
+fn kept_owner(observed: &Observed, desired: &Desired) -> (Option<u32>, Option<u32>) {
+    match (observed, desired) {
+        (Observed::File { uid, gid, .. }, Desired::File { meta, .. }) => {
+            (meta.uid.or(Some(*uid)), meta.gid.or(Some(*gid)))
+        }
+        (_, Desired::File { meta, .. }) => (meta.uid, meta.gid),
+        _ => (None, None),
+    }
+}
+
 fn file_mode_for(observed: &Observed, want: &Want) -> u32 {
     match (observed, &want.desired) {
         (Observed::File { mode, .. }, Desired::File { meta, .. }) if meta.mode.is_none() => *mode,
@@ -533,6 +548,7 @@ fn deploy_step(
     let decision = decide(&want.desired, &observed, recorded(record));
     let detail = broken_link_detail(&path, &observed, decision);
     let file_mode = file_mode_for(&observed, &want);
+    let file_owner = kept_owner(&observed, &want.desired);
     let cache = match want
         .cache
         .map(|(cache_path, bytes)| plan_cache(cache_path, bytes, record, !source.mode.is_copy()))
@@ -549,6 +565,7 @@ fn deploy_step(
         decision,
         content: want.content,
         file_mode,
+        file_owner,
         cache,
         record: want.record,
         detail,
@@ -1006,6 +1023,37 @@ mod tests {
             decide(&want_file("a"), &file("b"), Recorded::None),
             Conflict(super::Conflict::Unmanaged)
         );
+    }
+
+    #[test]
+    fn rewritten_copies_keep_owner_unless_set_explicitly() {
+        let existing = Observed::File {
+            hash: h("old"),
+            mode: 0o640,
+            uid: 0,
+            gid: 1000,
+        };
+        let plain = want_file("new");
+        assert_eq!(
+            kept_owner(&existing, &plain),
+            (Some(0), Some(1000)),
+            "an update keeps root:group"
+        );
+        let explicit = Desired::File {
+            hash: h("new"),
+            meta: FileMeta {
+                mode: None,
+                uid: Some(5),
+                gid: None,
+            },
+        };
+        assert_eq!(kept_owner(&existing, &explicit), (Some(5), Some(1000)));
+        assert_eq!(
+            kept_owner(&Observed::Missing, &plain),
+            (None, None),
+            "new files belong to the runner"
+        );
+        assert_eq!(kept_owner(&existing, &want_link("t")), (None, None));
     }
 
     #[test]
