@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::execute::{Action, ItemReport};
+use crate::init::InitReport;
 
 /// Whether the reported items were applied or only planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +99,50 @@ impl Printer {
         }
         if !self.quiet {
             println!("{}", summary_line(items, run));
+        }
+    }
+
+    pub fn init(&self, report: &InitReport, dry_run: bool) {
+        if self.json {
+            let changes: Vec<_> = report
+                .changes
+                .iter()
+                .map(|c| json!({ "path": c.path, "action": c.action, "detail": c.detail }))
+                .collect();
+            println!(
+                "{}",
+                json!({ "repository": report.root, "dry_run": dry_run, "changes": changes })
+            );
+            return;
+        }
+        if !self.quiet {
+            println!("repository: {}", report.root.display());
+        }
+        let mut changed = 0;
+        for c in &report.changes {
+            changed += usize::from(c.action != "ok");
+            if !self.quiet && (c.action != "ok" || self.verbose) {
+                let detail = c
+                    .detail
+                    .as_deref()
+                    .map(|d| format!(": {d}"))
+                    .unwrap_or_default();
+                println!("{:>8} {}{detail}", c.action, c.path);
+            }
+        }
+        if !self.quiet {
+            let line = format!(
+                "{changed} changed, {} unchanged",
+                report.changes.len() - changed
+            );
+            println!(
+                "{}",
+                if dry_run {
+                    format!("dry run, nothing written: {line}")
+                } else {
+                    line
+                }
+            );
         }
     }
 

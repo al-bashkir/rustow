@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, IoContext, Result};
 use crate::paths::RelPath;
 
+pub mod edit;
+
 pub const CONFIG_FILE: &str = ".rustow.toml";
 pub const SCHEMA_VERSION: u32 = 1;
 

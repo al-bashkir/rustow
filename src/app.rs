@@ -30,16 +30,28 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Apply(p) => deploy(g, &env, &mut printer, &p.paths, Selector::All),
         Command::Link(p) => deploy(g, &env, &mut printer, &p.paths, Selector::Link),
         Command::Unlink(p) => undeploy(g, &env, &mut printer, &p.paths, Selector::Link),
+        Command::Init => {
+            let opts = global_opts(g);
+            let report = crate::init::init(&opts, &env, g.dry_run)?;
+            for notice in &report.notices {
+                printer.notice(notice);
+            }
+            printer.init(&report, g.dry_run);
+            Ok(0)
+        }
+    }
+}
+
+fn global_opts(g: &Global) -> GlobalOpts {
+    GlobalOpts {
+        repo: g.repo.clone(),
+        target: g.target.clone(),
+        root_target: g.root_target.clone(),
     }
 }
 
 fn open(g: &Global, env: &Env, printer: &mut Printer) -> Result<Context> {
-    let opts = GlobalOpts {
-        repo: g.repo.clone(),
-        target: g.target.clone(),
-        root_target: g.root_target.clone(),
-    };
-    let ctx = Context::open(&opts, env)?;
+    let ctx = Context::open(&global_opts(g), env)?;
     printer.set_home(&ctx.home);
     for notice in &ctx.notices {
         printer.notice(notice);

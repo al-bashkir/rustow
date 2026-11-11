@@ -8,6 +8,7 @@ pub mod execute;
 pub mod fsops;
 pub mod hash;
 pub mod ignore;
+pub mod init;
 pub mod paths;
 pub mod plan;
 pub mod repo;

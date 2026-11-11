@@ -101,18 +101,12 @@ impl Context {
             }
         }
 
-        let resolve = |value: &str| normalize(&root.join(expand_tilde(value, &home)));
-        let cache_dir = resolve(&config.defaults.cache_dir);
-        let state_dir = match (&config.defaults.state_dir, &env.xdg_state_home) {
-            (Some(value), _) => resolve(value),
-            (None, Some(xdg)) if xdg.is_absolute() => xdg.join("rustow"),
-            (None, _) => home.join(".local/state/rustow"),
-        };
-        let internal = internal_dirs(
-            &root,
-            &[("cache_dir", &cache_dir), ("state_dir", &state_dir)],
-        )?;
-        let ignore = Ignore::load(&root, internal)?;
+        let InternalDirs {
+            cache_dir,
+            state_dir,
+            inside,
+        } = InternalDirs::resolve(&root, &home, &config, env)?;
+        let ignore = Ignore::load(&root, inside)?;
         let repo_id = Hash::of(root.as_os_str().as_encoded_bytes())
             .short()
             .to_owned();
@@ -199,7 +193,7 @@ fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {
 
 /// `--repo`, then `RUSTOW_REPO`, then the nearest ancestor of the working
 /// directory with `.rustow.toml` or `.rustowignore`, then the working directory.
-fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>) -> Result<PathBuf> {
+pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>) -> Result<PathBuf> {
     if let Some(p) = &opts.repo {
         return canonical_dir(&env.cwd.join(p), "--repo");
     }
@@ -218,6 +212,36 @@ fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>) -> Result<
         cwd.display()
     ));
     Ok(cwd)
+}
+
+/// Cache and state directories of a repository.
+pub struct InternalDirs {
+    pub cache_dir: PathBuf,
+    pub state_dir: PathBuf,
+    /// Those of them inside the repository, repository-relative.
+    pub inside: Vec<RelPath>,
+}
+
+impl InternalDirs {
+    /// Relative values resolve against the repository, never the working directory.
+    pub fn resolve(root: &Path, home: &Path, config: &Config, env: &Env) -> Result<InternalDirs> {
+        let resolve = |value: &str| normalize(&root.join(expand_tilde(value, home)));
+        let cache_dir = resolve(&config.defaults.cache_dir);
+        let state_dir = match (&config.defaults.state_dir, &env.xdg_state_home) {
+            (Some(value), _) => resolve(value),
+            (None, Some(xdg)) if xdg.is_absolute() => xdg.join("rustow"),
+            (None, _) => home.join(".local/state/rustow"),
+        };
+        let inside = internal_dirs(
+            root,
+            &[("cache_dir", &cache_dir), ("state_dir", &state_dir)],
+        )?;
+        Ok(InternalDirs {
+            cache_dir,
+            state_dir,
+            inside,
+        })
+    }
 }
 
 /// Repository-relative paths of configured internal dirs that lie inside

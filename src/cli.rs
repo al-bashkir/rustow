@@ -82,6 +82,8 @@ pub enum Command {
     Link(Paths),
     /// Remove rustow-managed ordinary symlinks
     Unlink(Paths),
+    /// Prepare a new or existing repository (config, ignore files, private cache); deploys nothing
+    Init,
 }
 
 #[derive(Debug, Args)]

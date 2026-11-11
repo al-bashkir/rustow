@@ -57,21 +57,24 @@ impl Ignore {
     /// Reserved, or excluded by `.rustowignore` (the path or any ancestor).
     /// An ignored ancestor directory cannot be re-included, as in Git.
     pub fn is_ignored(&self, path: &RelPath, is_dir: bool) -> bool {
-        if self.is_reserved(path, is_dir) {
-            return true;
-        }
-        let mut ancestors = Vec::new();
-        let mut cur = path.parent();
-        while let Some(p) = cur {
-            cur = p.parent();
-            ancestors.push(p);
-        }
-        ancestors
-            .iter()
-            .rev()
-            .any(|dir| self.matcher.matched(dir.as_path(), true).is_ignore())
-            || self.matcher.matched(path.as_path(), is_dir).is_ignore()
+        self.is_reserved(path, is_dir) || excludes(&self.matcher, path, is_dir)
     }
+}
+
+/// Git semantics: an excluded ancestor directory excludes the whole
+/// subtree, whatever later negations say about its children.
+pub fn excludes(matcher: &Gitignore, path: &RelPath, is_dir: bool) -> bool {
+    let mut ancestors = Vec::new();
+    let mut cur = path.parent();
+    while let Some(p) = cur {
+        cur = p.parent();
+        ancestors.push(p);
+    }
+    ancestors
+        .iter()
+        .rev()
+        .any(|dir| matcher.matched(dir.as_path(), true).is_ignore())
+        || matcher.matched(path.as_path(), is_dir).is_ignore()
 }
 
 #[cfg(test)]
