@@ -207,3 +207,18 @@ fn unreadable_cache_entry_fails_only_its_item() {
         "{out:?}"
     );
 }
+
+/// Review I3: only rustow's own edit workspaces are ever removed.
+#[test]
+fn cache_clean_removes_only_rustow_workspaces() {
+    let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n[defaults]\ncache_dir = \"~/work\"\n");
+    fx.write_home("work/edit/my-video-project/cut.txt", "precious");
+    let stale = fx.home_path("work/edit/edit-AbC123");
+    write_file(&stale.join("secret.conf"), "plaintext");
+    write_file(&stale.join(".lock"), "");
+    let out = fx.ok(&["cache", "clean"]);
+    assert!(out.stdout.contains("edit/edit-AbC123"), "{out:?}");
+    assert!(!stale.exists());
+    assert_eq!(read(&fx.home_path("work/edit/my-video-project/cut.txt")), "precious");
+}

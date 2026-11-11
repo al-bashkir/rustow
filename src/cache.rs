@@ -107,7 +107,7 @@ fn clean_workspaces(root: &Path, dry_run: bool) -> Result<Vec<Change>> {
     }
     for entry in fs::read_dir(root).ctx(|| format!("read {}", root.display()))?.flatten() {
         let path = entry.path();
-        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+        if !is_workspace(&entry.file_name().to_string_lossy(), &path) {
             continue;
         }
         let in_use = fs::File::open(path.join(".lock")).is_ok_and(|f| f.try_lock().is_err());
@@ -125,4 +125,12 @@ fn clean_workspaces(root: &Path, dry_run: bool) -> Result<Vec<Change>> {
         ));
     }
     Ok(changes)
+}
+
+/// A directory `enc edit` made: named `edit-*`, owned by this user, with a
+/// regular `.lock` file. Anything else in the directory is left alone.
+fn is_workspace(name: &str, path: &Path) -> bool {
+    let own_dir = fs::symlink_metadata(path)
+        .is_ok_and(|m| m.is_dir() && std::os::unix::fs::MetadataExt::uid(&m) == nix::unistd::geteuid().as_raw());
+    name.starts_with("edit-") && own_dir && fs::symlink_metadata(path.join(".lock")).is_ok_and(|m| m.is_file())
 }
