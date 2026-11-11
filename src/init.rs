@@ -24,7 +24,7 @@ pub struct InitReport {
 
 pub fn init(opts: &GlobalOpts, env: &Env, dry_run: bool) -> Result<InitReport> {
     let mut notices = Vec::new();
-    let root = repo::find_root(opts, env, &mut notices)?;
+    let root = repo::find_root(opts, env, &mut notices, true)?;
     if root.parent().is_none() {
         return Err(Error::Usage("refusing to initialize the filesystem root".into()));
     }

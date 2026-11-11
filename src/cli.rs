@@ -25,7 +25,7 @@ pub struct Cli {
 
 #[derive(Debug, Args)]
 pub struct Global {
-    /// Repository root (default: $RUSTOW_REPO, else the nearest directory with .rustow.toml or .rustowignore, else the current directory)
+    /// Repository root (default: $RUSTOW_REPO, else the nearest directory with .rustow.toml or .rustowignore; `init` uses the current directory)
     #[arg(long, global = true, value_name = "DIR")]
     pub repo: Option<PathBuf>,
     /// Target for home sources (default: defaults.target, normally ~)

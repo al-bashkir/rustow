@@ -73,7 +73,7 @@ impl Context {
     pub fn open(opts: &GlobalOpts, env: &Env) -> Result<Context> {
         let mut notices = Vec::new();
         let home = canonical_dir(&env.home, "HOME")?;
-        let root = find_root(opts, env, &mut notices)?;
+        let root = find_root(opts, env, &mut notices, false)?;
         if root.parent().is_none() {
             return Err(Error::Usage(
                 "refusing to use the filesystem root as the repository".into(),
@@ -207,8 +207,8 @@ fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {
 }
 
 /// `--repo`, then `RUSTOW_REPO`, then the nearest ancestor of the working
-/// directory with `.rustow.toml` or `.rustowignore`, then the working directory.
-pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>) -> Result<PathBuf> {
+/// directory with `.rustow.toml` or `.rustowignore`; for `init` only, the working directory.
+pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_repo: bool) -> Result<PathBuf> {
     if let Some(p) = &opts.repo {
         return canonical_dir(&env.cwd.join(p), "--repo");
     }
@@ -222,8 +222,17 @@ pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>) -> Res
     {
         return Ok(dir.to_path_buf());
     }
+    // Only `init` may adopt an unmarked directory; anything else could
+    // deploy a random directory (bare `rustow` = apply) into HOME.
+    if !new_repo {
+        return Err(Error::Usage(format!(
+            "no rustow repository found at or above {} (no {CONFIG_FILE} or {IGNORE_FILE}); \
+             run `rustow init` in the repository, pass --repo DIR, or set RUSTOW_REPO",
+            cwd.display()
+        )));
+    }
     notices.push(format!(
-        "no {CONFIG_FILE} or {IGNORE_FILE} found; using the current directory {} as the repository",
+        "initializing the current directory {} as a new repository",
         cwd.display()
     ));
     Ok(cwd)
@@ -390,13 +399,12 @@ mod tests {
     }
 
     #[test]
-    fn cwd_fallback_adds_notice() {
+    fn no_marker_and_no_flag_is_an_error() {
         let mut f = fx();
         fs::create_dir_all(f.base.join("plain")).unwrap();
         f.env.cwd = f.base.join("plain");
-        let ctx = open(&f, GlobalOpts::default()).unwrap();
-        assert_eq!(ctx.root, f.base.join("plain"));
-        assert!(ctx.notices[0].contains("current directory"), "{:?}", ctx.notices);
+        let e = open(&f, GlobalOpts::default()).err().unwrap().to_string();
+        assert!(e.contains("no rustow repository") && e.contains("--repo"), "{e}");
     }
 
     #[test]

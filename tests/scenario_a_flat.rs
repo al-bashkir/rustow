@@ -127,6 +127,7 @@ fn odd_names_link_and_select() {
 #[test]
 fn subdir_cwd_paths_are_repo_relative() {
     let mut fx = flat();
+    fx.env_repo = false;
     fx.write(".rustow.toml", "version = 1\n");
     fx.cwd = fx.repo.join(".config");
     fx.ok(&["apply", ".bashrc"]);
@@ -158,4 +159,26 @@ fn unsafe_ancestor_symlink_blocks() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stdout.contains("writable by others"), "{out:?}");
     assert!(!open.join("nvim").exists());
+}
+
+/// Review I2: without a marker, --repo or RUSTOW_REPO no directory is
+/// silently taken as the repository (bare `rustow` deploys everything).
+#[test]
+fn no_marker_means_no_repository() {
+    let mut fx = flat();
+    fx.env_repo = false;
+    fx.cwd = fx.repo.join(".config/nvim");
+    for args in [&["apply", "init.lua"][..], &[][..]] {
+        let out = fx.run(args);
+        assert_eq!(out.code, 2, "{args:?}: {out:?}");
+        assert!(out.stderr.contains("no rustow repository"), "{out:?}");
+    }
+    assert_eq!(
+        fs::read_dir(&fx.home).unwrap().count(),
+        1,
+        "only the repository is in HOME"
+    );
+    let repo = fx.repo.to_str().unwrap().to_owned();
+    fx.ok(&["--repo", &repo, "apply", ".config/nvim/init.lua"]);
+    assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")));
 }

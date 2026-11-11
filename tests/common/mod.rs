@@ -17,6 +17,8 @@ pub struct Fixture {
     pub state: PathBuf,
     /// Working directory for `run`; the repository by default.
     pub cwd: PathBuf,
+    /// Point RUSTOW_REPO at the repository (default). Discovery tests turn it off.
+    pub env_repo: bool,
 }
 
 pub struct Out {
@@ -54,6 +56,7 @@ impl Fixture {
             repo,
             root,
             state,
+            env_repo: true,
         }
     }
 
@@ -89,6 +92,14 @@ impl Fixture {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &self.home)
             .env("XDG_STATE_HOME", &self.state)
+            .env(
+                "RUSTOW_REPO",
+                if self.env_repo {
+                    self.repo.as_os_str()
+                } else {
+                    "".as_ref()
+                },
+            )
             .env("NO_COLOR", "1")
             // A test that forgets VISUAL fails fast instead of waiting in vi.
             .env("EDITOR", "false")

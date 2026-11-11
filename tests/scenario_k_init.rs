@@ -147,6 +147,7 @@ fn repo_flag_and_subdirectory_resolve_root() {
     assert!(other.join(".rustow.toml").exists());
     assert!(!fx.repo.join(".rustow.toml").exists());
 
+    fx.env_repo = false;
     fx.write(".rustowignore", "");
     fs::create_dir_all(fx.repo.join(".config/sub")).unwrap();
     fx.cwd = fx.repo.join(".config/sub");
