@@ -84,6 +84,8 @@ impl Fixture {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_rustow"));
         cmd.current_dir(&self.cwd)
             .env_clear()
+            // Coverage runs write profiles here; without it they land in the repository.
+            .envs(std::env::vars_os().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &self.home)
             .env("XDG_STATE_HOME", &self.state)

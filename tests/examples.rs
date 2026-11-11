@@ -6,6 +6,8 @@ use std::process::{Command, Output};
 fn rustow(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rustow"))
         .env_clear()
+        // Coverage runs write profiles here; without it they land in the repository.
+        .envs(std::env::vars_os().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", home)
         .env("XDG_STATE_HOME", home)
