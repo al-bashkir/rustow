@@ -88,6 +88,8 @@ impl Fixture {
             .env("HOME", &self.home)
             .env("XDG_STATE_HOME", &self.state)
             .env("NO_COLOR", "1")
+            // A test that forgets VISUAL fails fast instead of waiting in vi.
+            .env("EDITOR", "false")
             .arg("--root-target")
             .arg(&self.root)
             .args(args);
@@ -139,4 +141,85 @@ pub fn read(path: &Path) -> String {
 /// lstat modification time, to prove that nothing was rewritten.
 pub fn mtime(path: &Path) -> std::time::SystemTime {
     fs::symlink_metadata(path).unwrap().modified().unwrap()
+}
+
+/// A disposable age key pair; the identity file lives outside the repository.
+pub struct AgeKey {
+    pub identity: PathBuf,
+    pub recipient: String,
+}
+
+impl Fixture {
+    pub fn age_key(&self, name: &str) -> AgeKey {
+        use age::secrecy::ExposeSecret;
+        let id = age::x25519::Identity::generate();
+        let identity = write_file(
+            &self.base.join("keys").join(format!("{name}.txt")),
+            id.to_string().expose_secret(),
+        );
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+        AgeKey {
+            identity,
+            recipient: id.to_public().to_string(),
+        }
+    }
+
+    /// `.rustow.toml` with age recipients, identity files and `extra` TOML.
+    pub fn age_config(&self, recipients: &[&AgeKey], identities: &[&AgeKey], extra: &str) {
+        let list = |items: Vec<String>| items.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
+        let r = list(recipients.iter().map(|k| k.recipient.clone()).collect());
+        let i = list(identities.iter().map(|k| k.identity.display().to_string()).collect());
+        self.write(
+            ".rustow.toml",
+            &format!("version = 1\n{extra}\n[encryption]\nrecipients = [{r}]\nidentity_files = [{i}]\n"),
+        );
+    }
+
+    /// Writes age ciphertext of `plaintext` to a repository path.
+    pub fn age_encrypt(&self, rel: &str, plaintext: &str, to: &[&AgeKey]) -> PathBuf {
+        use std::io::Write;
+        use std::str::FromStr;
+        let recipients: Vec<age::x25519::Recipient> = to
+            .iter()
+            .map(|k| age::x25519::Recipient::from_str(&k.recipient).unwrap())
+            .collect();
+        let enc = age::Encryptor::with_recipients(recipients.iter().map(|r| r as &dyn age::Recipient)).unwrap();
+        let mut out = Vec::new();
+        let mut w = enc.wrap_output(&mut out).unwrap();
+        w.write_all(plaintext.as_bytes()).unwrap();
+        w.finish().unwrap();
+        let path = self.repo.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, out).unwrap();
+        path
+    }
+
+    /// Decrypts an age file with one key.
+    pub fn age_decrypt(&self, path: &Path, key: &AgeKey) -> String {
+        use std::io::Read;
+        let ids = age::IdentityFile::from_file(key.identity.display().to_string())
+            .unwrap()
+            .into_identities()
+            .unwrap();
+        let bytes = fs::read(path).unwrap();
+        let d = age::Decryptor::new(&bytes[..]).unwrap();
+        let mut r = d.decrypt(ids.iter().map(|i| i.as_ref() as &dyn age::Identity)).unwrap();
+        let mut s = String::new();
+        r.read_to_string(&mut s).unwrap();
+        s
+    }
+
+    /// An executable editor script; `$1` is the file to edit.
+    pub fn editor(&self, name: &str, body: &str) -> String {
+        let path = write_file(&self.base.join("bin").join(name), &format!("#!/bin/sh\n{body}\n"));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path.display().to_string()
+    }
+
+    /// Edit workspaces left in the cache.
+    pub fn workspaces(&self) -> Vec<PathBuf> {
+        fs::read_dir(self.repo.join(".rustowcache/edit"))
+            .map(|d| d.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default()
+    }
 }

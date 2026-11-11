@@ -16,7 +16,7 @@ use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
 use crate::source::{Discovery, Mode, Selector, Source, check_collisions};
 use crate::state::{Record, State};
-use crate::{cache, fold, template};
+use crate::{cache, crypto, fold, template};
 
 /// What a path should be after deployment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,18 +507,26 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
                 record,
             })
         }
-        Mode::TemplateLink(None) | Mode::TemplateCopy(None, _) => {
+        Mode::DecryptLink(backend) | Mode::DecryptCopy(backend) => {
+            let plaintext = crypto::decrypt(*backend, &source.path, &bytes, ctx)?;
+            transformed(ctx, source, path, plaintext, record)
+        }
+        Mode::TemplateLink(backend) | Mode::TemplateCopy(backend, _) => {
+            // Encrypted templates are decrypted (and authenticated) before rendering.
+            let plaintext = match backend {
+                Some(b) => crypto::decrypt(*b, &source.path, &bytes, ctx)?,
+                None => Zeroizing::new(bytes),
+            };
             let text =
-                std::str::from_utf8(&bytes).map_err(|_| format!("template {} is not valid UTF-8", source.path))?;
+                std::str::from_utf8(&plaintext).map_err(|_| format!("template {} is not valid UTF-8", source.path))?;
             let context = template::context(&ctx.config.vars, &ctx.home_target);
             let rendered = template::render(source.path.as_str(), text, &context)?;
             let record = Record {
-                render_id: Some(template::render_id(&bytes, &context)),
+                render_id: Some(template::render_id(&plaintext, &context)),
                 ..record
             };
             transformed(ctx, source, path, Zeroizing::new(rendered.into_bytes()), record)
         }
-        other => Err(format!("{} deployment is not implemented yet", other.label())),
     }
 }
 

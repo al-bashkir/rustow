@@ -63,6 +63,10 @@ pub struct Context {
     pub state_dir: PathBuf,
     /// Messages for the user about how the context was chosen.
     pub notices: Vec<String>,
+    /// Passphrase prompts allowed (`--interactive`, implied by `enc edit`).
+    pub interactive: bool,
+    /// Private keys, loaded on first use.
+    pub keys: crate::crypto::Keys,
 }
 
 impl Context {
@@ -116,6 +120,8 @@ impl Context {
             cache_dir,
             state_dir,
             notices,
+            interactive: false,
+            keys: Default::default(),
         })
     }
 

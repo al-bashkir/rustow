@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::cli::{CacheCommand, Cli, Command, FileCommand, Global, Paths, TemplateCommand};
+use crate::cli::{CacheCommand, Cli, Command, EncCommand, FileCommand, Global, Paths, TemplateCommand};
 use crate::error::{Error, Result};
 use crate::execute::{self, ItemReport, Policy, Run};
 use crate::plan::{self, Plan};
@@ -74,6 +74,25 @@ pub fn run(cli: Cli) -> Result<i32> {
             p.changes(None, &changes, g.dry_run);
             Ok(0)
         }
+        Command::Enc(e) => {
+            if g.dry_run {
+                return Err(Error::Usage(
+                    "`rustow enc` has no --dry-run; it changes only the repository".into(),
+                ));
+            }
+            let mut ctx = open(g, &env, p)?;
+            let _lock = lock(&ctx, false)?;
+            let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
+            let code = match e.command {
+                Some(EncCommand::Edit { reencrypt, path }) => {
+                    ctx.interactive = true;
+                    crate::enc::edit_source(&ctx, &mut state, &path, reencrypt, p)?
+                }
+                None => crate::enc::encrypt_source(&ctx, &mut state, e.path.as_deref().unwrap_or("."), e.backend, p)?,
+            };
+            state.save(&ctx.state_dir, &ctx.repo_id)?;
+            Ok(code)
+        }
         Command::Completions { shell } => {
             use clap::CommandFactory;
             clap_complete::generate(shell, &mut Cli::command(), "rustow", &mut std::io::stdout());
@@ -91,7 +110,8 @@ fn global_opts(g: &Global) -> GlobalOpts {
 }
 
 fn open(g: &Global, env: &Env, printer: &mut Printer) -> Result<Context> {
-    let ctx = Context::open(&global_opts(g), env)?;
+    let mut ctx = Context::open(&global_opts(g), env)?;
+    ctx.interactive = g.interactive;
     printer.set_home(&ctx.home);
     for notice in &ctx.notices {
         printer.notice(notice);

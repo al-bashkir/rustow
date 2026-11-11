@@ -14,7 +14,9 @@ pub const CONFIG_FILE: &str = ".rustow.toml";
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default, clap::ValueEnum,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     #[default]

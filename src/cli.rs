@@ -103,6 +103,8 @@ pub enum Command {
     /// Manage the repository cache
     #[command(subcommand)]
     Cache(CacheCommand),
+    /// Encrypt a repository source in place (age by default), or `enc edit` an encrypted source
+    Enc(EncArgs),
     /// Print a shell completion script
     Completions {
         #[arg(value_enum)]
@@ -130,6 +132,32 @@ pub enum TemplateCommand {
     List,
     /// Deploy templates only (including encrypted templates)
     Apply(Paths),
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+pub struct EncArgs {
+    #[command(subcommand)]
+    pub command: Option<EncCommand>,
+    /// Backend for this encryption only (default: encryption.backend)
+    #[arg(long, value_enum)]
+    pub backend: Option<crate::config::Backend>,
+    /// Repository-relative plaintext source (a file named "edit" is written ./edit)
+    #[arg(value_name = "PATH", required = true)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EncCommand {
+    /// Decrypt into a private workspace, run $VISUAL or $EDITOR, re-encrypt with the same backend
+    Edit {
+        /// Re-encrypt even when content and recipients look unchanged
+        #[arg(long)]
+        reencrypt: bool,
+        /// Repository-relative encrypted source (*.age or *.gpg)
+        #[arg(value_name = "PATH")]
+        path: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

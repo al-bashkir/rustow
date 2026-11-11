@@ -114,6 +114,44 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Points every `[[files]]` and `[[template_rules]]` entry for `from` at
+/// `to`, keeping the other keys of the entry. `None` when nothing refers to `from`.
+pub fn rename_source(text: &str, from: &RelPath, to: &RelPath) -> Result<Option<String>> {
+    Config::parse(text)?;
+    let matches =
+        |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| RelPath::parse(s).ok()).as_ref() == Some(from);
+    let mut doc = parse_doc(text)?;
+    let mut renamed = 0;
+    for key in ["files", "template_rules"] {
+        match doc.get_mut(key) {
+            Some(Item::ArrayOfTables(tables)) => {
+                for t in tables
+                    .iter_mut()
+                    .filter(|t| matches(t.get("source").and_then(Item::as_value)))
+                {
+                    t.insert("source", toml_edit::value(to.as_str()));
+                    renamed += 1;
+                }
+            }
+            Some(Item::Value(Value::Array(array))) => {
+                for t in array.iter_mut().filter_map(Value::as_inline_table_mut) {
+                    if matches(t.get("source")) {
+                        t.insert("source", to.as_str().into());
+                        renamed += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if renamed == 0 {
+        return Ok(None);
+    }
+    let out = doc.to_string();
+    Config::parse(&out)?;
+    Ok(Some(out))
+}
+
 fn parse_doc(text: &str) -> Result<DocumentMut> {
     text.parse().map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))
 }
@@ -273,6 +311,23 @@ mod tests {
         assert_eq!(remove_file(&out, &rel("a")).unwrap(), None);
         let out = remove_file(&out, &rel("b")).unwrap().unwrap();
         assert!(Config::parse(&out).unwrap().files.is_empty(), "{out}");
+    }
+
+    #[test]
+    fn rename_source_moves_files_and_rules_keeping_settings() {
+        let text = "version = 1\n# c\n[[files]]\nsource = \"./a\"\n\n[[template_rules]]\nsource = \"t.tmpl\"\nmode = \"0600\"\n";
+        let out = rename_source(text, &rel("a"), &rel("a.age")).unwrap().unwrap();
+        assert!(out.contains("source = \"a.age\"") && out.contains("# c"), "{out}");
+        let out = rename_source(&out, &rel("t.tmpl"), &rel("t.tmpl.age"))
+            .unwrap()
+            .unwrap();
+        let cfg = Config::parse(&out).unwrap();
+        assert!(cfg.files.contains(&rel("a.age")));
+        assert_eq!(cfg.template_rules[&rel("t.tmpl.age")].mode, Some(0o600));
+        assert_eq!(rename_source(&out, &rel("zzz"), &rel("zzz.age")).unwrap(), None);
+        let inline = "version = 1\nfiles = [{ source = \"a\" }]\n";
+        let out = rename_source(inline, &rel("a"), &rel("a.gpg")).unwrap().unwrap();
+        assert!(Config::parse(&out).unwrap().files.contains(&rel("a.gpg")), "{out}");
     }
 
     #[test]

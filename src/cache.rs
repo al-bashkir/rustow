@@ -76,5 +76,34 @@ pub fn clean(ctx: &Context, state: &State, dry_run: bool) -> Result<Vec<Change>>
             changes.push(Change::new(&shown, "remove", None));
         }
     }
+    changes.extend(clean_workspaces(&ctx.cache_dir.join("edit"), dry_run)?);
+    Ok(changes)
+}
+
+/// Removes `enc edit` workspaces whose lock no running edit holds.
+fn clean_workspaces(root: &Path, dry_run: bool) -> Result<Vec<Change>> {
+    let mut changes = Vec::new();
+    if !fs::symlink_metadata(root).is_ok_and(|m| m.is_dir()) {
+        return Ok(changes);
+    }
+    for entry in fs::read_dir(root).ctx(|| format!("read {}", root.display()))?.flatten() {
+        let path = entry.path();
+        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        let in_use = fs::File::open(path.join(".lock")).is_ok_and(|f| f.try_lock().is_err());
+        if in_use {
+            continue;
+        }
+        if !dry_run {
+            fs::remove_dir_all(&path).ctx(|| format!("remove {}", path.display()))?;
+        }
+        let name = format!("edit/{}", entry.file_name().to_string_lossy());
+        changes.push(Change::new(
+            &name,
+            "remove",
+            Some("stale edit workspace (may hold plaintext)".into()),
+        ));
+    }
     Ok(changes)
 }
