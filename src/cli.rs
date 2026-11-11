@@ -92,6 +92,22 @@ pub enum Command {
     Template(TemplateCommand),
     /// Show differences between deployed and desired content (may print secrets)
     Diff(Paths),
+    /// Show the state of each destination (never prints content)
+    Status(StatusArgs),
+    /// Validate the repository offline (configuration, ignore rules, collisions, templates)
+    Check,
+    /// Report on the environment: directories, permissions, GnuPG, identities
+    Doctor,
+    /// Remove rustow-managed destinations of any mode (verified first)
+    Undeploy(Paths),
+    /// Manage the repository cache
+    #[command(subcommand)]
+    Cache(CacheCommand),
+    /// Print a shell completion script
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -114,6 +130,21 @@ pub enum TemplateCommand {
     List,
     /// Deploy templates only (including encrypted templates)
     Apply(Paths),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CacheCommand {
+    /// Remove cache entries no managed symlink uses, and stale edit workspaces
+    Clean,
+}
+
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    /// Also list ignored repository paths
+    #[arg(long)]
+    pub ignored: bool,
+    #[command(flatten)]
+    pub paths: Paths,
 }
 
 #[derive(Debug, Default, Args)]

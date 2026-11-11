@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::cli::{Cli, Command, FileCommand, Global, Paths, TemplateCommand};
+use crate::cli::{CacheCommand, Cli, Command, FileCommand, Global, Paths, TemplateCommand};
 use crate::error::{Error, Result};
 use crate::execute::{self, ItemReport, Policy, Run};
 use crate::plan::{self, Plan};
@@ -59,6 +59,26 @@ pub fn run(cli: Cli) -> Result<i32> {
             let prepared = prepare(g, &env, p, &a.paths, Selector::All, false)?;
             inspect::diff(&prepared.plan, p)
         }
+        Command::Status(a) => {
+            let s = prepare(g, &env, p, &a.paths.paths, Selector::All, false)?;
+            inspect::status(&s.ctx, &s.plan, &s.discovery, &s.state, &a.paths.paths, a.ignored, p)
+        }
+        Command::Check => inspect::check(&open(g, &env, p)?, p),
+        Command::Doctor => crate::doctor::doctor(&open(g, &env, p)?, p),
+        Command::Undeploy(a) => undeploy(g, &env, p, &a.paths, Selector::All),
+        Command::Cache(CacheCommand::Clean) => {
+            let ctx = open(g, &env, p)?;
+            let _lock = lock(&ctx, g.dry_run)?;
+            let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
+            let changes = crate::cache::clean(&ctx, &state, g.dry_run)?;
+            p.changes(None, &changes, g.dry_run);
+            Ok(0)
+        }
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            clap_complete::generate(shell, &mut Cli::command(), "rustow", &mut std::io::stdout());
+            Ok(0)
+        }
     }
 }
 
@@ -92,6 +112,7 @@ fn lock(ctx: &Context, dry_run: bool) -> Result<Option<Lock>> {
 pub struct Prepared {
     pub ctx: Context,
     pub state: State,
+    pub discovery: Discovery,
     pub plan: Plan,
     _lock: Option<Lock>,
 }
@@ -115,6 +136,7 @@ fn prepare(
     Ok(Prepared {
         ctx,
         state,
+        discovery,
         plan,
         _lock: lock,
     })
@@ -148,6 +170,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         mut state,
         plan,
         _lock,
+        ..
     } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
     let policy = g.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {
