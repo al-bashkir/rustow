@@ -371,3 +371,41 @@ impl Fixture {
         path
     }
 }
+
+impl GpgHome {
+    /// Generates another key in this home and returns its primary fingerprint.
+    pub fn add_key(&self, name: &str) -> String {
+        let uid = format!("rustow test {name} <{name}@example.invalid>");
+        let out = self
+            .gpg()
+            .args([
+                "--pinentry-mode",
+                "loopback",
+                "--passphrase",
+                "",
+                "--quick-gen-key",
+                &uid,
+                "default",
+                "default",
+                "never",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let colons = String::from_utf8(
+            self.gpg()
+                .args(["--with-colons", "--list-keys"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let lines: Vec<&str> = colons.lines().collect();
+        lines
+            .windows(2)
+            .filter(|w| w[0].starts_with("pub:") && w[1].starts_with("fpr:"))
+            .map(|w| w[1].split(':').nth(9).unwrap().to_owned())
+            .find(|f| *f != self.fpr)
+            .unwrap()
+    }
+}

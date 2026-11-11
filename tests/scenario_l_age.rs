@@ -248,3 +248,45 @@ fn doctor_checks_identity_files() {
     assert_eq!(out.code, 1, "{out:?}");
     assert!(out.stdout.contains("chmod 600"), "{out:?}");
 }
+
+#[test]
+fn editor_failure_message_names_the_editor_status() {
+    let (fx, key) = keyed();
+    fx.age_encrypt("s.age", "keep\n", &[&key]);
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "false")]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("editor exited with"), "{out:?}");
+}
+
+#[test]
+fn signal_during_edit_is_handled_and_cleaned_up() {
+    let (fx, key) = keyed();
+    let ct = fx.age_encrypt("s.age", "keep\n", &[&key]);
+    let before = fs::read(&ct).unwrap();
+    // The editor asks rustow (its parent) to stop, then fails.
+    let editor = fx.editor("sig", "kill -TERM $PPID\nsleep 0.2\nexit 1");
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("interrupted"), "{out:?}");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert!(fx.workspaces().is_empty());
+}
+
+#[test]
+fn edit_of_foreign_ciphertext_with_other_recipient_count_reencrypts() {
+    let (fx, key) = keyed();
+    let second = fx.age_key("second");
+    fx.age_config(&[&key, &second], &[&key], "");
+    // Made outside rustow, so no state record says who it was for.
+    let ct = fx.age_encrypt("s.age", "x\n", &[&key]);
+    let before = fs::read(&ct).unwrap();
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "true")]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_ne!(fs::read(&ct).unwrap(), before);
+    assert_eq!(fx.age_decrypt(&ct, &second), "x\n");
+    // Same count as configured: left alone.
+    let ct2 = fx.age_encrypt("t.age", "y\n", &[&key, &second]);
+    let before2 = fs::read(&ct2).unwrap();
+    assert_eq!(fx.run_env(&["enc", "edit", "t.age"], &[("VISUAL", "true")]).code, 0);
+    assert_eq!(fs::read(&ct2).unwrap(), before2);
+}

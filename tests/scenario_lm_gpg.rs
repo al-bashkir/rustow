@@ -205,3 +205,23 @@ fn dry_run_writes_no_plaintext() {
     assert!(!fx.repo.join(".rustowcache").exists());
     assert!(!out.stdout.contains("secret"));
 }
+
+#[test]
+fn edit_of_foreign_gpg_ciphertext_with_other_recipient_count_reencrypts() {
+    let Some((fx, home)) = setup("") else { return };
+    let second = home.add_key("second");
+    let first = home.fpr.clone();
+    fx.gpg_config(&home, &[&first, &second], "");
+    let ct = fx.gpg_encrypt("s.gpg", "x\n", &home);
+    let before = fs::read(&ct).unwrap();
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", "true")]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_ne!(fs::read(&ct).unwrap(), before, "re-encrypted to both recipients");
+    let listed = home
+        .gpg()
+        .args(["--list-only", "--status-fd", "1", "--decrypt"])
+        .arg(&ct)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&listed.stdout).matches("ENC_TO").count(), 2);
+}

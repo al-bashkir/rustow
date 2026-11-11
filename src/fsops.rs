@@ -420,8 +420,12 @@ pub fn owner_of(dir: &Path) -> Result<u32> {
 
 /// First executable file called `name` in `PATH`.
 pub fn find_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    find_in(&std::env::var_os("PATH")?, name)
+}
+
+/// First executable file called `name` in a `PATH`-style list.
+fn find_in(path_list: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path_list)
         .map(|dir| dir.join(name))
         .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
@@ -690,6 +694,57 @@ mod tests {
         let chain = [owned("/", 0, 0o755)];
         assert!(check_chain(&chain, Some(1000), 0).unwrap_err().contains("1000"));
         assert!(check_chain(&chain, Some(0), 0).is_ok());
+        assert!(
+            check_chain(&chain, Some(0), 1000).is_ok(),
+            "root may create cache dirs for anyone"
+        );
+    }
+
+    #[test]
+    fn trust_cache_counts_the_creator_only_for_missing_parts() {
+        if geteuid().is_root() {
+            return;
+        }
+        // /usr is root-owned and not writable by others on Linux and macOS.
+        assert!(trust_cache(Path::new("/usr"), 0).is_ok());
+        let e = trust_cache(Path::new("/usr/rustow-no-such-dir/entry"), 0).unwrap_err();
+        assert!(e.contains("would be created by uid"), "{e}");
+    }
+
+    #[test]
+    fn backup_moves_across_filesystems() {
+        let shm = Path::new("/dev/shm");
+        let local = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let device = |p: &Path| fs::metadata(p).map(|m| m.dev()).ok();
+        if !shm.is_dir() || device(shm) == device(&local) {
+            return; // needs two filesystems (Linux /dev/shm and the build dir)
+        }
+        let src = tempfile::tempdir_in(shm).unwrap();
+        let dst = tempfile::tempdir_in(&local).unwrap();
+        fs::write(src.path().join("f"), b"data").unwrap();
+        fs::set_permissions(src.path().join("f"), fs::Permissions::from_mode(0o640)).unwrap();
+        symlink("t", src.path().join("l")).unwrap();
+        backup(&src.path().join("f"), &dst.path().join("bk/f")).unwrap();
+        backup(&src.path().join("l"), &dst.path().join("bk/l")).unwrap();
+        assert!(!src.path().join("f").exists() && fs::symlink_metadata(src.path().join("l")).is_err());
+        assert_eq!(fs::read(dst.path().join("bk/f")).unwrap(), b"data");
+        assert_eq!(mode_of(&dst.path().join("bk/f")), 0o640);
+        assert_eq!(fs::read_link(dst.path().join("bk/l")).unwrap(), PathBuf::from("t"));
+    }
+
+    #[test]
+    fn find_in_requires_an_executable_file() {
+        let (_t, d) = tmp();
+        fs::create_dir(d.join("bin")).unwrap();
+        fs::write(d.join("bin/tool"), b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(d.join("bin/tool"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::create_dir(d.join("bin/dir")).unwrap();
+        fs::set_permissions(d.join("bin/dir"), fs::Permissions::from_mode(0o755)).unwrap();
+        let list = std::env::join_paths([d.join("missing"), d.join("bin")]).unwrap();
+        assert_eq!(find_in(&list, "tool"), None, "not executable");
+        assert_eq!(find_in(&list, "dir"), None, "a directory is not a program");
+        fs::set_permissions(d.join("bin/tool"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find_in(&list, "tool"), Some(d.join("bin/tool")));
     }
 
     #[test]

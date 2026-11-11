@@ -135,3 +135,42 @@ fn replaced_folded_link_is_not_unfolded() {
     assert!(out.stdout.contains("folded link changed"), "{out:?}");
     assert_eq!(link_text(&fx.home_path(".config/nvim")), theirs);
 }
+
+fn summary(out: &Out) -> &str {
+    out.stdout.lines().last().unwrap_or_default()
+}
+
+#[test]
+fn summary_lines_are_exact() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b");
+    fx.write(".zshrc", "z");
+    fx.ok(&["apply"]);
+    assert_eq!(summary(&fx.ok(&["apply"])), "0 changed, 2 unchanged");
+    fx.write_home("new", "mine");
+    fx.write("new", "repo");
+    let out = fx.run(&["apply"]);
+    assert_eq!(
+        summary(&out),
+        "conflicts found, nothing written: 0 to change, 2 unchanged, 1 conflicts"
+    );
+    fx.write("bad.tmpl", "{{ vars.nope }}");
+    let out = fx.run(&["apply", "--on-conflict", "skip"]);
+    assert_eq!(
+        summary(&out),
+        "0 changed, 2 unchanged, 1 conflicts, 1 errors",
+        "{out:?}"
+    );
+}
+
+#[test]
+fn doctor_checks_gpg_home_when_only_homedir_is_set() {
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[encryption.gpg]\nhomedir = \"/nonexistent/gnupg\"\n",
+    );
+    let out = fx.run(&["doctor"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("gpg home"), "{out:?}");
+}

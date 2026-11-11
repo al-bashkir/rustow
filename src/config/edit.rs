@@ -322,6 +322,22 @@ mod tests {
     }
 
     #[test]
+    fn remove_file_from_inline_array() {
+        let out = remove_file(
+            "version = 1\nfiles = [{ source = \"a\" }, { source = \"b\" }]\n",
+            &rel("a"),
+        )
+        .unwrap()
+        .unwrap();
+        let cfg = Config::parse(&out).unwrap();
+        assert_eq!(
+            cfg.files.iter().map(RelPath::as_str).collect::<Vec<_>>(),
+            ["b"],
+            "{out}"
+        );
+    }
+
+    #[test]
     fn remove_file_drops_only_that_entry() {
         let text = "# keep\nversion = 1\n[[files]]\nsource = \"a\"\n\n[[files]]\nsource = \"b\"\n";
         let out = remove_file(text, &rel("a")).unwrap().unwrap();
