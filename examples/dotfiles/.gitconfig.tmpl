@@ -1,0 +1,15 @@
+[user]
+    name = {{ vars.git.user_name }}
+    email = {{ vars.git.user_email }}
+
+[core]
+    editor = {{ vars.editor }}
+{%- if os == "macos" %}
+    excludesfile = {{ home_dir }}/.config/git/ignore
+    fsmonitor = true
+{%- else %}
+    pager = less -FRX
+{%- endif %}
+
+[init]
+    defaultBranch = main

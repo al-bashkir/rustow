@@ -1,0 +1,37 @@
+version = 1
+
+[defaults]
+# Plain symlink directories into one link when the whole directory is plain.
+fold_directories = false
+
+# Variables for templates. Use them as {{ vars.git.user_name }}.
+[vars]
+editor = "nvim"
+
+[vars.git]
+user_name = "Example User"
+user_email = "user@example.com"
+
+[vars.example]
+log_level = "info"
+
+# Encryption is optional. To use age:
+#   1. Run: age-keygen -o ~/.config/rustow/age/identity.txt
+#   2. Run: chmod 600 ~/.config/rustow/age/identity.txt
+#   3. Put the public key (age1...) in "recipients" below.
+#   4. Add the identity file path to "identity_files".
+#   5. Run: rustow enc .ssh/secret.conf
+[encryption]
+backend = "age"
+recipients = []
+# identity_files = ["~/.config/rustow/age/identity.txt"]
+
+# A template gets its file mode from a rule.
+[[template_rules]]
+source = ".ssh/config.tmpl"
+mode = "0600"
+
+# No owner is set, so the example works for a normal user.
+[[template_rules]]
+source = ".rustowroot/etc/example/example.conf.tmpl"
+mode = "0644"

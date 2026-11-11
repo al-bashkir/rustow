@@ -1,0 +1,11 @@
+# Patterns use gitignore syntax and match repository paths.
+
+# Private cache of rustow.
+/.rustowcache/
+
+# Editor backup files, also under .rustowroot/.
+*.bak
+*~
+
+# Notes that must not reach the home directory.
+/README.md
