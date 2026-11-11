@@ -187,7 +187,7 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
         } else if let Step::Deploy(d) = &item.step
             && !matches!(action, Action::Conflict | Action::Skip | Action::Fail)
         {
-            match apply(d, action, &item, run, state) {
+            match apply(d, &item, run, state) {
                 Ok(Some(extra)) => detail = Some(extra),
                 Ok(None) => {}
                 Err(e) => (action, detail) = (Action::Fail, Some(crate::plan::with_privilege_hint(e))),
@@ -208,14 +208,14 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
     out
 }
 
-fn apply(d: &Deploy, action: Action, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
+fn apply(d: &Deploy, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
     if let Some((existing, missing)) = &d.missing_dirs {
         state
             .created_dirs
             .extend(fsops::create_dirs(existing, missing, d.dir_mode)?);
     }
     let mut detail = apply_cache(d, item, run)?;
-    if let Some(extra) = apply_dest(d, action, item, run)? {
+    if let Some(extra) = apply_dest(d, item, run)? {
         detail = Some(extra);
     }
     verify(d)?;
@@ -242,29 +242,35 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     Ok(detail)
 }
 
-/// Performs the destination action; returns the backup note, if any.
-fn apply_dest(d: &Deploy, action: Action, item: &PlanItem, run: &Run) -> Result<Option<String>> {
-    let dest_conflict = matches!(d.decision, Decision::Conflict(_));
-    match action {
-        Action::Create => place(d).map(|()| None),
-        Action::Update | Action::Replace if d.decision == Decision::Update || dest_conflict => {
-            replace_dest(d, item, run, dest_conflict)
+/// Performs the planned destination decision (the caller already checked
+/// that the policy allows it); returns the backup note, if any.
+fn apply_dest(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+    match d.decision {
+        Decision::Create => create(d).map(|()| None),
+        Decision::Update => {
+            recheck(&d.path, &d.observed)?;
+            place(d).map(|()| None)
         }
-        Action::Metadata => fix_metadata(d).map(|()| None),
-        _ => Ok(None),
+        Decision::Conflict(_) => {
+            recheck(&d.path, &d.observed)?;
+            let detail = clear_conflict(d, item, run)?;
+            create(d)?;
+            Ok(detail)
+        }
+        Decision::FixMetadata => fix_metadata(d).map(|()| None),
+        Decision::UpToDate | Decision::Adopt => Ok(None),
     }
 }
 
-/// Replaces the destination, first clearing a conflicting object when there is one.
-fn replace_dest(d: &Deploy, item: &PlanItem, run: &Run, dest_conflict: bool) -> Result<Option<String>> {
-    recheck(&d.path, &d.observed)?;
-    let detail = if dest_conflict {
-        clear_conflict(d, item, run)?
-    } else {
-        None
-    };
-    place(d)?;
-    Ok(detail)
+/// Creates the destination; fails if anything appeared there since planning.
+fn create(d: &Deploy) -> Result<()> {
+    match &d.desired {
+        Desired::Symlink(text) => fsops::symlink_new(&d.path, text),
+        Desired::File { meta, .. } => {
+            let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
+            fsops::write_new(&d.path, bytes, meta.mode.unwrap_or(d.file_mode), meta.uid, meta.gid)
+        }
+    }
 }
 
 fn fix_metadata(d: &Deploy) -> Result<()> {
@@ -415,4 +421,92 @@ fn unfold(path: &Path, observed: &Observed, dest: &Path, state: &mut State) -> R
     state.created_dirs.insert(path.to_path_buf());
     state.entries.remove(dest);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fsops::FileMeta;
+    use crate::hash::Hash;
+    use crate::paths::Scope;
+    use crate::plan::Deploy;
+    use crate::source::{Mode, Source};
+    use crate::state::Record;
+
+    fn record() -> Record {
+        Record {
+            source: RelPath::parse("a").unwrap(),
+            scope: Scope::Home,
+            mode: "link".into(),
+            backend: None,
+            source_hash: Hash::of(b""),
+            applied_hash: None,
+            render_id: None,
+            link_target: None,
+            cache_path: None,
+            meta: None,
+            folded_dir: false,
+        }
+    }
+
+    /// A one-item plan that creates `path` (planned while it was missing).
+    fn create_plan(path: &Path, desired: Desired, content: Option<&[u8]>) -> Plan {
+        let source = Source {
+            path: RelPath::parse("a").unwrap(),
+            scope: Scope::Home,
+            dest: RelPath::parse("a").unwrap(),
+            mode: Mode::Link,
+        };
+        let deploy = Deploy {
+            path: path.to_path_buf(),
+            missing_dirs: None,
+            dir_mode: 0o777,
+            desired,
+            observed: Observed::Missing,
+            decision: Decision::Create,
+            content: content.map(|c| zeroize::Zeroizing::new(c.to_vec())),
+            file_mode: 0o644,
+            cache: None,
+            record: record(),
+            detail: None,
+        };
+        Plan {
+            items: vec![PlanItem {
+                source,
+                dest: path.to_path_buf(),
+                step: Step::Deploy(Box::new(deploy)),
+            }],
+        }
+    }
+
+    fn run_plan(plan: Plan, dir: &Path) -> Vec<ItemReport> {
+        let stop = AtomicBool::new(false);
+        let run = Run {
+            policy: Policy::Abort,
+            backup_dir: &dir.join("bk"),
+            cache_dir: &dir.join("cache"),
+            stop: &stop,
+        };
+        execute(plan, &run, &mut State::default())
+    }
+
+    #[test]
+    fn create_never_replaces_a_file_that_appeared_after_planning() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("a");
+        for desired in [
+            Desired::Symlink("target".into()),
+            Desired::File {
+                hash: Hash::of(b"new"),
+                meta: FileMeta::default(),
+            },
+        ] {
+            let plan = create_plan(&dest, desired, Some(b"new"));
+            fs::write(&dest, b"user data").unwrap();
+            let report = run_plan(plan, dir.path());
+            assert_eq!(report[0].action, Action::Fail, "{:?}", report[0].detail);
+            assert_eq!(fs::read(&dest).unwrap(), b"user data");
+            fs::remove_file(&dest).unwrap();
+        }
+    }
 }

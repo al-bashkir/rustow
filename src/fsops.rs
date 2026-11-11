@@ -109,16 +109,38 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
 /// that is private (0600) from creation, then gets owner and `mode`, and
 /// is renamed over `dest`. A symlink at `dest` is replaced, not followed.
 pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+    write_file(dest, bytes, mode, (uid, gid), true)
+}
+
+/// Like `write_atomic`, but fails when anything exists at `dest` by the
+/// time the file is published, so a concurrent creation is never replaced.
+pub fn write_new(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+    write_file(dest, bytes, mode, (uid, gid), false)
+}
+
+fn write_file(dest: &Path, bytes: &[u8], mode: u32, owner: (Option<u32>, Option<u32>), clobber: bool) -> Result<()> {
     let parent = parent_of(dest)?;
     let mut tmp = tempfile::Builder::new()
         .prefix(".rustow-")
         .tempfile_in(parent)
         .ctx(|| format!("write {}", dest.display()))?;
-    fill_temp(&mut tmp, dest, bytes, mode, (uid, gid))?;
-    tmp.persist(dest)
+    fill_temp(&mut tmp, dest, bytes, mode, owner)?;
+    let published = if clobber {
+        tmp.persist(dest)
+    } else {
+        tmp.persist_noclobber(dest)
+    };
+    published
         .map_err(|e| e.error)
         .ctx(|| format!("replace {}", dest.display()))?;
     sync_dir(parent);
+    Ok(())
+}
+
+/// Creates the symlink `link`; fails when anything already exists there.
+pub fn symlink_new(link: &Path, target: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, link).ctx(|| format!("create symlink {}", link.display()))?;
+    sync_dir(parent_of(link)?);
     Ok(())
 }
 
@@ -513,6 +535,21 @@ mod tests {
         write_atomic(&d.join("dest"), b"new", 0o644, None, None).unwrap();
         assert_eq!(fs::read(d.join("victim")).unwrap(), b"keep");
         assert!(fs::symlink_metadata(d.join("dest")).unwrap().is_file());
+    }
+
+    #[test]
+    fn new_file_and_link_never_replace_anything() {
+        let (_t, d) = tmp();
+        write_new(&d.join("f"), b"one", 0o640, None, None).unwrap();
+        assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
+        assert_eq!(mode_of(&d.join("f")), 0o640);
+        assert!(write_new(&d.join("f"), b"two", 0o644, None, None).is_err());
+        assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
+        symlink_new(&d.join("l"), Path::new("t")).unwrap();
+        assert!(symlink_new(&d.join("l"), Path::new("u")).is_err());
+        assert!(symlink_new(&d.join("f"), Path::new("u")).is_err());
+        assert_eq!(fs::read_link(d.join("l")).unwrap(), PathBuf::from("t"));
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 2, "no temporary file left");
     }
 
     #[test]

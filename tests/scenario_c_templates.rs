@@ -171,3 +171,14 @@ fn cache_root_symlink_is_refused() {
     assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
     assert!(!Path::new(&fx.home_path(".gitconfig")).exists());
 }
+
+#[test]
+fn force_recreates_a_removed_destination_over_a_tampered_cache_entry() {
+    let fx = templated();
+    fx.ok(&["apply"]);
+    fs::write(cache_target(&fx, ".gitconfig"), "edited\n").unwrap();
+    fs::remove_file(fx.home_path(".gitconfig")).unwrap();
+    let out = fx.run(&["apply", "--force"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(read(&fx.home_path(".gitconfig")).contains("Example User"));
+}
