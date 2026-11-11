@@ -55,6 +55,8 @@ pub enum Conflict {
     ParentBlocked,
     /// Parent directories are missing and `create_directories = false`.
     NoParent,
+    /// A system symlink would point into a cache that other users control.
+    UntrustedCache,
 }
 
 impl Conflict {
@@ -68,6 +70,7 @@ impl Conflict {
             Conflict::Collision => "several sources map to this destination",
             Conflict::ParentBlocked => "a parent directory is blocked",
             Conflict::NoParent => "parent directory is missing and create_directories = false",
+            Conflict::UntrustedCache => "cache entry is not safe to link from a system path",
         }
     }
 
@@ -265,10 +268,24 @@ fn plan_one(ctx: &Context, source: &Source, dest: &Path, record: Option<&Record>
         Ok(w) => w,
         Err(msg) => return Ok(Step::Failed(msg)),
     };
-    let observed = if missing_dirs.is_some() {
-        Observed::Missing
-    } else {
-        fsops::inspect(&path)?
+    if let (Scope::Root, false, Some((cache_path, _))) = (source.scope, source.mode.is_copy(), &want.cache) {
+        let dir = missing_dirs
+            .as_ref()
+            .map_or_else(|| path.parent().unwrap_or(&path), |(existing, _)| existing);
+        if let Err(why) = fsops::trust_cache(cache_path, fsops::owner_of(dir)?) {
+            let detail = format!("{why}; copy it instead with [[template_rules]] metadata or `rustow file add`");
+            return Ok(Step::Blocked {
+                conflict: Conflict::UntrustedCache,
+                detail,
+            });
+        }
+    }
+    let observed = match missing_dirs {
+        Some(_) => Observed::Missing,
+        None => match fsops::inspect(&path) {
+            Ok(o) => o,
+            Err(e) => return Ok(Step::Failed(with_privilege_hint(e))),
+        },
     };
     let decision = decide(&want.desired, &observed, recorded(record));
     let detail = broken_link_detail(&path, &observed, decision);
@@ -475,6 +492,16 @@ fn resolve_meta(meta: &Metadata) -> std::result::Result<FileMeta, String> {
     })
 }
 
+/// Error text, with a hint when the cause is missing permission.
+pub fn with_privilege_hint(err: Error) -> String {
+    match &err {
+        Error::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
+            format!("{err}; elevated privileges may be required (rustow never elevates itself)")
+        }
+        _ => err.to_string(),
+    }
+}
+
 /// One managed destination to remove.
 #[derive(Debug)]
 pub struct Removal {
@@ -504,7 +531,7 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
     let mut prefixes = Vec::new();
     for arg in args.iter().filter(|a| !matches!(a.as_str(), "." | "./")) {
         let rel = RelPath::parse(arg)?;
-        if ctx.ignore.is_reserved(&rel, false) {
+        if ctx.ignore.is_reserved(&rel, ctx.root.join(rel.as_path()).is_dir()) {
             return Err(Error::Usage(format!(
                 "'{rel}' is reserved by rustow and is never deployed"
             )));

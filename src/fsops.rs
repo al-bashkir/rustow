@@ -332,6 +332,69 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// Owner and permission bits of one directory on a path.
+#[derive(Debug, Clone)]
+pub struct Owned {
+    pub path: PathBuf,
+    pub uid: u32,
+    pub mode: u32,
+}
+
+/// Trust rule for a cache entry that a system symlink will point to:
+/// every directory on its path is owned by root or by `owner` (the owner
+/// of the destination directory) and is not writable by group or others
+/// (sticky root-owned directories such as /tmp excepted). Directories
+/// still to be created by `creator` must be created by a trusted user.
+pub fn check_chain(chain: &[Owned], creator: Option<u32>, owner: u32) -> std::result::Result<(), String> {
+    for dir in chain {
+        if dir.uid != 0 && dir.uid != owner {
+            return Err(format!(
+                "{} is owned by uid {}, but the destination directory belongs to uid {owner}",
+                dir.path.display(),
+                dir.uid
+            ));
+        }
+        let sticky_root = dir.mode & 0o1000 != 0 && dir.uid == 0;
+        if dir.mode & 0o022 != 0 && !sticky_root {
+            return Err(format!("{} is writable by group or others", dir.path.display()));
+        }
+    }
+    match creator {
+        Some(uid) if uid != 0 && uid != owner => Err(format!(
+            "cache directories would be created by uid {uid}, not by uid {owner} or root"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Applies `check_chain` to the real path of a cache entry, which may not
+/// exist yet (then the current user would create the missing part).
+pub fn trust_cache(entry: &Path, owner: u32) -> std::result::Result<(), String> {
+    let mut existing = entry;
+    while fs::symlink_metadata(existing).is_err() {
+        existing = existing.parent().ok_or("cache path has no existing ancestor")?;
+    }
+    let creator = (existing != entry).then(|| geteuid().as_raw());
+    let real = fs::canonicalize(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
+    let mut chain = Vec::new();
+    for dir in real.ancestors() {
+        let m = fs::metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        chain.push(Owned {
+            path: dir.to_path_buf(),
+            uid: m.uid(),
+            mode: m.mode() & 0o7777,
+        });
+    }
+    check_chain(&chain, creator, owner)
+}
+
+/// Owner of the deepest existing directory at or above `dir`.
+pub fn owner_of(dir: &Path) -> Result<u32> {
+    fs::metadata(dir)
+        .map(|m| m.uid())
+        .ctx(|| format!("inspect {}", dir.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +607,58 @@ mod tests {
         let made = create_dirs(&d, &["a".into(), "b".into()], 0o700).unwrap();
         assert_eq!(made, vec![d.join("a"), d.join("a/b")]);
         assert_eq!(mode_of(&d.join("a/b")), 0o700);
+    }
+
+    fn owned(path: &str, uid: u32, mode: u32) -> Owned {
+        Owned {
+            path: path.into(),
+            uid,
+            mode,
+        }
+    }
+
+    #[test]
+    fn chain_trusted_when_owned_by_root_or_owner() {
+        let chain = [
+            owned("/", 0, 0o755),
+            owned("/var", 0, 0o755),
+            owned("/var/cache/rustow", 0, 0o700),
+        ];
+        assert!(check_chain(&chain, None, 0).is_ok());
+        let user = [
+            owned("/", 0, 0o755),
+            owned("/home/u", 1000, 0o700),
+            owned("/home/u/dot", 1000, 0o755),
+        ];
+        assert!(check_chain(&user, Some(1000), 1000).is_ok());
+    }
+
+    #[test]
+    fn chain_rejects_foreign_owner() {
+        let chain = [owned("/", 0, 0o755), owned("/home/u", 1000, 0o700)];
+        let e = check_chain(&chain, None, 0).unwrap_err();
+        assert!(e.contains("/home/u") && e.contains("1000"), "{e}");
+    }
+
+    #[test]
+    fn chain_rejects_writable_by_others_but_allows_sticky_root() {
+        let open = [owned("/", 0, 0o755), owned("/shared", 0, 0o775)];
+        assert!(check_chain(&open, None, 0).unwrap_err().contains("writable"));
+        let tmp = [
+            owned("/", 0, 0o755),
+            owned("/tmp", 0, 0o1777),
+            owned("/tmp/x", 1000, 0o700),
+        ];
+        assert!(check_chain(&tmp, None, 1000).is_ok());
+        let sticky_user = [owned("/", 0, 0o755), owned("/tmp", 1000, 0o1777)];
+        assert!(check_chain(&sticky_user, None, 1000).is_err());
+    }
+
+    #[test]
+    fn chain_rejects_untrusted_creator() {
+        let chain = [owned("/", 0, 0o755)];
+        assert!(check_chain(&chain, Some(1000), 0).unwrap_err().contains("1000"));
+        assert!(check_chain(&chain, Some(0), 0).is_ok());
     }
 
     #[test]

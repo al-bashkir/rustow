@@ -172,7 +172,7 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
             match apply(d, action, &item, run, state) {
                 Ok(Some(extra)) => detail = Some(extra),
                 Ok(None) => {}
-                Err(e) => (action, detail) = (Action::Fail, Some(e.to_string())),
+                Err(e) => (action, detail) = (Action::Fail, Some(crate::plan::with_privilege_hint(e))),
             }
         }
         out.push(ItemReport {

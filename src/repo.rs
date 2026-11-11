@@ -98,6 +98,12 @@ impl Context {
             inside,
         } = InternalDirs::resolve(&root, &home, &config, env)?;
         let ignore = Ignore::load(&root, inside)?;
+        if root_target != Path::new("/") {
+            notices.push(format!(
+                "system files (.rustowroot/) deploy under {}",
+                root_target.display()
+            ));
+        }
         let repo_id = Hash::of(root.as_os_str().as_encoded_bytes()).short().to_owned();
         Ok(Context {
             root,
