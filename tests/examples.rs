@@ -23,14 +23,26 @@ fn example_repository_is_valid() {
     let tmp = tempfile::tempdir().unwrap();
     let out = rustow(tmp.path(), &["check"]);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(0), "{text}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{text}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(text.contains("0 problems"), "{text}");
 
     let root = tmp.path().join("root");
     std::fs::create_dir(&root).unwrap();
     let out = rustow(
         tmp.path(),
-        &["--target", tmp.path().to_str().unwrap(), "--root-target", root.to_str().unwrap(), "apply", "--dry-run"],
+        &[
+            "--target",
+            tmp.path().to_str().unwrap(),
+            "--root-target",
+            root.to_str().unwrap(),
+            "apply",
+            "--dry-run",
+        ],
     );
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
 }
