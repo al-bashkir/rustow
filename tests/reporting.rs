@@ -177,3 +177,33 @@ fn doctor_checks_gpg_home_when_only_homedir_is_set() {
     assert_eq!(out.code, 1, "{out:?}");
     assert!(out.stdout.contains("gpg home"), "{out:?}");
 }
+
+#[test]
+fn unreadable_cache_entry_fails_only_its_item() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b");
+    fx.write(".gitconfig.tmpl", "x\n");
+    fx.ok(&["apply"]);
+    let rendered = fx.repo.join(".rustowcache/rendered");
+    let repo_dir = fs::read_dir(&rendered).unwrap().next().unwrap().unwrap().path();
+    fs::set_permissions(&repo_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    let out = fx.run(&["status", "-v"]);
+    fs::set_permissions(&repo_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stdout
+            .lines()
+            .any(|l| l.contains("ERROR") && l.contains(".gitconfig")),
+        "{out:?}"
+    );
+    assert!(
+        out.stdout
+            .lines()
+            .any(|l| l.contains("LINKED") && l.contains(".bashrc")),
+        "{out:?}"
+    );
+}

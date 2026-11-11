@@ -86,8 +86,15 @@ impl Context {
             cache_dir,
             state_dir,
             inside,
+            private_cache,
         } = InternalDirs::resolve(&root, &home, &config, env)?;
         let ignore = Ignore::load(&root, inside)?;
+        if private_cache {
+            notices.push(format!(
+                "the repository belongs to another user; using the private cache {}",
+                cache_dir.display()
+            ));
+        }
         if root_target != Path::new("/") {
             notices.push(format!(
                 "system files (.rustowroot/) deploy under {}",
@@ -228,6 +235,8 @@ pub struct InternalDirs {
     pub state_dir: PathBuf,
     /// Those of them inside the repository, repository-relative.
     pub inside: Vec<RelPath>,
+    /// True when this user cannot use the repository's own cache.
+    pub private_cache: bool,
 }
 
 impl InternalDirs {
@@ -241,12 +250,27 @@ impl InternalDirs {
             (None, _) => home.join(".local/state/rustow"),
         };
         let inside = internal_dirs(root, &[("cache_dir", &cache_dir), ("state_dir", &state_dir)])?;
+        let owner = std::fs::metadata(root).map_or(0, |m| std::os::unix::fs::MetadataExt::uid(&m));
+        let (cache_dir, private) = cache_for_user(cache_dir, root, owner, nix::unistd::geteuid().as_raw(), &state_dir);
         Ok(InternalDirs {
             cache_dir,
             state_dir,
             inside,
+            private_cache: private,
         })
     }
+}
+
+/// The in-repository cache belongs to the repository owner. Another user
+/// (normally root) gets a private cache in its own state directory, so
+/// neither run can block or poison the other. An explicitly configured
+/// cache outside the repository is used as is. Returns the cache and
+/// whether it was switched.
+fn cache_for_user(cache: PathBuf, root: &Path, repo_owner: u32, euid: u32, state_dir: &Path) -> (PathBuf, bool) {
+    if cache.starts_with(root) && repo_owner != euid {
+        return (state_dir.join("cache"), true);
+    }
+    (cache, false)
 }
 
 /// Repository-relative paths of configured internal dirs that lie inside
@@ -445,6 +469,27 @@ mod tests {
         .unwrap();
         let e = open(&f, GlobalOpts::default()).err().unwrap().to_string();
         assert!(e.contains("cache_dir"), "{e}");
+    }
+
+    #[test]
+    fn in_repo_cache_belongs_to_the_repository_owner() {
+        let root = Path::new("/home/u/dot");
+        let state = Path::new("/root/.local/state/rustow");
+        let in_repo = PathBuf::from("/home/u/dot/.rustowcache");
+        assert_eq!(
+            cache_for_user(in_repo.clone(), root, 1000, 1000, state),
+            (in_repo.clone(), false)
+        );
+        assert_eq!(
+            cache_for_user(in_repo, root, 1000, 0, state),
+            (state.join("cache"), true)
+        );
+        let outside = PathBuf::from("/var/cache/rustow");
+        assert_eq!(
+            cache_for_user(outside.clone(), root, 1000, 0, state),
+            (outside, false),
+            "explicit cache honored"
+        );
     }
 
     #[test]

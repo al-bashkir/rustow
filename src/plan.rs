@@ -533,10 +533,13 @@ fn deploy_step(
     let decision = decide(&want.desired, &observed, recorded(record));
     let detail = broken_link_detail(&path, &observed, decision);
     let file_mode = file_mode_for(&observed, &want);
-    let cache = want
+    let cache = match want
         .cache
         .map(|(cache_path, bytes)| plan_cache(cache_path, bytes, record, !source.mode.is_copy()))
-        .transpose()?;
+    {
+        Some(Err(e)) => return Ok(Step::Failed(with_privilege_hint(e))),
+        other => other.transpose()?,
+    };
     Ok(Step::Deploy(Box::new(Deploy {
         path,
         missing_dirs,
