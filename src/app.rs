@@ -122,10 +122,7 @@ fn enc_cmd(g: &Global, env: &Env, p: &mut Printer, e: EncArgs) -> Result<i32> {
 /// Encrypts a source, or edits an encrypted one (which may prompt).
 fn enc_run(ctx: &mut Context, state: &mut State, e: EncArgs, p: &Printer) -> Result<i32> {
     match e.command {
-        Some(EncCommand::Edit { reencrypt, path }) => {
-            ctx.interactive = true;
-            crate::enc::edit_source(ctx, state, &path, reencrypt, p)
-        }
+        Some(EncCommand::Edit { reencrypt, path }) => crate::enc::edit_source(ctx, state, &path, reencrypt, p),
         None => crate::enc::encrypt_source(ctx, state, e.path.as_deref().unwrap_or("."), e.backend, p),
     }
 }

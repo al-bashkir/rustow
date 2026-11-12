@@ -63,7 +63,7 @@ pub struct Context {
     pub state_dir: PathBuf,
     /// Messages for the user about how the context was chosen.
     pub notices: Vec<String>,
-    /// Passphrase prompts allowed (`--interactive`, implied by `enc edit`).
+    /// Passphrase prompts allowed (`--interactive`).
     pub interactive: bool,
     /// Private keys, loaded on first use.
     pub keys: crate::crypto::Keys,

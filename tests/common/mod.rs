@@ -419,4 +419,30 @@ impl GpgHome {
             .find(|f| *f != self.fpr)
             .unwrap()
     }
+
+    /// Makes the agent use a stub pinentry that answers "pw". Each call
+    /// appends a line to the returned log file.
+    pub fn stub_pinentry(&self) -> PathBuf {
+        let log = self.dir.join("pinentry.log");
+        let script = write_file(
+            &self.dir.join("pinentry-stub"),
+            &format!(
+                "#!/bin/sh\necho called >> '{}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  case \"$cmd\" in\n    GETPIN) echo 'D pw'; echo OK ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
+                log.display()
+            ),
+        );
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        write_file(
+            &self.dir.join("gpg-agent.conf"),
+            &format!("pinentry-program {}\n", script.display()),
+        );
+        let reload = Command::new("gpgconf")
+            .arg("--homedir")
+            .arg(&self.dir)
+            .args(["--reload", "gpg-agent"])
+            .output()
+            .unwrap();
+        assert!(reload.status.success(), "{}", String::from_utf8_lossy(&reload.stderr));
+        log
+    }
 }

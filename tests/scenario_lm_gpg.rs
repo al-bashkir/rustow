@@ -225,3 +225,30 @@ fn edit_of_foreign_gpg_ciphertext_with_other_recipient_count_reencrypts() {
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&listed.stdout).matches("ENC_TO").count(), 2);
 }
+
+/// Audit E2: `enc edit` may prompt only with --interactive. Unattended,
+/// a locked key fails clearly and pinentry never starts.
+#[test]
+fn enc_edit_with_locked_key_prompts_only_when_interactive() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    let log = home.stub_pinentry();
+    let fpr = home.fpr.clone();
+    fx.gpg_config(&home, &[&fpr], "");
+    let ct = fx.gpg_encrypt("s.gpg", "v1\n", &home);
+    let before = fs::read(&ct).unwrap();
+    let editor = fx.editor("ed", "printf 'v2\\n' > \"$1\"");
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("--interactive"), "{out:?}");
+    assert!(!log.exists(), "pinentry started unattended");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert!(fx.workspaces().is_empty());
+    let out = fx.run_env(&["--interactive", "enc", "edit", "s.gpg"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(log.exists(), "--interactive allows pinentry");
+    assert_eq!(home.decrypt(&ct), "v2\n");
+}
