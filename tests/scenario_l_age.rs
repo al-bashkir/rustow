@@ -84,6 +84,29 @@ fn enc_migrates_registration_and_template_rule() {
 }
 
 #[test]
+fn enc_moves_state_registrations_to_the_encrypted_name() {
+    let (fx, _key) = keyed();
+    fx.write(
+        ".rustow.toml",
+        &read(&fx.repo.join(".rustow.toml")).replace("version = 1\n", "version = 1\n[defaults]\nmode = \"copy\"\n"),
+    );
+    fx.write("copied.conf", "c\n");
+    fx.write("linked.conf", "l\n");
+    fx.ok(&["file", "add", "copied.conf"]);
+    fx.ok(&["link", "linked.conf"]);
+    for source in ["copied.conf", "linked.conf"] {
+        let out = fx.ok(&["enc", source]);
+        assert!(out.stdout.contains("registrations moved"), "{out:?}");
+    }
+    let state = fx.state_json();
+    assert_eq!(state["files"], serde_json::json!(["copied.conf.age"]));
+    assert_eq!(state["links"], serde_json::json!(["linked.conf.age"]));
+    fx.ok(&["apply"]);
+    assert!(is_regular(&fx.home_path("copied.conf")));
+    assert!(is_symlink(&fx.home_path("linked.conf")), "decrypt+link");
+}
+
+#[test]
 fn enc_rejects_bad_inputs_without_changes() {
     let (fx, _key) = keyed();
     fx.write("a.conf", "a");

@@ -71,6 +71,13 @@ pub fn encrypt_source(
     publish_new(&sealed.out, &sealed.ciphertext, sealed.mode)?;
     let migration = migrate_config(ctx, &rel, &sealed)?;
     retire_plaintext(&rel, &abs, &sealed, &migration)?;
+    let mut migrated = migration.new.is_some();
+    for registered in [&mut state.files, &mut state.links] {
+        if registered.remove(&rel) {
+            registered.insert(sealed.out_rel.clone());
+            migrated = true;
+        }
+    }
     state.encryption.insert(
         sealed.out_rel.clone(),
         EncRecord {
@@ -78,7 +85,7 @@ pub fn encrypt_source(
             recipients_id: crypto::recipients_id(sealed.backend, ctx),
         },
     );
-    report_encrypted(&rel, &sealed, migration.new.is_some(), printer);
+    report_encrypted(&rel, &sealed, migrated, printer);
     Ok(0)
 }
 

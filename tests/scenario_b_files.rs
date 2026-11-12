@@ -16,13 +16,10 @@ fn registered() -> Fixture {
 
 #[test]
 fn scenario_b_full_flow() {
-    // 1–3: register and persist.
+    // 1–3: register and persist, in the state directory.
     let fx = registered();
-    let config = read(&fx.repo.join(".rustow.toml"));
-    assert!(
-        config.contains("[[files]]\nsource = \".config/example/settings.json\""),
-        "{config}"
-    );
+    assert!(!fx.repo.join(".rustow.toml").exists());
+    assert_eq!(fx.state_json()["files"], serde_json::json!([SRC]));
     // Registration deploys nothing.
     assert!(!fx.home_path(SRC).exists());
     // 4–5: link skips registered files.
@@ -60,20 +57,30 @@ fn scenario_b_full_flow() {
 }
 
 #[test]
-fn file_add_is_idempotent_and_keeps_comments() {
+fn file_add_is_idempotent_and_leaves_the_config_alone() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "# my config\nversion = 1\n[vars]\nx = 1 # note\n");
+    let config = "# my config\nversion = 1\n[vars]\nx = 1 # note\n[[files]]\nsource = \"b.conf\"\n";
+    fx.write(".rustow.toml", config);
     fx.write("a.conf", "a");
+    fx.write("b.conf", "b");
     fx.ok(&["file", "add", "a.conf"]);
-    let once = read(&fx.repo.join(".rustow.toml"));
-    let out = fx.ok(&["file", "add", "./a.conf"]);
-    assert!(out.stdout.contains("already registered"), "{out:?}");
-    assert_eq!(read(&fx.repo.join(".rustow.toml")), once);
+    let out = fx.ok(&["file", "add", "./a.conf", "b.conf"]);
+    assert_eq!(out.stdout.matches("already registered").count(), 2, "{out:?}");
+    assert_eq!(read(&fx.repo.join(".rustow.toml")), config);
+    assert_eq!(fx.state_json()["files"], serde_json::json!(["a.conf"]));
+    fx.ok(&["apply"]);
+    assert!(is_regular(&fx.home_path("a.conf")) && is_regular(&fx.home_path("b.conf")));
+}
+
+#[test]
+fn a_missing_state_registration_is_a_warning() {
+    let fx = registered();
+    fs::remove_file(fx.repo.join(SRC)).unwrap();
+    let out = fx.ok(&["apply"]);
     assert!(
-        once.starts_with("# my config\nversion = 1\n[vars]\nx = 1 # note\n"),
-        "{once}"
+        out.stderr.contains("`rustow file add` registration does not exist"),
+        "{out:?}"
     );
-    assert_eq!(once.matches("[[files]]").count(), 1);
 }
 
 #[test]
@@ -106,11 +113,14 @@ fn file_add_rejects_ineligible_sources() {
 #[test]
 fn file_list_shows_registrations() {
     let fx = registered();
+    fx.write(".rustow.toml", "version = 1\n[[files]]\nsource = \"b.conf\"\n");
+    fx.write("b.conf", "b");
     let out = fx.ok(&["file", "list"]);
     assert!(out.stdout.contains(SRC) && out.stdout.contains("copy"), "{out:?}");
     let json = fx.ok(&["file", "list", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
     assert_eq!(v["files"][0]["source"], SRC);
+    assert_eq!(v["files"][1]["source"], "b.conf");
 }
 
 #[test]
@@ -118,7 +128,7 @@ fn file_remove_keeps_deployed_copy() {
     let fx = registered();
     fx.ok(&["file", "apply"]);
     fx.ok(&["file", "remove", SRC]);
-    assert!(!read(&fx.repo.join(".rustow.toml")).contains("[[files]]"));
+    assert_eq!(fx.state_json()["files"], serde_json::Value::Null);
     assert!(is_regular(&fx.home_path(SRC)), "the deployed copy stays");
     let out = fx.ok(&["file", "remove", SRC]);
     assert!(out.stdout.contains("not registered"), "{out:?}");

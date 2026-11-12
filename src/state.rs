@@ -64,6 +64,12 @@ pub struct State {
     pub created_dirs: BTreeSet<PathBuf>,
     #[serde(default)]
     pub encryption: BTreeMap<RelPath, EncRecord>,
+    /// Sources that `rustow file add` registered for copy deployment on this machine.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub files: BTreeSet<RelPath>,
+    /// Sources that `rustow link <path>` registered in copy mode.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub links: BTreeSet<RelPath>,
 }
 
 impl State {

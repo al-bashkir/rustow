@@ -159,14 +159,17 @@ fn enc_keeps_comments_of_a_migrated_template_rule() {
 #[test]
 fn file_add_and_remove_keep_crlf_line_endings() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\r\n# mine\r\n[vars]\r\na = 1\r\n");
+    let config = "version = 1\r\n# mine\r\n[vars]\r\na = 1\r\n[[files]]\r\nsource = \"a.conf\"\r\n\r\n[[files]]\r\nsource = \"b.conf\"\r\n";
+    fx.write(".rustow.toml", config);
     fx.write("a.conf", "a");
     fx.write("b.conf", "b");
-    fx.ok(&["file", "add", "a.conf"]);
-    fx.ok(&["file", "add", "b.conf"]);
-    let added = read(&fx.repo.join(".rustow.toml"));
-    assert!(added.contains("source = \"b.conf\""), "{added:?}");
-    assert_eq!(added.matches('\n').count(), added.matches("\r\n").count(), "{added:?}");
+    fx.write("c.conf", "c");
+    fx.ok(&["file", "add", "c.conf"]);
+    assert_eq!(
+        read(&fx.repo.join(".rustow.toml")),
+        config,
+        "file add writes the state only"
+    );
     fx.ok(&["file", "remove", "a.conf"]);
     let removed = read(&fx.repo.join(".rustow.toml"));
     assert!(!removed.contains("a.conf") && removed.contains("b.conf"), "{removed:?}");

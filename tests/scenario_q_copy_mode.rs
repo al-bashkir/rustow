@@ -1,10 +1,11 @@
 //! `[defaults] mode = "copy"`: `apply` makes no new symlink. It deploys
-//! registered copies, templates as copies, and the links that the state
-//! records (made by `rustow link <path>`). Other plain files wait.
+//! registered copies, templates as copies, and the links that
+//! `rustow link <path>` registered in the state. Other plain files wait.
 
 mod common;
 
 use common::*;
+use serde_json::{Value, json};
 use std::fs;
 
 const CONFIG: &str = "version = 1\n[defaults]\nmode = \"copy\"\n[vars]\nv = \"t\"\n\
@@ -41,18 +42,62 @@ fn link_adds_one_file_and_apply_keeps_it() {
     fx.ok(&["link", ".bashrc"]);
     assert!(is_symlink(&fx.home_path(".bashrc")));
     assert!(!exists(&fx, ".vimrc"));
+    assert_eq!(fx.state_json()["links"], json!([".bashrc"]));
 
     fs::remove_file(fx.home_path(".bashrc")).unwrap();
     fx.ok(&["apply"]);
-    assert!(is_symlink(&fx.home_path(".bashrc")), "the state remembers the link");
+    assert!(is_symlink(&fx.home_path(".bashrc")), "the state registers the link");
     assert!(!exists(&fx, ".vimrc"));
 
     fx.ok(&["link"]);
     assert!(!exists(&fx, ".vimrc"), "`link` without a path adds nothing");
 
     fx.ok(&["unlink", ".bashrc"]);
+    assert_eq!(fx.state_json()["links"], Value::Null);
     fx.ok(&["apply"]);
     assert!(!exists(&fx, ".bashrc"), "unlink forgets the link");
+}
+
+#[test]
+fn undeploy_keeps_the_registration() {
+    let fx = copy_mode();
+    fx.ok(&["link", ".bashrc"]);
+    fx.ok(&["undeploy", ".bashrc"]);
+    assert!(!exists(&fx, ".bashrc"));
+    assert_eq!(fx.state_json()["links"], json!([".bashrc"]));
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+}
+
+#[test]
+fn a_dry_run_registers_nothing() {
+    let fx = copy_mode();
+    fx.ok(&["link", "-n", ".bashrc"]);
+    fx.ok(&["file", "add", "-n", ".vimrc"]);
+    assert_eq!(fx.state_json(), Value::Null);
+}
+
+#[test]
+fn symlink_mode_registers_no_link() {
+    let fx = copy_mode();
+    fx.write(".rustow.toml", "version = 1\n");
+    fx.ok(&["link", ".bashrc"]);
+    assert_eq!(fx.state_json()["links"], Value::Null);
+}
+
+#[test]
+fn links_from_symlink_mode_are_not_registered() {
+    let fx = copy_mode();
+    fx.write(".rustow.toml", &CONFIG.replace("mode = \"copy\"", ""));
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+    fx.write(".rustow.toml", CONFIG);
+    fs::remove_file(fx.home_path(".bashrc")).unwrap();
+    fx.ok(&["apply"]);
+    assert!(
+        !exists(&fx, ".bashrc"),
+        "apply makes no link that `rustow link` did not register"
+    );
 }
 
 #[test]

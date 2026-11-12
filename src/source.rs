@@ -352,8 +352,8 @@ fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
     RelPath::parse(text)
 }
 
-/// Each `[[files]]` and `[[template_rules]]` entry that names no
-/// discovered or skipped file, with the reason.
+/// Each `[[files]]`, `[[template_rules]]` and `rustow file add` entry that
+/// names no discovered or skipped file, with the reason.
 fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Discovery) -> Vec<Skipped> {
     let known: BTreeSet<&RelPath> = found
         .sources
@@ -361,18 +361,24 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
         .map(|s| &s.path)
         .chain(found.skipped.iter().chain(&found.inactive).map(|s| &s.path))
         .collect();
-    let entries = cfg.files.iter().map(|p| ("[[files]]", p));
-    let entries = entries.chain(cfg.template_rules.keys().map(|p| ("[[template_rules]]", p)));
+    let config = crate::config::CONFIG_FILE;
+    let entries = cfg.files.iter().map(|p| (format!("{config} [[files]] entry"), p));
+    let entries = entries.chain(
+        cfg.template_rules
+            .keys()
+            .map(|p| (format!("{config} [[template_rules]] entry"), p)),
+    );
+    let entries = entries.chain(
+        cfg.added_files
+            .iter()
+            .map(|p| ("`rustow file add` registration".to_owned(), p)),
+    );
     entries
         // A path that a matching [[global_rules]] entry ignores is not for this host: no warning.
         .filter(|(_, path)| !known.contains(path) && ignore.ignoring_rule(path, false).is_none())
-        .map(|(table, path)| Skipped {
+        .map(|(entry, path)| Skipped {
             path: path.clone(),
-            reason: format!(
-                "{} {table} entry {}",
-                crate::config::CONFIG_FILE,
-                unmatched_entry(repo, ignore, path)
-            ),
+            reason: format!("{entry} {}", unmatched_entry(repo, ignore, path)),
         })
         .collect()
 }
@@ -463,7 +469,7 @@ fn select_mode(
     backend: Option<Backend>,
     template: bool,
 ) -> std::result::Result<Mode, String> {
-    let registered = cfg.files.contains(path);
+    let registered = cfg.registers(path);
     let rule = cfg.template_rules.get(path);
     if template {
         template_mode(backend, registered, rule)

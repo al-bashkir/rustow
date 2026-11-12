@@ -55,7 +55,7 @@ fn file_add_accepts_ciphertext_and_link_skips_it() {
     let (fx, key) = keyed("");
     fx.age_encrypt("token.age", "t\n", &[&key]);
     fx.ok(&["file", "add", "token.age"]);
-    assert!(read(&fx.repo.join(".rustow.toml")).contains("source = \"token.age\""));
+    assert_eq!(fx.state_json()["files"], serde_json::json!(["token.age"]));
     fx.ok(&["link"]);
     assert!(!fx.home_path("token").exists() && !fx.home_path("token.age").exists());
     fx.ok(&["file", "apply"]);

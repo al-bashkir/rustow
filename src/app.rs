@@ -31,7 +31,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Template(c) => template_cmd(g, &env, p, c),
         Command::Diff(a) => diff_cmd(g, &env, p, &a.paths, Selector::All),
         Command::Status(a) => status_cmd(g, &env, p, &a),
-        Command::Check => inspect::check(&open(g, &env, p)?, p),
+        Command::Check => check_cmd(g, &env, p),
         Command::Doctor => crate::doctor::doctor(&open(g, &env, p)?, p),
         Command::Undeploy(a) => {
             let ask = a.paths.paths.is_empty() && !a.yes;
@@ -52,11 +52,18 @@ fn init_cmd(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
     Ok(0)
 }
 
+/// `check` classifies with the `rustow file add` registrations, as `apply` does.
+fn check_cmd(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
+    let mut ctx = open(g, env, p)?;
+    ctx.load_state()?;
+    inspect::check(&ctx, p)
+}
+
 fn file_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: FileCommand) -> Result<i32> {
     match cmd {
         FileCommand::Add(a) => file_edit(g, env, p, &a.paths, files::add),
         FileCommand::Remove(a) => file_edit(g, env, p, &a.paths, files::remove),
-        FileCommand::List => files::list(&open(g, env, p)?, p),
+        FileCommand::List => files::list(&mut open(g, env, p)?, p),
         FileCommand::Apply(a) => deploy(g, env, p, &a.paths, Selector::File),
         FileCommand::Diff(a) => diff_cmd(g, env, p, &a.paths, Selector::File),
     }
@@ -68,11 +75,11 @@ fn file_edit(
     env: &Env,
     p: &mut Printer,
     paths: &[String],
-    edit: fn(&Context, &Printer, &[String], bool) -> Result<i32>,
+    edit: fn(&mut Context, &Printer, &[String], bool) -> Result<i32>,
 ) -> Result<i32> {
-    let ctx = open(g, env, p)?;
+    let mut ctx = open(g, env, p)?;
     let _lock = lock(&ctx, g.dry_run)?;
-    edit(&ctx, p, paths, g.dry_run)
+    edit(&mut ctx, p, paths, g.dry_run)
 }
 
 fn template_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: TemplateCommand) -> Result<i32> {
@@ -200,11 +207,15 @@ fn prepare(
     selector: Selector,
     locked: bool,
 ) -> Result<Prepared> {
-    let ctx = open(g, env, printer)?;
+    let mut ctx = open(g, env, printer)?;
     let lock = lock(&ctx, !locked)?;
-    let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
+    let mut state = ctx.load_state()?;
     let discovery = ctx.discover()?;
     let sources = selected(&ctx, &discovery, &state, paths, selector)?;
+    if explicit_link(selector, paths) && ctx.config.defaults.mode == DefaultMode::Copy {
+        // Only a real deploy saves the state; a dry run or a blocked run registers nothing.
+        state.links.extend(sources.iter().map(|s| s.path.clone()));
+    }
     let plan = plan::build(&ctx, &discovery, &sources, &state)?;
     Ok(Prepared {
         ctx,
@@ -225,7 +236,7 @@ fn selected<'a>(
     paths: &[String],
     selector: Selector,
 ) -> Result<Vec<&'a Source>> {
-    let explicit = selector == Selector::Link && !paths.is_empty();
+    let explicit = explicit_link(selector, paths);
     let deploys = |s: &&Source| selector.includes(&s.mode) && (explicit || may_link(ctx, state, s));
     let all = ctx.select(discovery, paths)?;
     for arg in paths {
@@ -251,18 +262,26 @@ fn nothing_deployed(arg: &str, found: &[&Source], selector: Selector) -> Error {
     ))
 }
 
-/// Copy mode makes no new symlink unless `rustow link <path>` asks: a
-/// link source deploys only when the state records a link at its
-/// destination or at a folded parent directory.
+/// `rustow link <path>`: the command names the files to link.
+fn explicit_link(selector: Selector, paths: &[String]) -> bool {
+    selector == Selector::Link && !paths.is_empty()
+}
+
+/// Copy mode makes no new symlink by itself: a link source deploys only
+/// when `rustow link <path>` registered it in the state.
 fn may_link(ctx: &Context, state: &State, source: &Source) -> bool {
-    let linked = || {
-        ctx.dest_path(source)
-            .ancestors()
-            .any(|d| state.entries.get(d).is_some_and(|r| r.link_target.is_some()))
-    };
     ctx.config.defaults.mode == DefaultMode::Symlink
         || !matches!(source.mode, Mode::Link | Mode::DecryptLink(_))
-        || linked()
+        || state.links.contains(&source.path)
+}
+
+/// `unlink` drops the link registrations at or below each source it removes.
+fn forget_links(state: &mut State, selector: Selector, removals: &[plan::Removal]) {
+    if selector == Selector::Link {
+        state
+            .links
+            .retain(|l| !removals.iter().any(|r| l.starts_with(&r.source)));
+    }
 }
 
 fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
@@ -345,6 +364,7 @@ fn undeploy(
         return Ok(0);
     }
     let stop = interrupt_flag()?;
+    forget_links(&mut state, selector, &removals);
     let items = execute::remove(removals, &stop, &mut state);
     finish(&ctx, &state, printer, &items)
 }

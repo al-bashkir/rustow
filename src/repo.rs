@@ -8,6 +8,7 @@ use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore};
 use crate::paths::{RelPath, Scope, expand_tilde, normalize};
 use crate::source::{Discovery, Skipped, Source, discover};
+use crate::state::State;
 use crate::template::Host;
 
 /// Values from the command line that select the repository and targets.
@@ -115,6 +116,14 @@ impl Context {
 
     pub fn discover(&self) -> Result<Discovery> {
         discover(&self.root, &self.ignore, &self.config, &Host::current())
+    }
+
+    /// Loads this repository's state. Its `rustow file add` registrations
+    /// join the configuration, so discovery classifies them as copies.
+    pub fn load_state(&mut self) -> Result<State> {
+        let state = State::load(&self.state_dir, &self.repo_id, &self.root)?;
+        self.config.added_files = state.files.clone();
+        Ok(state)
     }
 
     pub fn target_root(&self, scope: Scope) -> &Path {

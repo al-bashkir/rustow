@@ -118,8 +118,11 @@ pub struct Config {
     pub encryption: Encryption,
     /// User variables. After `apply_host`, with the matching rules merged in.
     pub vars: serde_json::Map<String, serde_json::Value>,
-    /// Sources registered for copy deployment.
+    /// `[[files]]`: sources registered for copy deployment in `.rustow.toml`.
     pub files: BTreeSet<RelPath>,
+    /// Sources that `rustow file add` registered on this machine: the
+    /// state's `files`, set by `Context::load_state`. Empty until then.
+    pub added_files: BTreeSet<RelPath>,
     pub template_rules: BTreeMap<RelPath, Metadata>,
     /// `[[file_rules]]`: `fold_directories` by rule source (a file or a directory).
     pub file_rules: BTreeMap<RelPath, bool>,
@@ -168,6 +171,7 @@ impl Default for Config {
             encryption: Encryption::default(),
             vars: Default::default(),
             files: BTreeSet::new(),
+            added_files: BTreeSet::new(),
             template_rules: BTreeMap::new(),
             file_rules: BTreeMap::new(),
             global_rules: Vec::new(),
@@ -201,10 +205,16 @@ impl Config {
             encryption: raw.encryption,
             vars: raw.vars,
             files,
+            added_files: BTreeSet::new(),
             template_rules,
             file_rules,
             global_rules,
         })
+    }
+
+    /// True when `[[files]]` or `rustow file add` registers `path` for copy deployment.
+    pub fn registers(&self, path: &RelPath) -> bool {
+        self.files.contains(path) || self.added_files.contains(path)
     }
 
     /// Merges the `vars` of each `[[global_rules]]` entry that matches

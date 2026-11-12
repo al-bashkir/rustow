@@ -78,6 +78,16 @@ impl Fixture {
         self.root.join(rel)
     }
 
+    /// The repository's state file as JSON; `null` when there is none.
+    pub fn state_json(&self) -> serde_json::Value {
+        let file = fs::read_dir(self.state.join("rustow"))
+            .into_iter()
+            .flatten()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "json"));
+        file.map_or(serde_json::Value::Null, |f| serde_json::from_str(&read(&f)).unwrap())
+    }
+
     /// Runs rustow with HOME, XDG_STATE_HOME and --root-target isolated.
     pub fn run(&self, args: &[&str]) -> Out {
         self.run_env(args, &[])
