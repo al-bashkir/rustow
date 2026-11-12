@@ -24,6 +24,11 @@ fn enc_defaults_to_age_and_retires_plaintext() {
     let ct = fx.repo.join(".ssh/private.conf.age");
     assert!(fs::read(&ct).unwrap().starts_with(b"age-encryption.org/v1"));
     assert!(!fx.repo.join(".ssh/private.conf").exists());
+    let names: Vec<_> = fs::read_dir(fx.repo.join(".ssh"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["private.conf.age"], "no plaintext copy is left behind");
     assert_eq!(fx.age_decrypt(&ct, &key), "Host secret\n");
     assert!(!fx.home_path(".ssh").exists(), "enc deploys nothing");
 }

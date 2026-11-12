@@ -128,16 +128,40 @@ fn migrate_config(ctx: &Context, rel: &RelPath, sealed: &Sealed) -> Result<Confi
     Ok(ConfigMigration { path, mode, old, new })
 }
 
-/// Removes the plaintext, unless it changed meanwhile: then undo everything and fail.
+/// Removes the plaintext, unless it changed meanwhile: then undo everything
+/// and fail. The plaintext first loses its name, so a writer that opens the
+/// path later makes a new file there instead of changing the checked content.
+// shortcut: a writer that already holds the plaintext open can still append after the check; closing that needs a file lease, which no portable API offers.
 fn retire_plaintext(rel: &RelPath, abs: &Path, sealed: &Sealed, migration: &ConfigMigration) -> Result<()> {
-    if fsops::read_file(abs).map(|now| Hash::of(&now)).ok() != Some(Hash::of(&sealed.plaintext)) {
-        migration.rollback()?;
-        fs::remove_file(&sealed.out).ctx(|| format!("remove {}", sealed.out_rel))?;
-        return Err(Error::Conflict(format!(
-            "{rel} changed while it was being encrypted; nothing changed"
-        )));
+    let aside = set_aside(abs).ctx(|| format!("set plaintext {rel} aside"))?;
+    if fsops::read_file(&aside).map(|now| Hash::of(&now)).ok() == Some(Hash::of(&sealed.plaintext)) {
+        return aside.close().ctx(|| format!("remove plaintext {rel}"));
     }
-    fs::remove_file(abs).ctx(|| format!("remove plaintext {rel}"))
+    migration.rollback()?;
+    fs::remove_file(&sealed.out).ctx(|| format!("remove {}", sealed.out_rel))?;
+    let kept = aside
+        .keep()
+        .map_err(|e| e.error)
+        .ctx(|| format!("keep plaintext {rel}"))?;
+    let outcome = match fs::hard_link(&kept, abs).and_then(|()| fs::remove_file(&kept)) {
+        Ok(()) => "nothing changed".to_string(),
+        Err(_) => format!("encryption undone; the plaintext it read is kept at {}", kept.display()),
+    };
+    Err(Error::Conflict(format!(
+        "{rel} changed while it was being encrypted; {outcome}"
+    )))
+}
+
+/// Gives `abs` a second, reserved name in its directory, then removes `abs`.
+/// The returned path removes that name when dropped.
+fn set_aside(abs: &Path) -> std::io::Result<tempfile::TempPath> {
+    let dir = abs.parent().unwrap_or(Path::new("."));
+    let aside = tempfile::Builder::new()
+        .prefix(fsops::TEMP_PREFIX)
+        .make_in(dir, |p| fs::hard_link(abs, p))?
+        .into_temp_path();
+    fs::remove_file(abs)?;
+    Ok(aside)
 }
 
 fn report_encrypted(rel: &RelPath, sealed: &Sealed, migrated: bool, printer: &Printer) {
