@@ -138,6 +138,16 @@ fn configuration_errors_never_print_values() {
     }
 }
 
+/// Sorted names in the repository root, to prove that nothing was written.
+fn repo_names(fx: &Fixture) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(&fx.repo)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
 fn conflicting_objects_fail_without_changes() {
     let fx = Fixture::new();
@@ -148,6 +158,15 @@ fn conflicting_objects_fail_without_changes() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stderr.contains(".rustowcache"), "{out:?}");
     assert!(is_symlink(&fx.repo.join(".rustowcache")));
+    assert_eq!(repo_names(&fx), [".rustowcache"]);
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+
+    let fx = Fixture::new();
+    fx.write(".rustowcache", "a regular file");
+    let out = fx.run(&["init"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stderr.contains(".rustowcache"), "{out:?}");
+    assert_eq!(repo_names(&fx), [".rustowcache"]);
 
     let fx = Fixture::new();
     fs::create_dir(fx.repo.join(".gitignore")).unwrap();
@@ -155,6 +174,13 @@ fn conflicting_objects_fail_without_changes() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stderr.contains(".gitignore"), "{out:?}");
     assert!(fx.repo.join(".gitignore").is_dir());
+    assert_eq!(repo_names(&fx), [".gitignore"]);
+
+    let fx = Fixture::new();
+    fs::create_dir(fx.repo.join(".rustowignore")).unwrap();
+    let out = fx.run(&["init"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert_eq!(repo_names(&fx), [".rustowignore"]);
 
     let fx = Fixture::new();
     fx.write("real.toml", "version = 1\n");
@@ -165,6 +191,33 @@ fn conflicting_objects_fail_without_changes() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stderr.contains("symlinks are not followed"), "{out:?}");
     assert!(is_symlink(&fx.repo.join(".gitignore")));
+    assert_eq!(read(&fx.repo.join(".rustowignore")), "");
+    assert_eq!(
+        repo_names(&fx),
+        [".gitignore", ".rustow.toml", ".rustowignore", "real.toml"]
+    );
+}
+
+#[test]
+fn cache_dir_through_a_symlink_in_the_repo_is_refused() {
+    let fx = Fixture::new();
+    let outside = fx.base.join("outside");
+    fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, fx.repo.join("var")).unwrap();
+    let config = "version = 1\n[defaults]\ncache_dir = \"var/cache\"\n";
+    fx.write(".rustow.toml", config);
+    let out = fx.run(&["init"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stderr.contains("var"), "{out:?}");
+    assert!(!outside.join("cache").exists());
+    assert_eq!(read(&fx.repo.join(".rustow.toml")), config);
+    assert_eq!(repo_names(&fx), [".rustow.toml", "var"]);
+    // Other commands do not create it through the symlink either.
+    fx.write(".rustowignore", "/var\n");
+    fx.write(".gitconfig.tmpl", "x");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(!outside.join("cache").exists());
 }
 
 #[test]

@@ -312,17 +312,46 @@ fn internal_dirs(root: &Path, dirs: &[(&str, &PathBuf)]) -> Result<Vec<RelPath>>
         if first == crate::ignore::ROOT_DIR || first == ".git" {
             return Err(bad("must not be inside .rustowroot or .git"));
         }
+        check_components(root, &rel, name)?;
         check_own_contents(dir).map_err(|why| bad(&why))?;
         out.push(rel);
     }
     Ok(out)
 }
 
+/// Refuses a symlink or non-directory above an in-repository internal
+/// directory, so that no command creates it elsewhere. The directory
+/// itself is checked where it is created or used; rustow never follows it.
+fn check_components(root: &Path, rel: &RelPath, name: &str) -> Result<()> {
+    let Some(parent) = rel.parent() else {
+        return Ok(());
+    };
+    let mut cur = root.to_path_buf();
+    for part in parent.components() {
+        cur.push(part);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => {
+                return Err(Error::Conflict(format!(
+                    "{name} {}: {} is not a directory (symlinks are not followed); move it away first",
+                    root.join(rel.as_path()).display(),
+                    cur.display()
+                )));
+            }
+            // Missing parts are created as real directories when needed.
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
 /// An in-repository internal directory may hold only rustow's entries:
 /// anything else would be a source that the built-in exclusion hides.
 fn check_own_contents(dir: &Path) -> std::result::Result<(), String> {
-    // Absent (or unreadable) directories hold nothing to hide; writes report the rest.
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    // A symlink is never followed; absent or unreadable directories hide
+    // nothing. The writes report the rest.
+    let real_dir = std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir());
+    let Some(entries) = real_dir.then(|| std::fs::read_dir(dir).ok()).flatten() else {
         return Ok(());
     };
     for entry in entries.flatten() {

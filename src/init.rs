@@ -28,29 +28,46 @@ pub fn init(opts: &GlobalOpts, env: &Env, dry_run: bool) -> Result<InitReport> {
     if root.parent().is_none() {
         return Err(Error::Usage("refusing to initialize the filesystem root".into()));
     }
+    // Every check runs before the first write, so a conflict changes nothing.
     let mut changes = Vec::new();
-    let config = init_config(&root, dry_run, &mut changes)?;
-    let dirs = InternalDirs::resolve(&root, &env.home, &config, env)?;
-    let mut wanted = vec![RelPath::parse(DEFAULT_CACHE_DIR)?];
-    wanted.extend(dirs.inside.iter().filter(|d| d.as_str() != DEFAULT_CACHE_DIR).cloned());
-    for name in [".gitignore", IGNORE_FILE] {
-        init_ignore_file(&root, name, &wanted, dry_run, &mut changes)?;
+    let mut writes = Vec::new();
+    let cache_dir = plan(&root, env, &mut writes, &mut changes)?;
+    if !dry_run {
+        for (path, text, mode) in &writes {
+            fsops::write_atomic(path, text.as_bytes(), *mode, None, None)?;
+        }
+        fsops::ensure_private_dir(&cache_dir)?;
     }
-    init_cache_dir(&root, &dirs.cache_dir, dry_run, &mut changes)?;
     Ok(InitReport { root, notices, changes })
 }
 
-fn init_config(root: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<Config> {
+/// A file write that init performs once every check has passed: path, text, mode.
+type Writes = Vec<(PathBuf, String, u32)>;
+
+/// Checks everything and collects the writes; returns the cache directory to create.
+fn plan(root: &Path, env: &Env, writes: &mut Writes, changes: &mut Vec<Change>) -> Result<PathBuf> {
+    let config = init_config(root, writes, changes)?;
+    let dirs = InternalDirs::resolve(root, &env.home, &config, env)?;
+    let mut wanted = vec![RelPath::parse(DEFAULT_CACHE_DIR)?];
+    wanted.extend(dirs.inside.iter().filter(|d| d.as_str() != DEFAULT_CACHE_DIR).cloned());
+    for name in [".gitignore", IGNORE_FILE] {
+        init_ignore_file(root, name, &wanted, writes, changes)?;
+    }
+    changes.push(cache_dir_change(root, &dirs.cache_dir)?);
+    Ok(dirs.cache_dir)
+}
+
+fn init_config(root: &Path, writes: &mut Writes, changes: &mut Vec<Change>) -> Result<Config> {
     let path = root.join(CONFIG_FILE);
     let (text, change) = match read_text(&path)? {
         None => {
             let text = edit::minimal();
-            write(&path, &text, None, dry_run)?;
+            writes.push((path, text.clone(), 0o644));
             (text, Change::new(CONFIG_FILE, "create", None))
         }
         Some((text, mode)) => match edit::ensure_init(&text)? {
             Some(new) => {
-                write(&path, &new, Some(mode), dry_run)?;
+                writes.push((path, new.clone(), mode));
                 (
                     new,
                     Change::new(CONFIG_FILE, "update", Some("added version = 1".into())),
@@ -63,7 +80,13 @@ fn init_config(root: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<
     Config::parse(&text)
 }
 
-fn init_ignore_file(root: &Path, name: &str, dirs: &[RelPath], dry_run: bool, changes: &mut Vec<Change>) -> Result<()> {
+fn init_ignore_file(
+    root: &Path,
+    name: &str,
+    dirs: &[RelPath],
+    writes: &mut Writes,
+    changes: &mut Vec<Change>,
+) -> Result<()> {
     let path = root.join(name);
     let existing = read_text(&path)?;
     let mut text = existing.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
@@ -78,13 +101,14 @@ fn init_ignore_file(root: &Path, name: &str, dirs: &[RelPath], dry_run: bool, ch
         changes.push(Change::new(name, "ok", None));
         return Ok(());
     }
-    write(&path, &text, existing.as_ref().map(|(_, m)| *m), dry_run)?;
     let action = if existing.is_some() { "update" } else { "create" };
+    writes.push((path, text, existing.map_or(0o644, |(_, m)| m)));
     changes.push(Change::new(name, action, Some(format!("added {}", added.join(" ")))));
     Ok(())
 }
 
-fn init_cache_dir(root: &Path, dir: &Path, dry_run: bool, changes: &mut Vec<Change>) -> Result<()> {
+/// What init will do to the cache directory; a conflict when it is not a real directory.
+fn cache_dir_change(root: &Path, dir: &Path) -> Result<Change> {
     let name = dir
         .strip_prefix(root)
         .map_or_else(|_| dir.display().to_string(), |r| format!("{}/", r.display()));
@@ -100,12 +124,8 @@ fn init_cache_dir(root: &Path, dir: &Path, dry_run: bool, changes: &mut Vec<Chan
             )));
         }
     };
-    if !dry_run {
-        fsops::ensure_private_dir(dir)?;
-    }
     let detail = (action != "ok").then(|| "mode 0700".to_owned());
-    changes.push(Change::new(&name, action, detail));
-    Ok(())
+    Ok(Change::new(&name, action, detail))
 }
 
 /// Text and mode of an existing regular file; `None` when absent. Any
@@ -125,11 +145,4 @@ fn read_text(path: &Path) -> Result<Option<(String, u32)>> {
     let text = String::from_utf8(fsops::read_file(path)?)
         .map_err(|_| Error::Config(format!("{} is not valid UTF-8", path.display())))?;
     Ok(Some((text, meta.permissions().mode() & 0o7777)))
-}
-
-fn write(path: &Path, text: &str, mode: Option<u32>, dry_run: bool) -> Result<()> {
-    if dry_run {
-        return Ok(());
-    }
-    fsops::write_atomic(path, text.as_bytes(), mode.unwrap_or(0o644), None, None)
 }
