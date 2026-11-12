@@ -79,8 +79,8 @@ fn missing_var_is_error_naming_template() {
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stdout.contains(".gitconfig.tmpl, line 2"), "{out:?}");
     assert!(
-        !fx.home_path(".bashrc").exists(),
-        "default policy: nothing changes when an item fails"
+        is_symlink(&fx.home_path(".bashrc")),
+        "default policy: a failed item does not stop the rest"
     );
     assert!(!fx.home_path(".gitconfig").exists());
 }

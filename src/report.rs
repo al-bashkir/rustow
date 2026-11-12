@@ -112,18 +112,18 @@ impl Printer {
             outln!("{out}");
             return;
         }
-        for i in items {
-            let problem = matches!(i.action, Action::Conflict | Action::Skip | Action::Fail);
-            let show = problem || (!self.quiet && (i.action != Action::Unchanged || self.verbose));
-            if show {
-                let detail = i.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-                outln!(
-                    "{} {}  <- {} ({}){detail}",
-                    self.verb(i.action),
-                    self.path(&i.dest),
-                    i.source,
-                    i.mode
-                );
+        let (problems, rest): (Vec<&ItemReport>, Vec<&ItemReport>) = items
+            .iter()
+            .partition(|i| matches!(i.action, Action::Conflict | Action::Skip | Action::Fail));
+        for i in rest {
+            if !self.quiet && (i.action != Action::Unchanged || self.verbose) {
+                self.item_line(i);
+            }
+        }
+        if !problems.is_empty() {
+            outln!("Conflicts:");
+            for i in problems {
+                self.item_line(i);
             }
         }
         if !self.quiet {
@@ -166,6 +166,17 @@ impl Printer {
                 }
             );
         }
+    }
+
+    fn item_line(&self, i: &ItemReport) {
+        let detail = i.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
+        outln!(
+            "{} {}  <- {} ({}){detail}",
+            self.verb(i.action),
+            self.path(&i.dest),
+            i.source,
+            i.mode
+        );
     }
 
     fn verb(&self, action: Action) -> String {

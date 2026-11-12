@@ -18,7 +18,7 @@ Without a command, rustow runs `apply`.
 | `-n`, `--dry-run`        | Show what would change. Change nothing.                                                                                                                                                                                      |
 | `--backup`               | Same as `--on-conflict backup`.                                                                                                                                                                                              |
 | `--force`                | Same as `--on-conflict overwrite`.                                                                                                                                                                                           |
-| `--on-conflict <POLICY>` | `abort` (default), `skip`, `backup`, `overwrite`.                                                                                                                                                                            |
+| `--on-conflict <POLICY>` | `skip` (default), `abort`, `backup`, `overwrite`.                                                                                                                                                                            |
 | `-v`, `--verbose`        | Also list unchanged items.                                                                                                                                                                                                   |
 | `-q`, `--quiet`          | Print only conflicts and errors.                                                                                                                                                                                             |
 | `--json`                 | JSON output.                                                                                                                                                                                                                 |
@@ -60,7 +60,7 @@ Path arguments are repository-relative. They are never relative to the current d
 | 0    | Success, or clean.                                                                                                                                                                 |
 | 1    | Differences found (`diff`, `status`, `check`). `doctor` uses 1 for a failed check.                                                                                                 |
 | 2    | Usage or configuration error. A problem with one source is a warning, not exit 2.                                                                                                  |
-| 3    | Conflicts. Under the default policy nothing changed. Also when `--on-conflict skip` left conflicts.                                                                                |
+| 3    | Conflicts. The default policy deployed the other items. Under `--on-conflict abort` nothing changed.                                                                               |
 | 4    | Runtime or partial failure. This includes render failure, decrypt failure, a destination directory that you cannot write, a state file that rustow cannot write, and interruption. |
 
 ## Skipped sources
@@ -90,8 +90,8 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 ## Conflict policies
 
-- `abort` (default): if any item conflicts or fails to plan, rustow writes nothing. The summary then starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: …".
-- `skip`: leave conflicting destinations. Deploy the rest. Exit 3.
+- `skip` (default): leave conflicting destinations. Deploy the rest. An item that fails to plan (for example a render error) does not stop the other items. Exit 3, or 4 for an error.
+- `abort`: if any item conflicts or fails to plan, rustow writes nothing. The summary then starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: …".
 - `backup`: move the old object to `<state_dir>/backups/<repo-id>/<UTC YYYYmmddTHHMMSSZ>-<pid>/<home|root|cache>/<dest-rel>`. The directories are private.
 - `overwrite`: replace the file or symlink.
 
@@ -121,7 +121,7 @@ Before it replaces an object, rustow checks the object again. If it changed, the
 
 ## Deploy output
 
-`apply`, `link`, `file apply`, `template apply`, `unlink` and `undeploy` print one line for each item, then a summary. A dry run summary starts with "dry run, nothing written: ". When the abort policy stops a run, the summary starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: ".
+`apply`, `link`, `file apply`, `template apply`, `unlink` and `undeploy` print one line for each item, then a summary. Conflicts and errors are not in the item list. They come after it, below a "Conflicts:" line, before the summary. `-q` prints only this block. A dry run summary starts with "dry run, nothing written: ". When the abort policy stops a run, the summary starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: ".
 
 With `--json` they print one object: `dry_run`, `aborted`, `items` (each with `source`, `dest`, `mode`, `action` and `detail`), `summary` (`changed`, `unchanged`, `adopted`, `conflicts`, `errors`) and `warnings` (each with `source` and `reason`; always empty for `unlink` and `undeploy`). `dry_run` is true only with `-n`. `aborted` is true when the abort policy stopped the run before it wrote anything.
 

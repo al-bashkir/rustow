@@ -152,25 +152,25 @@ fn summary_lines_are_exact() {
     assert_eq!(summary(&fx.ok(&["apply"])), "0 changed, 2 unchanged");
     fx.write_home("new", "mine");
     fx.write("new", "repo");
-    let out = fx.run(&["apply"]);
+    let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(
         summary(&out),
         "conflicts found, nothing written: 0 to change, 2 unchanged, 1 conflicts"
     );
     fx.write("bad.tmpl", "{{ vars.nope }}");
-    let out = fx.run(&["apply", "--on-conflict", "skip"]);
+    let out = fx.run(&["apply"]);
     assert_eq!(
         summary(&out),
         "0 changed, 2 unchanged, 1 conflicts, 1 errors",
         "{out:?}"
     );
-    let out = fx.run(&["apply"]);
+    let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(
         summary(&out),
         "conflicts and errors found, nothing written: 0 to change, 2 unchanged, 1 conflicts, 1 errors"
     );
     fs::remove_file(fx.home_path("new")).unwrap();
-    let out = fx.run(&["apply"]);
+    let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(
         summary(&out),
         "errors found, nothing written: 1 to change, 2 unchanged, 1 errors"
@@ -188,7 +188,10 @@ fn json_separates_dry_run_from_aborted_run() {
         let v: serde_json::Value = serde_json::from_str(&fx.run(args).stdout).unwrap();
         (v["dry_run"].clone(), v["aborted"].clone())
     };
-    assert_eq!(flags(&["apply", "--json"]), (json!(false), json!(true)));
+    assert_eq!(
+        flags(&["apply", "--json", "--on-conflict", "abort"]),
+        (json!(false), json!(true))
+    );
     assert_eq!(flags(&["apply", "--json", "-n"]), (json!(true), json!(false)));
     fs::remove_file(fx.home_path(".bashrc")).unwrap();
     assert_eq!(flags(&["apply", "--json"]), (json!(false), json!(false)));

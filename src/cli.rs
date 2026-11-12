@@ -43,7 +43,7 @@ pub struct Global {
     /// Resolve conflicts by replacing an existing file or symlink (never a directory)
     #[arg(long, global = true, conflicts_with = "on_conflict")]
     pub force: bool,
-    /// Conflict policy
+    /// Conflict policy (default: skip)
     #[arg(long, global = true, value_enum, value_name = "POLICY")]
     pub on_conflict: Option<Policy>,
     /// Also list unchanged items
@@ -69,7 +69,7 @@ impl Global {
             (Some(p), _, _) => p,
             (None, true, _) => Policy::Backup,
             (None, false, true) => Policy::Overwrite,
-            (None, false, false) => Policy::Abort,
+            (None, false, false) => Policy::Skip,
         }
     }
 }

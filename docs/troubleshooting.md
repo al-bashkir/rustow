@@ -4,11 +4,11 @@ Start with `rustow doctor` and `rustow check`.
 
 ## Exit code 3: conflicts
 
-A destination exists and rustow did not create it. Under the default policy rustow changed nothing.
+A destination exists and rustow did not create it. Under the default policy rustow left it as it is and deployed the other items. The output lists each conflict below "Conflicts:".
 
 1. Run `rustow diff` or `rustow status`.
 2. Move or delete the old file yourself, or run with `--backup`, or `--force`.
-3. `--on-conflict skip` deploys the other items.
+3. `--on-conflict abort` changes nothing when there is a conflict.
 
 Backups go to `<state_dir>/backups/<repo-id>/...`.
 

@@ -49,7 +49,7 @@ rustow apply --dry-run
 rustow apply --backup
 ```
 
-`rustow apply` finds that `~/.bashrc` exists and is not a rustow symlink. This is a conflict. By default, rustow then changes nothing. Use `--backup` to move the old file into the backup directory. Use `--force` to replace it.
+`rustow apply` finds that `~/.bashrc` exists and is not a rustow symlink. This is a conflict. By default, rustow leaves the file, deploys the other items and lists the conflict at the end. Use `--backup` to move the old file into the backup directory. Use `--force` to replace it.
 
 ## 5. Next steps
 

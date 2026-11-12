@@ -13,10 +13,39 @@ fn two() -> Fixture {
 }
 
 #[test]
-fn unmanaged_file_conflict_exit_3_nothing_changed() {
+fn default_skips_conflicts_deploys_the_rest_and_lists_conflicts_last() {
     let fx = two();
     fx.write_home(".bashrc", "mine\n");
     let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert_eq!(read(&fx.home_path(".bashrc")), "mine\n");
+    assert!(is_symlink(&fx.home_path(".zshrc")));
+    let lines: Vec<&str> = out.stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "  create ~/.zshrc  <- .zshrc (link)",
+            "Conflicts:",
+            "    skip ~/.bashrc  <- .bashrc (link): existing destination is not managed by rustow",
+            "1 changed, 0 unchanged, 1 conflicts",
+        ],
+        "{out:?}"
+    );
+    let quiet = fx.run(&["apply", "-q"]);
+    assert_eq!(
+        quiet.stdout,
+        "Conflicts:\n    skip ~/.bashrc  <- .bashrc (link): existing destination is not managed by rustow\n"
+    );
+    let clean = Fixture::new();
+    clean.write(".bashrc", "b\n");
+    assert!(!clean.ok(&["apply"]).stdout.contains("Conflicts:"));
+}
+
+#[test]
+fn abort_policy_conflict_exit_3_nothing_changed() {
+    let fx = two();
+    fx.write_home(".bashrc", "mine\n");
+    let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(
         out.stdout.contains("conflict") && out.stdout.contains(".bashrc"),
@@ -27,16 +56,6 @@ fn unmanaged_file_conflict_exit_3_nothing_changed() {
     assert!(!out.stdout.contains("dry run"), "{out:?}");
     assert_eq!(read(&fx.home_path(".bashrc")), "mine\n");
     assert!(!fx.home_path(".zshrc").exists(), "abort policy changes nothing");
-}
-
-#[test]
-fn skip_policy_deploys_the_rest() {
-    let fx = two();
-    fx.write_home(".bashrc", "mine\n");
-    let out = fx.run(&["apply", "--on-conflict", "skip"]);
-    assert_eq!(out.code, 3, "{out:?}");
-    assert_eq!(read(&fx.home_path(".bashrc")), "mine\n");
-    assert!(is_symlink(&fx.home_path(".zshrc")));
 }
 
 #[test]
@@ -203,7 +222,7 @@ fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
             .to_owned()
     };
     let plain = line("<- .bashrc");
-    assert!(plain.contains("conflict") && plain.contains("untrusted"), "{plain}");
+    assert!(plain.contains("skip") && plain.contains("untrusted"), "{plain}");
     assert!(
         plain.contains("repository source") && plain.contains("rustow file add"),
         "{plain}"

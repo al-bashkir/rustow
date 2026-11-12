@@ -15,9 +15,9 @@ use crate::state::State;
 /// What to do with a resolvable conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Policy {
-    /// Change nothing at all when any item conflicts (default).
+    /// Change nothing at all when any item conflicts.
     Abort,
-    /// Leave conflicting destinations as they are; deploy the rest.
+    /// Leave conflicting destinations as they are; deploy the rest (default).
     Skip,
     /// Move the conflicting destination into the backup directory, then deploy.
     Backup,
