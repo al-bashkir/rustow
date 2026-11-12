@@ -376,12 +376,16 @@ fn selective_apply_folds_only_fully_selected_directories() {
     assert!(!fx.home_path(".config/b").exists(), "{out:?}");
 }
 
-/// A collision in the root target does not block a fold in the home target.
+/// Only a home collision at or below a directory blocks its fold: not one
+/// elsewhere in the home target, and not one in the root target at the
+/// same relative path.
 #[test]
-fn root_collision_does_not_block_a_home_fold() {
+fn collisions_elsewhere_do_not_block_a_home_fold() {
     let fx = nvim(FOLD);
-    fx.write(".rustowroot/etc/x", "x\n");
-    fx.write(".rustowroot/etc/x.tmpl", "t\n");
+    fx.write("c", "c\n");
+    fx.write("c.tmpl", "t\n");
+    fx.write(".rustowroot/.config/nvim/x", "x\n");
+    fx.write(".rustowroot/.config/nvim/x.tmpl", "t\n");
     let out = fx.run(&["apply", "--on-conflict", "skip"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(is_symlink(&fx.home_path(".config/nvim")), "{out:?}");
