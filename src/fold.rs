@@ -110,9 +110,10 @@ fn select_unfolds(selected: &[&Source], recorded: &BTreeMap<RelPath, &Record>, f
 /// would vanish from the destination if the folded link were unfolded.
 pub fn strays(ctx: &Context, discovery: &Discovery, dir: &RelPath) -> Result<Vec<RelPath>> {
     let sources: BTreeSet<&RelPath> = discovery.sources.iter().map(|s| &s.path).collect();
-    Ok(files_below(ctx, dir)?
+    Ok(entries_below(ctx, dir)?
         .into_iter()
-        .filter(|f| !sources.contains(f))
+        .filter(|(f, is_dir)| !is_dir && !sources.contains(f))
+        .map(|(f, _)| f)
         .collect())
 }
 
@@ -162,28 +163,34 @@ fn dest_allows_fold(ctx: &Context, dir: &RelPath, record: Option<&Record>) -> Re
     }
 }
 
-/// Every non-directory entry below `dir` is one of `allowed`.
+/// Every non-directory entry below `dir` is one of `allowed`, and no
+/// reserved directory (cache, state, `.git`) lies below it, even one that
+/// does not exist yet: the fold would expose it.
 fn holds_only(ctx: &Context, dir: &RelPath, allowed: &BTreeSet<&RelPath>) -> Result<bool> {
-    Ok(files_below(ctx, dir)?.iter().all(|f| allowed.contains(f)))
+    if ctx.ignore.holds_internal(dir) {
+        return Ok(false);
+    }
+    Ok(entries_below(ctx, dir)?.iter().all(|(p, is_dir)| match is_dir {
+        true => !ctx.ignore.is_reserved(p, true),
+        false => allowed.contains(p),
+    }))
 }
 
-/// Repository-relative paths of all non-directory entries below `dir`
-/// (symlinks and special files included), without following links.
-fn files_below(ctx: &Context, dir: &RelPath) -> Result<Vec<RelPath>> {
+/// Repository-relative paths of all entries below `dir` (symlinks and
+/// special files included) and whether each is a directory, without
+/// following links.
+fn entries_below(ctx: &Context, dir: &RelPath) -> Result<Vec<(RelPath, bool)>> {
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(ctx.root.join(dir.as_path()))
         .min_depth(1)
         .follow_links(false)
     {
         let entry = entry.map_err(|e| Error::Failed(format!("scan {dir}: {e}")))?;
-        if entry.file_type().is_dir() {
-            continue;
-        }
         let rel = entry.path().strip_prefix(&ctx.root).unwrap_or(entry.path());
         let rel = rel
             .to_str()
             .ok_or_else(|| Error::Config(format!("non-UTF-8 path below {dir}")))?;
-        out.push(RelPath::parse(rel)?);
+        out.push((RelPath::parse(rel)?, entry.file_type().is_dir()));
     }
     Ok(out)
 }

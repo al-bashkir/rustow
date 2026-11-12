@@ -54,6 +54,12 @@ impl Ignore {
             || self.internal.iter().any(|dir| path.starts_with(dir))
     }
 
+    /// True when a configured cache or state directory lies at or below
+    /// `dir`, whether or not it exists yet.
+    pub fn holds_internal(&self, dir: &RelPath) -> bool {
+        self.internal.iter().any(|d| d.starts_with(dir))
+    }
+
     /// Reserved, or excluded by `.rustowignore` (the path or any ancestor).
     /// An ignored ancestor directory cannot be re-included, as in Git.
     pub fn is_ignored(&self, path: &RelPath, is_dir: bool) -> bool {

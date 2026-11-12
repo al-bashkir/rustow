@@ -253,6 +253,27 @@ fn unfold_is_a_conflict_when_an_item_below_it_is_not_deployed() {
     }
 }
 
+/// Audit F2: a directory that holds the in-repository cache or state
+/// directory never folds; the fold would expose rendered plaintext.
+#[test]
+fn directory_holding_an_internal_directory_never_folds() {
+    for (setting, init) in [("cache_dir", true), ("cache_dir", false), ("state_dir", false)] {
+        let fx = Fixture::new();
+        fx.write(".rustow.toml", &format!("{FOLD}{setting} = \".local/rc\"\n"));
+        fx.write(".local/share/x", "x\n");
+        fx.write(".gitconfig.tmpl", "g\n");
+        if init {
+            fx.ok(&["init"]);
+        }
+        fx.ok(&["apply"]);
+        let case = format!("{setting}, init {init}");
+        assert!(!is_symlink(&fx.home_path(".local")), "{case}");
+        assert!(!fx.home_path(".local/rc").exists(), "{case}: stays hidden");
+        assert_eq!(read(&fx.home_path(".local/share/x")), "x\n");
+        assert!(fx.ok(&["apply"]).stdout.contains("0 changed"), "{case}");
+    }
+}
+
 #[test]
 fn unlink_forgets_a_fold_record_whose_link_the_user_replaced() {
     let fx = nvim(FOLD);
