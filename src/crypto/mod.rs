@@ -224,20 +224,18 @@ pub fn recipients_id(backend: Backend, ctx: &Context) -> Hash {
 pub fn recipients_differ(backend: Backend, ciphertext: &[u8], ctx: &Context) -> bool {
     match backend {
         Backend::Age => age::stanza_count(ciphertext) != ctx.config.encryption.recipients.len(),
-        Backend::Gpg => gpg_recipients_differ(ciphertext, ctx),
+        // What gpg cannot tell is no evidence.
+        Backend::Gpg => gpg_recipients_differ(ciphertext, ctx).unwrap_or_default(),
     }
 }
 
 /// True when an ENC_TO key id belongs to no configured key, or a
-/// configured key has no ENC_TO key id.
-fn gpg_recipients_differ(ciphertext: &[u8], ctx: &Context) -> bool {
-    let (Ok(gpg), Ok(keys)) = (gpg(ctx), gpg_recipients(ctx)) else {
-        return false;
-    };
-    let Some(enc_to) = gpg.recipient_ids(ciphertext) else {
-        return false;
-    };
+/// configured key has no ENC_TO key id. `None` when gpg cannot tell.
+fn gpg_recipients_differ(ciphertext: &[u8], ctx: &Context) -> Option<bool> {
+    let gpg = gpg(ctx).ok()?;
+    let keys = gpg_recipients(ctx).ok()?;
+    let enc_to = gpg.recipient_ids(ciphertext)?;
     let configured = |id: &String| keys.iter().any(|(_, ids)| ids.contains(id));
     let used = |ids: &Vec<String>| ids.iter().any(|id| enc_to.contains(id));
-    !enc_to.iter().all(configured) || !keys.iter().all(|(_, ids)| used(ids))
+    Some(!enc_to.iter().all(configured) || !keys.iter().all(|(_, ids)| used(ids)))
 }
