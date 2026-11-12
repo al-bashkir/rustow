@@ -353,6 +353,44 @@ fn selective_apply_folds_only_fully_selected_directories() {
     assert!(!fx.home_path(".config/b").exists(), "{out:?}");
 }
 
+/// A collision in the root target does not block a fold in the home target.
+#[test]
+fn root_collision_does_not_block_a_home_fold() {
+    let fx = nvim(FOLD);
+    fx.write(".rustowroot/etc/x", "x\n");
+    fx.write(".rustowroot/etc/x.tmpl", "t\n");
+    let out = fx.run(&["apply", "--on-conflict", "skip"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/nvim")), "{out:?}");
+}
+
+/// A recorded fold unfolds only in a run that selects a source below it.
+#[test]
+fn selective_run_elsewhere_keeps_a_recorded_fold() {
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    fx.write(".rustow.toml", "version = 1\n");
+    fx.write(".bashrc", "b\n");
+    let out = fx.ok(&["apply", ".bashrc"]);
+    assert!(is_symlink(&fx.home_path(".config/nvim")), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")), "{out:?}");
+}
+
+/// A plain file link is not a fold record: when its source becomes a
+/// directory, the link is not unfolded.
+#[test]
+fn file_link_whose_source_became_a_directory_is_not_unfolded() {
+    let fx = Fixture::new();
+    fx.write("d", "file\n");
+    fx.ok(&["apply"]);
+    fs::remove_file(fx.repo.join("d")).unwrap();
+    fx.write("d/x", "x\n");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("inside the repository"), "{out:?}");
+    assert!(is_symlink(&fx.home_path("d")), "{out:?}");
+}
+
 #[test]
 fn selective_apply_keeps_an_existing_fold() {
     let fx = nvim(FOLD);
