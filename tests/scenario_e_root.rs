@@ -97,6 +97,51 @@ fn skipped_root_file_is_a_warning_in_each_deploy_command() {
     assert!(!out.stderr.contains("warning"), "{out:?}");
 }
 
+/// status shows a skipped source in its selection as SKIPPED, with the
+/// reason; check warns about it. Neither changes its exit code.
+#[test]
+fn status_and_check_report_a_skipped_root_file() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    let source = ".rustowroot/etc/x";
+    fx.write(source, "x\n");
+    fx.ok(&["apply"]);
+    let row = format!("  SKIPPED {source}: {}", reason(source));
+    for args in [&["status"][..], &["status", ".rustowroot/"]] {
+        let out = fx.ok(args);
+        assert!(out.stdout.contains(&row), "{args:?}: {out:?}");
+        assert!(out.stdout.contains("0 need attention"), "{args:?}: {out:?}");
+    }
+    let out = fx.ok(&["status", ".bashrc"]);
+    assert!(!out.stdout.contains("SKIPPED"), "outside the selection: {out:?}");
+    let out = fx.ok(&["status", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    let skipped: Vec<&serde_json::Value> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["status"] == "SKIPPED")
+        .collect();
+    assert_eq!(skipped.len(), 1, "{out:?}");
+    assert_eq!(skipped[0]["source"], source);
+    assert_eq!(skipped[0]["detail"], reason(source));
+    let out = fx.ok(&["check"]);
+    assert!(out.stderr.contains(&warning(source)), "{out:?}");
+    assert!(out.stdout.contains("1 sources checked, 0 problems"), "{out:?}");
+    let out = fx.ok(&["check", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    let want = serde_json::json!([{ "source": source, "reason": reason(source) }]);
+    assert_eq!(v["warnings"], want, "{out:?}");
+    assert_eq!(v["problems"], serde_json::json!([]), "{out:?}");
+    fx.write(".profile.tmpl", "{{ vars.missing }}\n");
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "a real problem keeps its exit code: {out:?}");
+    assert!(
+        out.stdout.contains("1 problems") && out.stderr.contains(&warning(source)),
+        "{out:?}"
+    );
+}
+
 /// A path argument that names a skipped file is an error, as for an
 /// ignored file. A directory that holds one only warns.
 #[test]

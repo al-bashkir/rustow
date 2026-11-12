@@ -94,10 +94,6 @@ fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: 
 
 fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<i32> {
     let s = prepare(g, env, p, &a.paths.paths, Selector::All, false)?;
-    if let Some(skip) = s.discovery.skipped.first() {
-        // shortcut: status refuses a skipped source until it shows SKIPPED rows (next commit).
-        return Err(Error::Config(format!("source '{}': {}", skip.path, skip.reason)));
-    }
     inspect::status(&s.ctx, &s.plan, &s.discovery, &s.state, &a.paths.paths, a.ignored, p)
 }
 

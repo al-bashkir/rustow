@@ -202,10 +202,12 @@ pub struct Row {
     pub detail: Option<String>,
 }
 
-const CLEAN: [&str; 4] = ["LINKED", "COPIED", "TEMPLATED", "IGNORED"];
+/// Statuses that do not need attention. IGNORED and SKIPPED rows always show.
+const CLEAN: [&str; 5] = ["LINKED", "COPIED", "TEMPLATED", "IGNORED", "SKIPPED"];
 
 /// Status rows for the plan, recorded destinations whose source is gone,
-/// and (on request) ignored paths. Exit 0 when everything is clean.
+/// skipped sources and (on request) ignored paths. Exit 0 when everything
+/// is clean; a skipped source does not change it.
 pub fn status(
     ctx: &Context,
     plan: &Plan,
@@ -227,6 +229,13 @@ pub fn status(
                 detail: Some(orphan_detail(record)),
             }),
     );
+    rows.extend(ctx.skipped(discovery, args)?.into_iter().map(|s| Row {
+        source: s.path.to_string(),
+        dest: None,
+        mode: String::new(),
+        status: "SKIPPED",
+        detail: Some(s.reason.clone()),
+    }));
     if ignored {
         rows.extend(discovery.ignored.iter().map(|p| Row {
             source: p.to_string(),
@@ -244,28 +253,33 @@ pub fn status(
             .collect();
         println!("{}", json!({ "items": items }));
     } else {
-        for r in rows
-            .iter()
-            .filter(|r| printer.verbose || !CLEAN.contains(&r.status) || r.status == "IGNORED")
-        {
-            let dest = r
-                .dest
-                .as_deref()
-                .map(|d| format!("{}  <- ", printer.path(d)))
-                .unwrap_or_default();
-            let mode = if r.mode.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", r.mode)
-            };
-            let detail = r.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-            println!("{:>9} {dest}{}{mode}{detail}", r.status, r.source);
-        }
-        if !printer.quiet {
-            println!("{} ok, {attention} need attention", rows.len() - attention);
-        }
+        print_rows(&rows, attention, printer);
     }
     Ok(i32::from(attention > 0))
+}
+
+/// The status rows as text, then the summary line.
+fn print_rows(rows: &[Row], attention: usize, printer: &Printer) {
+    for r in rows
+        .iter()
+        .filter(|r| printer.verbose || !CLEAN.contains(&r.status) || matches!(r.status, "IGNORED" | "SKIPPED"))
+    {
+        let dest = r
+            .dest
+            .as_deref()
+            .map(|d| format!("{}  <- ", printer.path(d)))
+            .unwrap_or_default();
+        let mode = if r.mode.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", r.mode)
+        };
+        let detail = r.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
+        println!("{:>9} {dest}{}{mode}{detail}", r.status, r.source);
+    }
+    if !printer.quiet {
+        println!("{} ok, {attention} need attention", rows.len() - attention);
+    }
 }
 
 fn row(item: &PlanItem, state: &State) -> Row {
@@ -392,15 +406,10 @@ pub fn orphan_reports(
 /// Offline validation: discovery (configuration, ignore rules,
 /// registrations), destination collisions, owner and group names and
 /// plaintext template rendering. Never decrypts. Exit 0 clean, 1 findings.
-pub fn check(ctx: &Context, printer: &Printer) -> Result<i32> {
+/// Skipped sources are warnings, not findings.
+pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
     let discovery = ctx.discover()?;
-    if let Some(skip) = discovery.skipped.first() {
-        // shortcut: check refuses a skipped source until it lists warnings (next commit).
-        return Err(crate::error::Error::Config(format!(
-            "source '{}': {}",
-            skip.path, skip.reason
-        )));
-    }
+    printer.warn(&discovery.skipped);
     let mut findings: Vec<String> = check_collisions(&discovery.sources, crate::plan::case_folding(ctx))
         .iter()
         .map(ToString::to_string)
@@ -421,7 +430,7 @@ pub fn check(ctx: &Context, printer: &Printer) -> Result<i32> {
     if printer.json {
         println!(
             "{}",
-            json!({ "sources": discovery.sources.len(), "problems": findings })
+            json!({ "sources": discovery.sources.len(), "problems": findings, "warnings": printer.warnings })
         );
     } else {
         for f in &findings {
