@@ -255,3 +255,39 @@ impl Printer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn printer(color: bool) -> Printer {
+        Printer {
+            json: false,
+            quiet: false,
+            verbose: false,
+            color,
+            home: None,
+        }
+    }
+
+    /// On a terminal each verb gets its color: changes green, notes cyan,
+    /// conflicts yellow, errors red, unchanged dim. Without color, plain text.
+    #[test]
+    fn verbs_are_colored_by_kind_on_a_terminal() {
+        let p = printer(true);
+        let cases = [
+            (Action::Create, "\x1b[32m  create\x1b[0m"),
+            (Action::Remove, "\x1b[32m  remove\x1b[0m"),
+            (Action::Adopt, "\x1b[36m   adopt\x1b[0m"),
+            (Action::Orphaned, "\x1b[36morphaned\x1b[0m"),
+            (Action::Conflict, "\x1b[33mconflict\x1b[0m"),
+            (Action::Skip, "\x1b[33m    skip\x1b[0m"),
+            (Action::Fail, "\x1b[31m   error\x1b[0m"),
+            (Action::Unchanged, "\x1b[2m      ok\x1b[0m"),
+        ];
+        for (action, shown) in cases {
+            assert_eq!(p.verb(action), shown, "{action:?}");
+        }
+        assert_eq!(printer(false).verb(Action::Create), "  create");
+    }
+}
