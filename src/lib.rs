@@ -29,5 +29,6 @@ pub mod repo;
 pub mod report;
 pub mod source;
 pub mod state;
+pub mod sudo;
 pub mod template;
 pub mod transfer;

@@ -409,8 +409,11 @@ fn diff_shows_content_for_an_unwritable_system_directory() {
     assert_eq!(diff.code, 1, "{diff:?}");
     assert!(diff.stdout.contains("+x=2"), "{diff:?}");
     assert!(!diff.stderr.contains("cannot compute"), "{diff:?}");
-    assert!(status.stdout.contains("ERROR"), "{status:?}");
-    assert!(status.stdout.contains("cannot write to directory"), "{status:?}");
-    assert_eq!(apply.code, 4, "{apply:?}");
+    assert!(
+        status.stdout.contains("MISSING"),
+        "the sudo helper writes it: {status:?}"
+    );
+    assert_eq!(apply.code, 4, "the fixture's sudo is `false`: {apply:?}");
+    assert!(apply.stdout.contains("false failed"), "{apply:?}");
     assert!(!fx.root_path("etc/qa.conf").exists());
 }

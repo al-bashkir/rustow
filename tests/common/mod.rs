@@ -126,6 +126,8 @@ impl Fixture {
             .env("NO_COLOR", "1")
             // A test that forgets VISUAL fails fast instead of waiting in vi.
             .env("EDITOR", "false")
+            // Never the real sudo: a test that escalates by accident fails fast.
+            .env("RUSTOW_SUDO", "false")
             .arg("--root-target")
             .arg(&self.root)
             .args(args);

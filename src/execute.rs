@@ -2,6 +2,7 @@
 //! so a failure leaves earlier items deployed and recorded and later
 //! items untouched. There is no global rollback.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,9 +12,10 @@ use crate::fsops::{self, Observed};
 use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
+use crate::sudo::Job;
 
 /// What to do with a resolvable conflict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize)]
 pub enum Policy {
     /// Change nothing at all when any item conflicts.
     Abort,
@@ -142,7 +144,22 @@ fn deploy_conflict(d: &Deploy) -> Option<(Conflict, String)> {
     Some((conflict, detail))
 }
 
+/// `predict_local`, with "via sudo" on a change that the sudo helper makes.
 fn predict_deploy(d: &Deploy, policy: Policy) -> (Action, Option<String>) {
+    let (action, detail) = predict_local(d, policy);
+    if d.sudo
+        && matches!(
+            action,
+            Action::Create | Action::Update | Action::Replace | Action::Metadata
+        )
+    {
+        let detail = detail.map_or_else(|| "via sudo".to_owned(), |d| format!("{d}; via sudo"));
+        return (action, Some(detail));
+    }
+    (action, detail)
+}
+
+fn predict_local(d: &Deploy, policy: Policy) -> (Action, Option<String>) {
     if let Some(why) = &d.unwritable {
         return (Action::Fail, Some(why.clone()));
     }
@@ -181,28 +198,12 @@ pub struct Run<'a> {
 }
 
 /// Executes every item the policy allows and records successes in `state`.
+/// The `sudo` deploys wait for one sudo helper call at the end.
 pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
     let mut out = Vec::with_capacity(plan.items.len());
+    let mut queued = Vec::new();
     for item in plan.items {
-        let (mut action, mut detail) = predict(&item, run.policy);
-        if run.stop.load(Ordering::SeqCst) {
-            (action, detail) = (
-                Action::Fail,
-                Some("interrupted before this item; nothing changed".into()),
-            );
-        } else if let Step::Deploy(d) = &item.step
-            && !matches!(action, Action::Conflict | Action::Skip | Action::Fail)
-        {
-            match apply(d, &item, run, state) {
-                Ok(Some(extra)) => detail = Some(extra),
-                Ok(None) => {}
-                Err(e) => (action, detail) = (Action::Fail, Some(crate::plan::with_privilege_hint(e))),
-            }
-        } else if let Step::Unfold { path, observed } = &item.step
-            && let Err(e) = unfold(path, observed, &item.dest, state)
-        {
-            (action, detail) = (Action::Fail, Some(crate::plan::with_privilege_hint(e)));
-        }
+        let (action, detail, sudo) = execute_item(&item, run, state);
         out.push(ItemReport {
             source: item.source.path.clone(),
             dest: item.dest.clone(),
@@ -210,22 +211,123 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
             action,
             detail,
         });
+        if sudo {
+            queued.push((out.len() - 1, item));
+        }
+    }
+    if !queued.is_empty() {
+        run_sudo(&queued, run, state, &mut out);
     }
     out
 }
 
+/// Executes one item. For a `sudo` deploy it writes only the cache entry;
+/// the bool says that the destination waits for the sudo helper.
+fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Option<String>, bool) {
+    let (action, detail) = predict(item, run.policy);
+    if run.stop.load(Ordering::SeqCst) {
+        let why = "interrupted before this item; nothing changed";
+        return (Action::Fail, Some(why.into()), false);
+    }
+    let (done, sudo) = match &item.step {
+        Step::Deploy(_) if matches!(action, Action::Conflict | Action::Skip | Action::Fail) => {
+            return (action, detail, false);
+        }
+        Step::Deploy(d) if d.sudo => (apply_cache(d, item, run), true),
+        Step::Deploy(d) => (apply(d, item, run, state), false),
+        Step::Unfold { path, observed } => (unfold(path, observed, &item.dest, state).map(|()| None), false),
+        Step::Blocked { .. } | Step::Failed(_) => return (action, detail, false),
+    };
+    match done {
+        Ok(extra) => (action, extra.or(detail), sudo),
+        Err(e) => (Action::Fail, Some(crate::plan::with_privilege_hint(e)), false),
+    }
+}
+
+/// Writes the queued destinations through one sudo helper call, then
+/// records each success and reports each failure.
+fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mut [ItemReport]) {
+    let deploys: Vec<(usize, &PlanItem, &Deploy)> = queued
+        .iter()
+        .filter_map(|(index, item)| match &item.step {
+            Step::Deploy(d) => Some((*index, item, &**d)),
+            _ => None,
+        })
+        .collect();
+    let jobs: Vec<Job<&Deploy>> = deploys
+        .iter()
+        .map(|(_, item, d)| Job::Write {
+            deploy: *d,
+            policy: run.policy,
+            backup: backup_path(run, item, false),
+        })
+        .collect();
+    let results = sudo_batch(&jobs, run.stop, state);
+    for ((index, item, d), result) in deploys.into_iter().zip(results) {
+        sudo_report(&mut out[index], result, || {
+            state.entries.insert(item.dest.clone(), d.record.clone());
+        });
+    }
+}
+
+/// Runs the jobs through one sudo helper call and applies the directories
+/// it created or removed to `state`. A failed call fails every job.
+fn sudo_batch(
+    jobs: &[Job<&Deploy>],
+    stop: &AtomicBool,
+    state: &mut State,
+) -> Vec<std::result::Result<Option<String>, String>> {
+    let done = if stop.load(Ordering::SeqCst) {
+        Err(Error::Failed("interrupted before sudo; nothing changed".into()))
+    } else {
+        crate::sudo::call(jobs)
+    };
+    match done {
+        Ok(done) => done
+            .into_iter()
+            .map(|d| {
+                state.created_dirs.extend(d.created_dirs);
+                for dir in &d.removed_dirs {
+                    state.created_dirs.remove(dir);
+                }
+                d.result
+            })
+            .collect(),
+        Err(e) => vec![Err(e.to_string()); jobs.len()],
+    }
+}
+
+/// Puts one helper result into its report; `record` runs on success.
+fn sudo_report(report: &mut ItemReport, result: std::result::Result<Option<String>, String>, record: impl FnOnce()) {
+    match result {
+        Ok(extra) => {
+            record();
+            report.detail = extra.or(report.detail.take());
+        }
+        Err(why) => (report.action, report.detail) = (Action::Fail, Some(why)),
+    }
+}
+
+/// The cache entry first, so that a link to it never dangles; then the destination.
 fn apply(d: &Deploy, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
-    if let Some((existing, missing)) = &d.missing_dirs {
-        state
-            .created_dirs
-            .extend(fsops::create_dirs(existing, missing, d.dir_mode)?);
-    }
-    let mut detail = apply_cache(d, item, run)?;
-    if let Some(extra) = apply_dest(d, item, run)? {
-        detail = Some(extra);
-    }
-    verify(d)?;
+    let cached = apply_cache(d, item, run)?;
+    let mut created = Vec::new();
+    let written = write_dest(d, run.policy, &backup_path(run, item, false), &mut created);
+    state.created_dirs.extend(created);
+    let extra = written?;
     state.entries.insert(item.dest.clone(), d.record.clone());
+    Ok(extra.or(cached))
+}
+
+/// The destination part of a deploy: the missing directories (pushed to
+/// `created` as they appear), the planned change and the check after it.
+/// The sudo helper runs it as root.
+pub fn write_dest(d: &Deploy, policy: Policy, backup: &Path, created: &mut Vec<PathBuf>) -> Result<Option<String>> {
+    if let Some((existing, missing)) = &d.missing_dirs {
+        created.extend(fsops::create_dirs(existing, missing, d.dir_mode)?);
+    }
+    let detail = apply_dest(d, policy, backup)?;
+    verify(d)?;
     Ok(detail)
 }
 
@@ -247,11 +349,11 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
 
 /// Performs the planned destination decision (the caller already checked
 /// that the policy allows it); returns the backup note, if any.
-fn apply_dest(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+fn apply_dest(d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
     match d.decision {
         Decision::Create => create(d).map(|()| None),
         Decision::Update => update(d).map(|()| None),
-        Decision::Conflict(_) => replace_conflicting(d, item, run),
+        Decision::Conflict(_) => replace_conflicting(d, policy, backup),
         Decision::FixMetadata => fix_metadata(d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
@@ -264,9 +366,9 @@ fn update(d: &Deploy) -> Result<()> {
 }
 
 /// Moves away (backup) or removes the conflicting object, then creates.
-fn replace_conflicting(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
+fn replace_conflicting(d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
     recheck(&d.path, &d.observed)?;
-    let detail = clear_conflict(d, item, run)?;
+    let detail = clear_conflict(d, policy, backup)?;
     create(d)?;
     Ok(detail)
 }
@@ -297,9 +399,9 @@ fn fix_metadata(d: &Deploy) -> Result<()> {
 }
 
 /// Moves the conflicting destination to the backup dir, or removes it.
-fn clear_conflict(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>> {
-    if run.policy == Policy::Backup {
-        return backup(&d.path, &backup_path(run, item, false)).map(Some);
+fn clear_conflict(d: &Deploy, policy: Policy, to: &Path) -> Result<Option<String>> {
+    if policy == Policy::Backup {
+        return backup(&d.path, to).map(Some);
     }
     fs::remove_file(&d.path).map_err(|e| Error::Failed(format!("remove {}: {e}", d.path.display())))?;
     Ok(None)
@@ -367,30 +469,16 @@ fn verify(d: &Deploy) -> Result<()> {
 }
 
 /// Removes managed destinations and the empty directories rustow created for them.
+/// The `sudo` removals wait for one sudo helper call at the end.
 pub fn remove(removals: Vec<Removal>, stop: &AtomicBool, state: &mut State) -> Vec<ItemReport> {
     let mut out = Vec::with_capacity(removals.len());
+    let (mut jobs, mut slots) = (Vec::new(), Vec::new());
     for r in removals {
-        let (action, detail) = if stop.load(Ordering::SeqCst) {
-            (
-                Action::Fail,
-                Some("interrupted before this item; nothing changed".into()),
-            )
-        } else {
-            match &r.verdict {
-                Verdict::Keep(why) => (Action::Conflict, Some(why.clone())),
-                Verdict::Forget => {
-                    state.entries.remove(&r.dest);
-                    (Action::Forget, Some("already gone".into()))
-                }
-                Verdict::Remove(observed) => match remove_one(&r.path, observed, state) {
-                    Ok(()) => {
-                        state.entries.remove(&r.dest);
-                        (Action::Remove, None)
-                    }
-                    Err(e) => (Action::Fail, Some(e.to_string())),
-                },
-            }
-        };
+        let (action, detail, job) = remove_item(&r, stop, state);
+        if let Some(job) = job {
+            jobs.push(job);
+            slots.push((out.len(), r.dest.clone()));
+        }
         out.push(ItemReport {
             source: r.source,
             dest: r.dest,
@@ -399,17 +487,83 @@ pub fn remove(removals: Vec<Removal>, stop: &AtomicBool, state: &mut State) -> V
             detail,
         });
     }
+    if !jobs.is_empty() {
+        let results = sudo_batch(&jobs, stop, state);
+        for ((index, dest), result) in slots.into_iter().zip(results) {
+            sudo_report(&mut out[index], result, || {
+                state.entries.remove(&dest);
+            });
+        }
+    }
     out
 }
 
+/// Removes one item, or returns the sudo job that removes it.
+fn remove_item(
+    r: &Removal,
+    stop: &AtomicBool,
+    state: &mut State,
+) -> (Action, Option<String>, Option<Job<&'static Deploy>>) {
+    if stop.load(Ordering::SeqCst) {
+        let why = "interrupted before this item; nothing changed";
+        return (Action::Fail, Some(why.into()), None);
+    }
+    match &r.verdict {
+        Verdict::Keep(why) => (Action::Conflict, Some(why.clone()), None),
+        Verdict::Forget => {
+            state.entries.remove(&r.dest);
+            (Action::Forget, Some("already gone".into()), None)
+        }
+        Verdict::Remove(observed) if r.sudo => {
+            let created_dirs = r
+                .path
+                .ancestors()
+                .skip(1)
+                .take_while(|d| state.created_dirs.contains(*d))
+                .map(Path::to_path_buf)
+                .collect();
+            let job = Job::Remove {
+                path: r.path.clone(),
+                observed: observed.clone(),
+                created_dirs,
+            };
+            (Action::Remove, Some("via sudo".into()), Some(job))
+        }
+        Verdict::Remove(observed) => match remove_one(&r.path, observed, state) {
+            Ok(()) => {
+                state.entries.remove(&r.dest);
+                (Action::Remove, None, None)
+            }
+            Err(e) => (Action::Fail, Some(e.to_string()), None),
+        },
+    }
+}
+
 fn remove_one(path: &Path, observed: &Observed, state: &mut State) -> Result<()> {
+    let mut removed = Vec::new();
+    let done = remove_dest(path, observed, &state.created_dirs, &mut removed);
+    for dir in &removed {
+        state.created_dirs.remove(dir);
+    }
+    done
+}
+
+/// Removes `path`, which must still look like `observed`, then each empty
+/// directory above it that `created` lists (pushed to `removed`). The sudo
+/// helper runs it as root.
+pub fn remove_dest(
+    path: &Path,
+    observed: &Observed,
+    created: &BTreeSet<PathBuf>,
+    removed: &mut Vec<PathBuf>,
+) -> Result<()> {
     recheck(path, observed)?;
     fs::remove_file(path).map_err(|e| Error::Failed(format!("remove {}: {e}", path.display())))?;
     for dir in path.ancestors().skip(1) {
-        if !state.created_dirs.contains(dir) || fs::remove_dir(dir).is_err() {
+        if !created.contains(dir) || fs::remove_dir(dir).is_err() {
             break;
         }
-        state.created_dirs.remove(dir);
+        removed.push(dir.to_path_buf());
     }
     Ok(())
 }
@@ -422,7 +576,7 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
             let (action, detail) = match &r.verdict {
                 Verdict::Keep(why) => (Action::Conflict, Some(why.clone())),
                 Verdict::Forget => (Action::Forget, Some("already gone".into())),
-                Verdict::Remove(_) => (Action::Remove, None),
+                Verdict::Remove(_) => (Action::Remove, r.sudo.then(|| "via sudo".to_owned())),
             };
             ItemReport {
                 source: r.source.clone(),
@@ -492,6 +646,7 @@ mod tests {
             record: record(),
             detail: None,
             unwritable: None,
+            sudo: false,
         };
         Plan {
             items: vec![PlanItem {

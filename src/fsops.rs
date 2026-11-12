@@ -35,7 +35,7 @@ impl FileMeta {
 }
 
 /// What is at a path right now, seen without following a final symlink.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Observed {
     Missing,
     /// A symlink and its stored text (it may dangle).

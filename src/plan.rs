@@ -6,6 +6,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::config::{Backend, Metadata, Owner};
@@ -19,7 +20,7 @@ use crate::state::{Record, State};
 use crate::{cache, crypto, fold, template};
 
 /// What a path should be after deployment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Desired {
     /// A symlink with this exact text.
     Symlink(PathBuf),
@@ -37,7 +38,7 @@ pub enum Recorded<'a> {
     Copy(&'a Hash),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Conflict {
     /// Something rustow did not create is in the way.
     Unmanaged,
@@ -84,7 +85,7 @@ impl Conflict {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Decision {
     /// Already correct and recorded.
     UpToDate,
@@ -195,8 +196,9 @@ pub struct CacheWrite {
     pub decision: Decision,
 }
 
-/// Everything the executor needs to deploy one source.
-#[derive(Debug)]
+/// Everything the executor needs to deploy one source. A `sudo` deploy
+/// goes to the sudo helper as JSON, without its cache write.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Deploy {
     /// Real destination path (ancestor symlinks resolved).
     pub path: PathBuf,
@@ -212,12 +214,17 @@ pub struct Deploy {
     pub file_mode: u32,
     /// Owner and group for a regular-file destination (see `kept_owner`).
     pub file_owner: (Option<u32>, Option<u32>),
+    /// Written by the user's own process, also for a `sudo` deploy.
+    #[serde(skip)]
     pub cache: Option<CacheWrite>,
     pub record: Record,
     pub detail: Option<String>,
     /// Why the effective user cannot write the destination directory: the
     /// item fails before any write, but `diff` still shows its content.
     pub unwritable: Option<String>,
+    /// A system file that the user cannot write (or must give to another
+    /// owner): the executor writes it through the sudo helper (`needs_sudo`).
+    pub sudo: bool,
 }
 
 #[derive(Debug)]
@@ -622,7 +629,6 @@ fn dest_dir<'a>(path: &'a Path, missing_dirs: &'a MissingDirs) -> &'a Path {
 /// Why a decision that writes cannot write into the destination directory as
 /// the effective user. The plan carries it, so a dry run predicts the failure.
 fn unwritable(path: &Path, missing_dirs: &MissingDirs, decision: Decision) -> Option<String> {
-    use nix::unistd::{AccessFlags, faccessat};
     let writes = match decision {
         Decision::Create | Decision::Update => true,
         Decision::Conflict(c) => c.resolvable(),
@@ -632,13 +638,64 @@ fn unwritable(path: &Path, missing_dirs: &MissingDirs, decision: Decision) -> Op
         return None;
     }
     let dir = dest_dir(path, missing_dirs);
-    let access = AccessFlags::W_OK | AccessFlags::X_OK;
-    let errno = faccessat(nix::fcntl::AT_FDCWD, dir, access, nix::fcntl::AtFlags::AT_EACCESS).err()?;
+    let errno = dir_write_error(dir)?;
     let err = Error::Io {
         context: format!("cannot write to directory {}", dir.display()),
         source: errno.into(),
     };
     Some(with_privilege_hint(err))
+}
+
+/// Why the effective user cannot add or remove entries in `dir`.
+fn dir_write_error(dir: &Path) -> Option<nix::errno::Errno> {
+    use nix::unistd::{AccessFlags, faccessat};
+    let access = AccessFlags::W_OK | AccessFlags::X_OK;
+    faccessat(nix::fcntl::AT_FDCWD, dir, access, nix::fcntl::AtFlags::AT_EACCESS).err()
+}
+
+/// True when a system file must go and removing it, and the directories
+/// above it that rustow created (they go too when they are empty), needs a
+/// directory that the user cannot write. A home file never needs sudo.
+fn removal_needs_sudo(
+    scope: Scope,
+    verdict: &Verdict,
+    path: &Path,
+    created: &std::collections::BTreeSet<PathBuf>,
+) -> bool {
+    if scope != Scope::Root || !matches!(verdict, Verdict::Remove(_)) {
+        return false;
+    }
+    for dir in path.ancestors().skip(1) {
+        if dir_write_error(dir).is_some() {
+            return true;
+        }
+        if !created.contains(dir) {
+            return false;
+        }
+    }
+    false
+}
+
+/// The sudo rule: a system file that must change goes through the sudo
+/// helper when the user cannot write its directory, or when it must belong
+/// to another user or group. A home file never does: it keeps `unwritable`.
+fn needs_sudo(
+    scope: Scope,
+    decision: Decision,
+    unwritable: Option<String>,
+    owner: (Option<u32>, Option<u32>),
+) -> (Option<String>, bool) {
+    use nix::unistd::{getegid, geteuid};
+    let changes = match decision {
+        Decision::Create | Decision::Update | Decision::FixMetadata => true,
+        Decision::Conflict(c) => c.resolvable(),
+        Decision::UpToDate | Decision::Adopt => false,
+    };
+    let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| g != getegid().as_raw());
+    match scope {
+        Scope::Root if changes && (unwritable.is_some() || foreign) => (None, true),
+        _ => (unwritable, false),
+    }
 }
 
 /// Reads the destination; a failed read becomes a `Failed` step.
@@ -731,10 +788,15 @@ fn deploy_step(
         }
         decision => decision,
     };
-    let unwritable = unwritable(&path, &missing_dirs, decision);
     let detail = broken_link_detail(&path, &observed, decision);
     let file_mode = file_mode_for(&observed, &want);
     let file_owner = kept_owner(&observed, &want.desired);
+    let (unwritable, sudo) = needs_sudo(
+        source.scope,
+        decision,
+        unwritable(&path, &missing_dirs, decision),
+        file_owner,
+    );
     let cache = match want
         .cache
         .map(|(cache_path, bytes)| plan_cache(cache_path, bytes, record, !source.mode.is_copy()))
@@ -756,6 +818,7 @@ fn deploy_step(
         record: want.record,
         detail,
         unwritable,
+        sudo,
     })))
 }
 
@@ -981,7 +1044,7 @@ pub fn resolve_id(owner: &Owner, group: bool) -> std::result::Result<u32, String
 pub fn with_privilege_hint(err: Error) -> String {
     match &err {
         Error::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
-            format!("{err}; elevated privileges may be required (rustow never elevates itself)")
+            format!("{err}; elevated privileges may be required")
         }
         _ => err.to_string(),
     }
@@ -997,6 +1060,8 @@ pub struct Removal {
     /// Real path.
     pub path: PathBuf,
     pub verdict: Verdict,
+    /// A system file that the user cannot remove: the sudo helper removes it.
+    pub sudo: bool,
 }
 
 #[derive(Debug)]
@@ -1024,12 +1089,15 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
             continue;
         }
         let (path, observed) = observe_recorded(ctx, record, dest, rel)?;
+        let verdict = removal_verdict(observed, record);
+        let sudo = removal_needs_sudo(record.scope, &verdict, &path, &state.created_dirs);
         out.push(Removal {
             source: record.source.clone(),
             mode: shown_label(&record.mode, record.backend),
             dest: dest.clone(),
             path,
-            verdict: removal_verdict(observed, record),
+            verdict,
+            sudo,
         });
     }
     if out.is_empty() && !prefixes.is_empty() {
@@ -1086,6 +1154,32 @@ fn observe_recorded(ctx: &Context, record: &Record, dest: &Path, rel: &Path) -> 
 mod tests {
     use super::*;
     use Decision::*;
+
+    #[test]
+    fn only_a_changing_system_file_needs_sudo() {
+        let why = || Some("cannot write".to_owned());
+        let me = (
+            Some(nix::unistd::geteuid().as_raw()),
+            Some(nix::unistd::getegid().as_raw()),
+        );
+        let other = (Some(me.0.unwrap() + 1), me.1);
+        let other_group = (me.0, Some(me.1.unwrap() + 1));
+        assert_eq!(needs_sudo(Scope::Root, Create, why(), (None, None)), (None, true));
+        assert_eq!(needs_sudo(Scope::Root, Update, None, other), (None, true));
+        assert_eq!(needs_sudo(Scope::Root, FixMetadata, None, other_group), (None, true));
+        let replace = Conflict(super::Conflict::Modified);
+        assert_eq!(needs_sudo(Scope::Root, replace, why(), me), (None, true));
+        assert_eq!(needs_sudo(Scope::Root, Create, None, me), (None, false));
+        assert_eq!(needs_sudo(Scope::Root, UpToDate, why(), other), (why(), false));
+        assert_eq!(needs_sudo(Scope::Root, Adopt, None, other), (None, false));
+        let blocked = Conflict(super::Conflict::Directory);
+        assert_eq!(needs_sudo(Scope::Root, blocked, why(), other), (why(), false));
+        assert_eq!(
+            needs_sudo(Scope::Home, Create, why(), other),
+            (why(), false),
+            "home never"
+        );
+    }
 
     fn h(s: &str) -> Hash {
         Hash::of(s.as_bytes())

@@ -109,6 +109,9 @@ pub enum Command {
     State(StateCommand),
     /// Encrypt a repository source in place (age by default), or `enc edit` an encrypted source
     Enc(EncArgs),
+    /// Internal: writes system files as root for a rustow run that started it through sudo
+    #[command(name = "__sudo-helper", hide = true)]
+    SudoHelper,
     /// Print a shell completion script
     Completions {
         #[arg(value_enum)]

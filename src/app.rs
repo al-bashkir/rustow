@@ -43,18 +43,21 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::State(c) => state_cmd(g, &env, p, c),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
         Command::Completions { shell } => completions(shell),
+        Command::SudoHelper => crate::sudo::serve(),
     }
 }
 
 /// Under `sudo`, HOME and the state directory are root's: rustow would put
 /// the user's dotfiles into root's home. An explicit `--target` is a real
-/// root setup; `completions` touches no files.
+/// root setup; `completions` touches no files, and the sudo helper is
+/// started through sudo on purpose.
 fn refuse_sudo(cli: &Cli, sudo_user: Option<&str>) -> Result<()> {
-    let completions = matches!(cli.command, Some(Command::Completions { .. }));
+    let exempt = matches!(cli.command, Some(Command::Completions { .. } | Command::SudoHelper));
     match sudo_user {
-        Some(user) if !completions && cli.global.target.is_none() => Err(Error::Usage(format!(
+        Some(user) if !exempt && cli.global.target.is_none() => Err(Error::Usage(format!(
             "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of {user}; \
-             run rustow as {user} (pass --target to deploy into root's home on purpose)"
+             run rustow as {user}: it asks for sudo when a system file needs it \
+             (pass --target to deploy into root's home on purpose)"
         ))),
         _ => Ok(()),
     }
