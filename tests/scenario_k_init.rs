@@ -196,6 +196,20 @@ fn custom_cache_dir_is_created_and_ignored() {
 }
 
 #[test]
+fn cache_dir_with_glob_characters_is_escaped_once() {
+    let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n[defaults]\ncache_dir = \"c[1]\"\n");
+    let out = fx.ok(&["init"]);
+    assert!(out.stdout.contains("/c\\[1]/"), "{out:?}");
+    let want = "/.rustowcache/\n/c\\[1]/\n";
+    assert_eq!(read(&fx.repo.join(".gitignore")), want);
+    assert_eq!(read(&fx.repo.join(".rustowignore")), want);
+    fx.ok(&["init"]);
+    assert_eq!(read(&fx.repo.join(".gitignore")), want);
+    assert_eq!(read(&fx.repo.join(".rustowignore")), want);
+}
+
+#[test]
 fn cache_dir_through_symlinked_home_or_repo_is_ignored() {
     // HOME behind a symlink, as with /home -> /var/home on Fedora Atomic.
     let fx = Fixture::new();

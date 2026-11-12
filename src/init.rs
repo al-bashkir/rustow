@@ -71,7 +71,7 @@ fn init_ignore_file(root: &Path, name: &str, dirs: &[RelPath], dry_run: bool, ch
     for dir in dirs {
         if let Some(updated) = edit::ensure_ignore_entry(&text, dir) {
             text = updated;
-            added.push(format!("/{dir}/"));
+            added.push(edit::ignore_entry(dir));
         }
     }
     if added.is_empty() {

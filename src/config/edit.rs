@@ -50,8 +50,22 @@ pub fn ensure_ignore_entry(text: &str, dir: &RelPath) -> Option<String> {
     if !out.is_empty() && !out.ends_with('\n') {
         out.push_str(nl);
     }
-    out.push_str(&format!("/{dir}/{nl}"));
+    out.push_str(&format!("{}{nl}", ignore_entry(dir)));
     Some(out)
+}
+
+/// The anchored gitignore entry `/<dir>/`, glob characters escaped. It
+/// ends with '/', so no space in it is trailing.
+pub fn ignore_entry(dir: &RelPath) -> String {
+    let mut entry = String::from("/");
+    for c in dir.as_str().chars() {
+        if matches!(c, '\\' | '*' | '?' | '[') {
+            entry.push('\\');
+        }
+        entry.push(c);
+    }
+    entry.push('/');
+    entry
 }
 
 /// Adds a `[[files]]` entry for `source`. `None` when already registered.
@@ -264,6 +278,25 @@ mod tests {
             ensure_ignore_entry("a\r\nb\r\n", &cache()).unwrap(),
             "a\r\nb\r\n/.rustowcache/\r\n"
         );
+    }
+
+    #[test]
+    fn ignore_entry_escapes_glob_characters() {
+        for (name, entry) in [
+            ("c[1]", "/c\\[1]/\n"),
+            ("a*b", "/a\\*b/\n"),
+            ("a?b", "/a\\?b/\n"),
+            ("a\\b", "/a\\\\b/\n"),
+            ("v/#x/!y z", "/v/#x/!y z/\n"),
+        ] {
+            let dir = RelPath::parse(name).unwrap();
+            let out = ensure_ignore_entry("", &dir).unwrap();
+            assert_eq!(out, entry, "{name}");
+            assert_eq!(ensure_ignore_entry(&out, &dir), None, "{name}");
+        }
+        // Unescaped, "[1]" is a character class that does not match "c[1]".
+        let out = ensure_ignore_entry("/c[1]/\n", &RelPath::parse("c[1]").unwrap()).unwrap();
+        assert_eq!(out, "/c[1]/\n/c\\[1]/\n");
     }
 
     #[test]
