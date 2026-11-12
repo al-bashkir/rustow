@@ -256,6 +256,8 @@ fn open_encrypted(ctx: &Context, arg: &str) -> Result<Opened> {
     if !fs::symlink_metadata(&abs).is_ok_and(|m| m.is_file()) {
         return Err(Error::Usage(format!("'{rel}' is not a regular file in the repository")));
     }
+    // Fail before any plaintext exists when the edit could not be encrypted again.
+    crypto::check_recipients(backend, ctx)?;
     let original = fsops::read_file(&abs)?;
     let original_hash = Hash::of(&original);
     let plaintext = crypto::decrypt(backend, &rel, &original, ctx).map_err(Error::Failed)?;

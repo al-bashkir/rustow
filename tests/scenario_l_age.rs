@@ -300,6 +300,25 @@ fn edit_of_foreign_ciphertext_with_other_recipient_count_reencrypts() {
     assert_eq!(fs::read(&ct2).unwrap(), before2);
 }
 
+/// Audit E4: invalid recipients fail before decryption and before the
+/// editor runs, so no plaintext is left in the cache.
+#[test]
+fn edit_checks_recipients_before_the_editor_runs() {
+    let fx = Fixture::new();
+    let key = fx.age_key("main");
+    fx.age_config(&[], &[&key], "");
+    let ct = fx.age_encrypt("s.age", "v1\n", &[&key]);
+    let before = fs::read(&ct).unwrap();
+    let marker = fx.base.join("editor-ran");
+    let editor = fx.editor("ed", &format!("touch '{}'\nprintf 'v2\\n' > \"$1\"", marker.display()));
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("encryption.recipients is empty"), "{out:?}");
+    assert!(!marker.exists(), "the editor ran");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert!(fx.workspaces().is_empty(), "plaintext left in the cache");
+}
+
 /// Audit E1: a symlinked parent directory must not lead `enc` or
 /// `enc edit` to files outside the repository.
 #[test]

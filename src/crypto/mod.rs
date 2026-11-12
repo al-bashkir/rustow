@@ -120,25 +120,42 @@ pub fn encrypt(backend: Backend, plaintext: &[u8], ctx: &Context) -> Result<Vec<
             age::encrypt(plaintext, &recipients).map_err(Error::Failed)
         }
         Backend::Gpg => {
-            let configured = &ctx.config.encryption.gpg.recipients;
-            if configured.is_empty() {
-                return Err(Error::Config(
-                    "encryption.gpg.recipients is empty; add full key fingerprints".into(),
-                ));
-            }
-            let fingerprints = configured
-                .iter()
-                .enumerate()
-                .map(|(i, f)| gpg::parse_fingerprint(f).map_err(|e| format!("encryption.gpg.recipients[{i}]: {e}")))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(Error::Config)?;
+            let fingerprints = gpg_recipients(ctx)?;
             let gpg = gpg(ctx).map_err(Error::Failed)?;
-            for f in &fingerprints {
-                gpg.resolve(f).map_err(Error::Failed)?;
-            }
             gpg.encrypt(plaintext, &fingerprints).map_err(Error::Failed)
         }
     }
+}
+
+/// Checks the configured recipients of `backend` as `encrypt` does, without encrypting.
+pub fn check_recipients(backend: Backend, ctx: &Context) -> Result<()> {
+    match backend {
+        Backend::Age => age::parse_recipients(&ctx.config.encryption.recipients)
+            .map(drop)
+            .map_err(Error::Config),
+        Backend::Gpg => gpg_recipients(ctx).map(drop),
+    }
+}
+
+/// The configured GPG fingerprints, each resolved in the local keyring.
+fn gpg_recipients(ctx: &Context) -> Result<Vec<String>> {
+    let configured = &ctx.config.encryption.gpg.recipients;
+    if configured.is_empty() {
+        return Err(Error::Config(
+            "encryption.gpg.recipients is empty; add full key fingerprints".into(),
+        ));
+    }
+    let fingerprints = configured
+        .iter()
+        .enumerate()
+        .map(|(i, f)| gpg::parse_fingerprint(f).map_err(|e| format!("encryption.gpg.recipients[{i}]: {e}")))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::Config)?;
+    let gpg = gpg(ctx).map_err(Error::Failed)?;
+    for f in &fingerprints {
+        gpg.resolve(f).map_err(Error::Failed)?;
+    }
+    Ok(fingerprints)
 }
 
 /// Decrypts fresh ciphertext and compares it with `plaintext` when a

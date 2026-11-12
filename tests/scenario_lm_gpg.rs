@@ -226,6 +226,24 @@ fn edit_of_foreign_gpg_ciphertext_with_other_recipient_count_reencrypts() {
     assert_eq!(String::from_utf8_lossy(&listed.stdout).matches("ENC_TO").count(), 2);
 }
 
+/// Audit E4: empty GPG recipients fail before the editor runs, so no
+/// plaintext is left in the cache.
+#[test]
+fn edit_with_empty_gpg_recipients_fails_before_the_editor() {
+    let Some((fx, home)) = setup("") else { return };
+    let ct = fx.gpg_encrypt("s.gpg", "v1\n", &home);
+    let before = fs::read(&ct).unwrap();
+    fx.gpg_config(&home, &[], "");
+    let marker = fx.base.join("editor-ran");
+    let editor = fx.editor("ed", &format!("touch '{}'\nprintf 'v2\\n' > \"$1\"", marker.display()));
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("encryption.gpg.recipients is empty"), "{out:?}");
+    assert!(!marker.exists(), "the editor ran");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert!(fx.workspaces().is_empty(), "plaintext left in the cache");
+}
+
 /// Audit E2: `enc edit` may prompt only with --interactive. Unattended,
 /// a locked key fails clearly and pinentry never starts.
 #[test]
