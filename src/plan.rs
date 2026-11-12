@@ -486,24 +486,27 @@ fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &Stat
                 detail,
             }
         }
-        (ParentState::Ready(parent), true) => {
-            let path = parent.join(dir.file_name());
-            match fsops::inspect(&path)? {
-                observed @ Observed::Symlink(_) if Some(&observed) == link.map(Observed::Symlink).as_ref() => {
-                    Step::Unfold { path, observed }
-                }
-                _ => Step::Blocked {
-                    conflict: Conflict::Unmanaged,
-                    detail: "folded link changed".into(),
-                },
-            }
-        }
+        (ParentState::Ready(parent), true) => unfold_step(parent.join(dir.file_name()), link)?,
         _ => Step::Blocked {
             conflict: Conflict::ParentBlocked,
             detail: dest.display().to_string(),
         },
     };
     Ok(PlanItem { source, dest, step })
+}
+
+/// Unfolds `path` only when it is still the link rustow recorded. `fold`
+/// checked this already; a mismatch means the link changed during planning.
+fn unfold_step(path: PathBuf, link: Option<PathBuf>) -> Result<Step> {
+    Ok(match fsops::inspect(&path)? {
+        observed @ Observed::Symlink(_) if Some(&observed) == link.map(Observed::Symlink).as_ref() => {
+            Step::Unfold { path, observed }
+        }
+        _ => Step::Blocked {
+            conflict: Conflict::Unmanaged,
+            detail: "folded link changed".into(),
+        },
+    })
 }
 
 /// Real destination path and the directories to create for it. Below an
