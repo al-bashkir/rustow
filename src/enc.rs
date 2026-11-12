@@ -19,6 +19,7 @@ use crate::hash::Hash;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Printer};
+use crate::source;
 use crate::state::{EncRecord, State};
 
 /// Shown after every encryption: at-rest encryption is not erasure.
@@ -151,8 +152,22 @@ fn report_encrypted(rel: &RelPath, sealed: &Sealed, migrated: bool, printer: &Pr
     printer.notice(HISTORY_NOTE);
 }
 
+/// Checks each parent directory of `rel` as discovery does, so that no
+/// symlink leads out of the repository.
+fn check_parents(ctx: &Context, rel: &RelPath) -> Result<()> {
+    let text = rel.as_str();
+    for (end, _) in text.match_indices('/') {
+        let parent = RelPath::parse(&text[..end])?;
+        if let Ok(meta) = fs::symlink_metadata(ctx.root.join(parent.as_path())) {
+            source::check_kind(&parent, meta.file_type())?;
+        }
+    }
+    Ok(())
+}
+
 fn check_plain_source(ctx: &Context, rel: &RelPath, abs: &Path) -> Result<()> {
     let usage = |why: &str| Err(Error::Usage(format!("'{rel}' {why}")));
+    check_parents(ctx, rel)?;
     if ctx.ignore.is_reserved(rel, abs.is_dir()) {
         return usage("is reserved by rustow and cannot be encrypted");
     }
@@ -235,6 +250,7 @@ fn open_encrypted(ctx: &Context, arg: &str) -> Result<Opened> {
     let backend = suffix_backend(&rel)
         .ok_or_else(|| Error::Usage(format!("'{rel}' is not an encrypted source (*.age or *.gpg)")))?;
     let abs = ctx.root.join(rel.as_path());
+    check_parents(ctx, &rel)?;
     if !fs::symlink_metadata(&abs).is_ok_and(|m| m.is_file()) {
         return Err(Error::Usage(format!("'{rel}' is not a regular file in the repository")));
     }
