@@ -92,13 +92,18 @@ fn custom_patterns_and_negation() {
 #[test]
 fn ignore_applies_to_root_relative_files_and_templates() {
     let fx = Fixture::new();
+    // The ignored system file is not registered: it is skipped before the copy-only check.
     fx.write(".rustowignore", "/.rustowroot/etc/secret.conf\n*.tmpl\n");
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[[files]]\nsource = \".rustowroot/etc/public.conf\"\n",
+    );
     fx.write(".rustowroot/etc/secret.conf", "s");
     fx.write(".rustowroot/etc/public.conf", "p");
     fx.write(".gitconfig.tmpl", "{{ undefined_would_fail }}");
     fx.ok(&["apply"]);
     assert!(!fx.root_path("etc/secret.conf").exists());
-    assert!(is_symlink(&fx.root_path("etc/public.conf")));
+    assert!(is_regular(&fx.root_path("etc/public.conf")));
     assert!(!fx.home_path(".gitconfig").exists());
 }
 

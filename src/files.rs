@@ -12,10 +12,11 @@ use crate::fsops;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Printer};
-use crate::source::{Discovery, Mode, classify};
+use crate::source::{Discovery, Mode, classify, classify_unscoped, discover};
 
 pub fn add(ctx: &Context, printer: &Printer, paths: &[String], dry_run: bool) -> Result<i32> {
-    let discovery = ctx.discover()?;
+    // Unscoped: an unregistered system file is a deploy error, but here it is what gets registered.
+    let discovery = discover(&ctx.root, &ctx.ignore, &ctx.config, classify_unscoped)?;
     let (mut text, mode) = read_config(ctx)?;
     let mut changes = Vec::new();
     for arg in paths {

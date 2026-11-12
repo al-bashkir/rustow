@@ -405,7 +405,7 @@ fn selective_apply_folds_only_fully_selected_directories() {
 /// same relative path.
 #[test]
 fn collisions_elsewhere_do_not_block_a_home_fold() {
-    let fx = nvim(FOLD);
+    let fx = nvim(&format!("{FOLD}[[files]]\nsource = \".rustowroot/.config/nvim/x\"\n"));
     fx.write("c", "c\n");
     fx.write("c.tmpl", "t\n");
     fx.write(".rustowroot/.config/nvim/x", "x\n");

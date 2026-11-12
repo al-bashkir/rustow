@@ -41,8 +41,9 @@ pub enum Owner {
     Id(u32),
 }
 
-/// Explicit file metadata of a template rule. At least one field is set.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Explicit file metadata of a template rule; a rule sets at least one
+/// field. The empty value is only for a system template without a rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Metadata {
     pub mode: Option<u32>,
     pub owner: Option<Owner>,

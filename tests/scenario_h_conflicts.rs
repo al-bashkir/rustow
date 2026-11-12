@@ -215,6 +215,25 @@ fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
     );
 }
 
+/// Review I5: a home symlink into a source that others can modify is
+/// refused, as for cache-backed links. (A group-writable directory may be
+/// trusted in a user-private group; see the next test.)
+#[test]
+fn home_link_into_writable_source_tree_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(".config/app/x.conf", "x");
+    let dir = fx.repo.join(".config/app");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o757)).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("writable by others"), "{out:?}");
+    assert!(!fx.home_path(".config/app/x.conf").exists());
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".config/app/x.conf")));
+}
+
 /// With umask 002, a repository is group-writable. That is trusted only
 /// when the group is the user's private group (named like the user, no
 /// other members); a shared primary group, as on some CI runners, is not.

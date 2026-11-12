@@ -151,9 +151,10 @@ impl std::fmt::Display for Collision {
     }
 }
 
-/// Walks the repository and classifies every non-ignored file. Also checks
-/// that each registration and template rule names a deployable source.
-pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery> {
+/// Walks the repository and classifies every non-ignored file with
+/// `classify`. Also checks that each registration and template rule names
+/// a deployable source.
+pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, classify: Classifier) -> Result<Discovery> {
     let mut out = Discovery::default();
     let mut walker = walkdir::WalkDir::new(repo)
         .min_depth(1)
@@ -163,7 +164,7 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery>
     while let Some(entry) = walker.next() {
         let entry = entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
         let rel = repo_relative(repo, entry.path())?;
-        if visit_entry(rel, entry.file_type(), ignore, cfg, &mut out)? {
+        if visit_entry(rel, entry.file_type(), ignore, cfg, classify, &mut out)? {
             walker.skip_current_dir();
         }
     }
@@ -177,6 +178,7 @@ fn visit_entry(
     file_type: std::fs::FileType,
     ignore: &Ignore,
     cfg: &Config,
+    classify: Classifier,
     out: &mut Discovery,
 ) -> Result<bool> {
     if ignore.is_ignored(&rel, file_type.is_dir()) {
@@ -246,8 +248,21 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, sources: &[So
     Ok(())
 }
 
-/// Classifies one deployable repository file (spec §5 steps 3–8).
+/// How discovery classifies each file: `classify` or `classify_unscoped`.
+pub type Classifier = fn(&RelPath, &Config) -> Result<Source>;
+
+/// Classifies one deployable repository file (spec §5 steps 3–8), with
+/// the scope rule applied: the mode it deploys with.
 pub fn classify(path: &RelPath, cfg: &Config) -> Result<Source> {
+    let source = classify_unscoped(path, cfg)?;
+    let mode =
+        scoped_mode(source.scope, source.mode, path).map_err(|why| Error::Config(format!("source '{path}': {why}")))?;
+    Ok(Source { mode, ..source })
+}
+
+/// The mode from the suffixes and the configuration, before the scope
+/// rule. `rustow file add` uses it to register an unregistered system file.
+pub fn classify_unscoped(path: &RelPath, cfg: &Config) -> Result<Source> {
     let bad = |why: &str| Error::Config(format!("source '{path}': {why}"));
     let (scope, inner) = split_scope(path)?;
     let (backend, template, name) = split_suffixes(inner.file_name(), &cfg.template_extension).map_err(bad)?;
@@ -258,6 +273,20 @@ pub fn classify(path: &RelPath, cfg: &Config) -> Result<Source> {
         dest: inner.with_file_name(name),
         mode,
     })
+}
+
+/// The one scope rule: a system file never deploys as a symlink. A link
+/// into a private cache is unusable for other users, and a link into a
+/// user-writable repository is unsafe. A template without a rule becomes
+/// a copy with no explicit metadata; any other file must be registered.
+fn scoped_mode(scope: Scope, mode: Mode, path: &RelPath) -> std::result::Result<Mode, String> {
+    match (scope, mode) {
+        (Scope::Root, Mode::TemplateLink(b)) => Ok(Mode::TemplateCopy(b, Metadata::default())),
+        (Scope::Root, Mode::Link | Mode::DecryptLink(_)) => Err(format!(
+            "system files deploy only as copies; register it with `rustow file add {path}`"
+        )),
+        (_, mode) => Ok(mode),
+    }
 }
 
 /// Splits off the `.rustow-root/` prefix: the scope and the path below it.
@@ -415,7 +444,7 @@ mod tests {
 
     fn run(dir: &tempfile::TempDir, c: &Config) -> Result<Discovery> {
         let ig = Ignore::load(dir.path(), vec![]).unwrap();
-        discover(dir.path(), &ig, c)
+        discover(dir.path(), &ig, c, classify)
     }
 
     fn paths(d: &Discovery) -> Vec<&str> {
@@ -445,6 +474,36 @@ mod tests {
         );
         // A plaintext template whose output is named *.age is not encrypted.
         assert_eq!(mode_of("x.age.tmpl", &c), Mode::TemplateLink(None));
+    }
+
+    #[test]
+    fn root_sources_never_link() {
+        let c = cfg("[[files]]\nsource = \".rustowroot/etc/c\"\n\
+             [[template_rules]]\nsource = \".rustowroot/etc/r.tmpl\"\nmode = \"0600\"\n");
+        let rule = c.template_rules[&rel(".rustowroot/etc/r.tmpl")].clone();
+        let none = Metadata::default();
+        assert_eq!(
+            mode_of(".rustowroot/etc/t.tmpl", &c),
+            Mode::TemplateCopy(None, none.clone())
+        );
+        assert_eq!(
+            mode_of(".rustowroot/etc/t.tmpl.age", &c),
+            Mode::TemplateCopy(Some(Backend::Age), none)
+        );
+        assert_eq!(mode_of(".rustowroot/etc/r.tmpl", &c), Mode::TemplateCopy(None, rule));
+        assert_eq!(mode_of(".rustowroot/etc/c", &c), Mode::FileCopy);
+        for p in [".rustowroot/etc/l", ".rustowroot/etc/l.gpg"] {
+            let e = classify(&rel(p), &c).unwrap_err();
+            assert_eq!(e.exit_code(), 2);
+            assert_eq!(
+                e.to_string(),
+                format!("source '{p}': system files deploy only as copies; register it with `rustow file add {p}`")
+            );
+            assert!(
+                !classify_unscoped(&rel(p), &c).unwrap().mode.is_copy(),
+                "file add sees the link mode"
+            );
+        }
     }
 
     #[test]
@@ -566,7 +625,7 @@ mod tests {
         ]);
         fs::write(dir.path().join(".rustow.toml"), "version = 1\n").unwrap();
         fs::write(dir.path().join(".rustowignore"), "*.swp\nprivate/\n").unwrap();
-        let d = run(&dir, &cfg("")).unwrap();
+        let d = run(&dir, &cfg("[[files]]\nsource = \".rustowroot/etc/x.conf\"\n")).unwrap();
         assert_eq!(
             paths(&d),
             [".bashrc", ".config/nvim/init.lua", ".rustowroot/etc/x.conf", ".zshrc"]

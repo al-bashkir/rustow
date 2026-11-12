@@ -176,9 +176,10 @@ fn plaintext_to_encrypted_transition_retargets_own_link() {
 
 #[test]
 fn root_scope_encrypted_source_under_temp_root() {
-    let (fx, key) = keyed("");
+    let (fx, key) = keyed("[[files]]\nsource = \".rustowroot/etc/example/secret.conf.age\"\n");
     fx.age_encrypt(".rustowroot/etc/example/secret.conf.age", "root secret\n", &[&key]);
     fx.ok(&["apply"]);
+    assert!(is_regular(&fx.root_path("etc/example/secret.conf")));
     assert_eq!(read(&fx.root_path("etc/example/secret.conf")), "root secret\n");
 }
 

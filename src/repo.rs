@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore};
 use crate::paths::{RelPath, Scope, expand_tilde};
-use crate::source::{Discovery, Source, discover};
+use crate::source::{Discovery, Source, classify, discover};
 
 /// Values from the command line that select the repository and targets.
 #[derive(Debug, Clone, Default)]
@@ -111,7 +111,7 @@ impl Context {
     }
 
     pub fn discover(&self) -> Result<Discovery> {
-        discover(&self.root, &self.ignore, &self.config)
+        discover(&self.root, &self.ignore, &self.config, classify)
     }
 
     pub fn target_root(&self, scope: Scope) -> &Path {
@@ -706,7 +706,7 @@ mod tests {
     fn root_scope_dest_uses_root_target() {
         let f = fx();
         fs::create_dir_all(f.base.join("home/dot/.rustowroot/etc")).unwrap();
-        fs::write(f.base.join("home/dot/.rustowroot/etc/x.conf"), "").unwrap();
+        fs::write(f.base.join("home/dot/.rustowroot/etc/x.conf.tmpl"), "").unwrap();
         let opts = GlobalOpts {
             root_target: Some(f.base.join("root")),
             ..Default::default()
