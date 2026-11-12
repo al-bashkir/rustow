@@ -885,7 +885,11 @@ fn want_template(
     };
     let text = std::str::from_utf8(&plaintext).map_err(|_| format!("template {} is not valid UTF-8", source.path))?;
     let context = template::context(&ctx.config.vars, &ctx.home_target);
-    let rendered = template::render(source.path.as_str(), text, &context)?;
+    // Only plaintext templates have a meta block (it was read at discovery).
+    let rendered = match backend {
+        Some(_) => template::render(source.path.as_str(), text, &context)?,
+        None => template::render_plain(source.path.as_str(), text, &context)?,
+    };
     let record = Record {
         render_id: Some(template::render_id(&plaintext, &context)),
         ..record

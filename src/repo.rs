@@ -143,8 +143,17 @@ impl Context {
 
     /// Skipped files and entries that `args` select, as for `select`.
     pub fn skipped<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
+        self.within(discovery, &discovery.skipped, args)
+    }
+
+    /// Templates that are not for this host and that `args` select, as for `select`.
+    pub fn inactive<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
+        self.within(discovery, &discovery.inactive, args)
+    }
+
+    fn within<'a>(&self, discovery: &Discovery, list: &'a [Skipped], args: &[String]) -> Result<Vec<&'a Skipped>> {
         let wanted = self.wanted(discovery, args)?;
-        Ok(discovery.skipped.iter().filter(|s| covers(&wanted, &s.path)).collect())
+        Ok(list.iter().filter(|s| covers(&wanted, &s.path)).collect())
     }
 
     /// The checked path prefixes of `args`; none selects everything.

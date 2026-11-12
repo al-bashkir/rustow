@@ -230,10 +230,20 @@ pub fn status(
                 dest: Some(dest.clone()),
                 mode: shown_label(&record.mode, record.backend),
                 status: "ORPHANED",
-                detail: Some(orphan_detail(record)),
+                detail: Some(orphan_detail(discovery, record)),
             }),
     );
-    rows.extend(ctx.skipped(discovery, args)?.into_iter().map(|s| Row {
+    // An inactive template that is already an ORPHANED row gets no second row.
+    let orphaned: Vec<String> = rows
+        .iter()
+        .filter(|r| r.status == "ORPHANED")
+        .map(|r| r.source.clone())
+        .collect();
+    let inactive = ctx
+        .inactive(discovery, args)?
+        .into_iter()
+        .filter(|s| !orphaned.contains(&s.path.to_string()));
+    rows.extend(ctx.skipped(discovery, args)?.into_iter().chain(inactive).map(|s| Row {
         source: s.path.to_string(),
         dest: None,
         mode: String::new(),
@@ -391,8 +401,14 @@ fn orphans<'a>(
 
 /// Names the command that removes one orphaned destination (`undeploy`
 /// with no path would remove every managed destination).
-fn orphan_detail(record: &Record) -> String {
-    format!("source removed; `rustow undeploy {}` removes it", record.source)
+/// A template whose meta condition turned false names that condition.
+fn orphan_detail(discovery: &Discovery, record: &Record) -> String {
+    let why = discovery
+        .inactive
+        .iter()
+        .find(|s| s.path == record.source)
+        .map_or("source removed", |s| s.reason.as_str());
+    format!("{why}; `rustow undeploy {}` removes it", record.source)
 }
 
 /// Report lines for the orphaned destinations a deploy command covers.
@@ -413,7 +429,7 @@ pub fn orphan_reports(
             dest: dest.clone(),
             mode: shown_label(&record.mode, record.backend),
             action: Action::Orphaned,
-            detail: Some(orphan_detail(record)),
+            detail: Some(orphan_detail(discovery, record)),
         })
         .collect())
 }
@@ -439,7 +455,7 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
     {
         let bytes = fsops::read_file(&ctx.root.join(s.path.as_path()))?;
         let text = String::from_utf8_lossy(&bytes);
-        if let Err(e) = template::render(s.path.as_str(), &text, &context) {
+        if let Err(e) = template::render_plain(s.path.as_str(), &text, &context) {
             findings.push(e);
         }
     }

@@ -19,7 +19,7 @@ rustow never runs `sudo`. To write to `/etc` you must start rustow with the need
 A system file never deploys as a symlink. A symlink into a private cache is unusable: cache directories have mode 0700 and cache files 0600, so other programs get "Permission denied". A symlink into a user-writable repository or cache is unsafe: that user can change a system file.
 
 - A template without a `[[template_rules]]` entry deploys as `template+copy`. A new file gets mode 0644, or 0600 when the template is encrypted. An update keeps the mode, owner and group of the existing file.
-- A template with a rule deploys as `template+copy` with the metadata of the rule.
+- A template with a rule deploys as `template+copy` with the metadata of the rule. Settings in the template's [meta block](templates.md#meta-block), such as `{%- meta.user = "root" %}`, do the same without a rule.
 - An ordinary or encrypted file must be registered with `rustow file add`. It then deploys as `copy` or `decrypt+copy`.
 - An ordinary or encrypted file that is not registered does not deploy. rustow skips it and deploys the other sources. The exit code does not change. The warning tells you what to do: "warning: .rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". `status` shows the file as SKIPPED. You can leave a file unregistered on purpose.
 - A command that names such a file, for example `rustow apply .rustowroot/etc/x`, stops with exit 2: "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". A directory argument, for example `.rustowroot/etc/`, only warns.
