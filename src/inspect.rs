@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::config::CONFIG_FILE;
 use crate::diff;
 use crate::error::Result;
 use crate::execute::{Action, ItemReport};
 use crate::fsops::{self, FileMeta, Observed};
 use crate::paths::RelPath;
-use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step};
+use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::Printer;
 use crate::source::{Discovery, Mode, Selector, check_collisions, shown_label};
@@ -382,14 +383,15 @@ pub fn orphan_reports(
 }
 
 /// Offline validation: discovery (configuration, ignore rules,
-/// registrations), destination collisions and plaintext template
-/// rendering. Never decrypts. Exit 0 clean, 1 findings.
+/// registrations), destination collisions, owner and group names and
+/// plaintext template rendering. Never decrypts. Exit 0 clean, 1 findings.
 pub fn check(ctx: &Context, printer: &Printer) -> Result<i32> {
     let discovery = ctx.discover()?;
     let mut findings: Vec<String> = check_collisions(&discovery.sources, crate::plan::case_folding(ctx))
         .iter()
         .map(ToString::to_string)
         .collect();
+    findings.extend(unknown_ids(ctx));
     let context = template::context(&ctx.config.vars, &ctx.home_target);
     for s in discovery
         .sources
@@ -420,4 +422,17 @@ pub fn check(ctx: &Context, printer: &Printer) -> Result<i32> {
         }
     }
     Ok(i32::from(!findings.is_empty()))
+}
+
+/// Each `[[template_rules]]` owner or group that this system does not know.
+fn unknown_ids(ctx: &Context) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, meta) in &ctx.config.template_rules {
+        for (id, group) in [(&meta.owner, false), (&meta.group, true)] {
+            if let Some(Err(why)) = id.as_ref().map(|o| resolve_id(o, group)) {
+                out.push(format!("{CONFIG_FILE}: [[template_rules]] source '{path}': {why}"));
+            }
+        }
+    }
+    out
 }

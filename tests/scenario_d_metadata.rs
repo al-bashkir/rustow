@@ -65,6 +65,23 @@ fn unknown_owner_is_an_explicit_error() {
     assert!(!fx.home_path(".ssh/config").exists());
 }
 
+/// `check` finds the unknown names that `apply` would fail on.
+#[test]
+fn check_reports_unknown_owner_and_group_names() {
+    let fx = with_rule("owner = \"nosuchuser\"\ngroup = \"nosuchgroup\"");
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    for want in ["unknown user 'nosuchuser'", "unknown group 'nosuchgroup'"] {
+        assert!(
+            out.stdout
+                .lines()
+                .any(|l| l.starts_with("problem: ") && l.contains(".ssh/config.tmpl") && l.contains(want)),
+            "{want}: {out:?}"
+        );
+    }
+    assert!(out.stdout.contains("2 problems"), "{out:?}");
+}
+
 #[test]
 fn chown_to_root_without_privilege_fails_clearly() {
     if nix::unistd::geteuid().is_root() {

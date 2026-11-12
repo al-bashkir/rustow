@@ -919,33 +919,31 @@ fn transformed(
 
 /// Resolves owner and group names to ids on this system.
 fn resolve_meta(meta: &Metadata) -> std::result::Result<FileMeta, String> {
-    let uid = match &meta.owner {
-        None => None,
-        Some(Owner::Id(id)) => Some(*id),
-        Some(Owner::Name(name)) => Some(
-            nix::unistd::User::from_name(name)
-                .ok()
-                .flatten()
-                .map(|u| u.uid.as_raw())
-                .ok_or_else(|| format!("unknown user '{name}'"))?,
-        ),
-    };
-    let gid = match &meta.group {
-        None => None,
-        Some(Owner::Id(id)) => Some(*id),
-        Some(Owner::Name(name)) => Some(
-            nix::unistd::Group::from_name(name)
-                .ok()
-                .flatten()
-                .map(|g| g.gid.as_raw())
-                .ok_or_else(|| format!("unknown group '{name}'"))?,
-        ),
-    };
     Ok(FileMeta {
         mode: meta.mode,
-        uid,
-        gid,
+        uid: meta.owner.as_ref().map(|o| resolve_id(o, false)).transpose()?,
+        gid: meta.group.as_ref().map(|g| resolve_id(g, true)).transpose()?,
     })
+}
+
+/// Resolves a user (a group when `group`), by name or id, to an id on
+/// this system. The planner and `check` both use it.
+pub fn resolve_id(owner: &Owner, group: bool) -> std::result::Result<u32, String> {
+    let name = match owner {
+        Owner::Id(id) => return Ok(*id),
+        Owner::Name(name) => name,
+    };
+    let id = match group {
+        true => nix::unistd::Group::from_name(name)
+            .ok()
+            .flatten()
+            .map(|g| g.gid.as_raw()),
+        false => nix::unistd::User::from_name(name)
+            .ok()
+            .flatten()
+            .map(|u| u.uid.as_raw()),
+    };
+    id.ok_or_else(|| format!("unknown {} '{name}'", if group { "group" } else { "user" }))
 }
 
 /// Error text, with a hint when the cause is missing permission.
