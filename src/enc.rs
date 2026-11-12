@@ -157,9 +157,12 @@ fn report_encrypted(rel: &RelPath, sealed: &Sealed, migrated: bool, printer: &Pr
 fn check_parents(ctx: &Context, rel: &RelPath) -> Result<()> {
     let text = rel.as_str();
     for (end, _) in text.match_indices('/') {
-        let parent = RelPath::parse(&text[..end])?;
-        if let Ok(meta) = fs::symlink_metadata(ctx.root.join(parent.as_path())) {
-            source::check_kind(&parent, meta.file_type())?;
+        let parent = &text[..end];
+        let meta = fs::symlink_metadata(ctx.root.join(parent));
+        if let Some(what) = meta.ok().and_then(|m| source::unexpected_kind(m.file_type())) {
+            return Err(Error::Usage(format!(
+                "source '{parent}' is {what}; rustow encrypts only files inside the repository; use the real path"
+            )));
         }
     }
     Ok(())

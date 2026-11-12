@@ -327,9 +327,11 @@ fn enc_and_edit_refuse_a_symlinked_parent_directory() {
     let outside = fx.base.join("outside");
     let plain = write_file(&outside.join("o.txt"), "outside\n");
     std::os::unix::fs::symlink(&outside, fx.repo.join("ld")).unwrap();
+    let refused = "source 'ld' is a symbolic link; rustow encrypts only files inside the repository; use the real path";
     let out = fx.run(&["enc", "ld/o.txt"]);
     assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains("'ld' is a symbolic link"), "{out:?}");
+    assert!(out.stderr.contains(refused), "{out:?}");
+    assert!(!out.stderr.contains(".rustowignore"), "{out:?}");
     assert_eq!(read(&plain), "outside\n");
     assert!(!outside.join("o.txt.age").exists());
     let ct = fx.age_encrypt("ld/p.age", "v1\n", &[&key]);
@@ -337,7 +339,17 @@ fn enc_and_edit_refuse_a_symlinked_parent_directory() {
     let editor = fx.editor("ed", "printf 'v2\\n' > \"$1\"");
     let out = fx.run_env(&["enc", "edit", "ld/p.age"], &[("VISUAL", &editor)]);
     assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains("'ld' is a symbolic link"), "{out:?}");
+    assert!(out.stderr.contains(refused), "{out:?}");
+    assert!(!out.stderr.contains(".rustowignore"), "{out:?}");
     assert_eq!(fs::read(&ct).unwrap(), before);
     assert!(fx.workspaces().is_empty());
+    // apply discovery keeps its own hint.
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr.contains(
+            "source 'ld' is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it"
+        ),
+        "{out:?}"
+    );
 }

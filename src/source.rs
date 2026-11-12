@@ -185,27 +185,28 @@ fn visit_entry(
         }
         return Ok(file_type.is_dir());
     }
-    check_kind(&rel, file_type)?;
+    if let Some(what) = unexpected_kind(file_type) {
+        return Err(Error::Config(format!(
+            "source '{rel}' is {what}; rustow deploys regular files only. Add it to {} to skip it",
+            crate::ignore::IGNORE_FILE
+        )));
+    }
     if file_type.is_file() {
         out.sources.push(classify(&rel, cfg)?);
     }
     Ok(false)
 }
 
-/// Refuses a repository entry that is neither a directory nor a regular file.
-pub fn check_kind(rel: &RelPath, file_type: std::fs::FileType) -> Result<()> {
+/// What a repository entry is when it is neither a directory nor a
+/// regular file; the caller words the refusal.
+pub fn unexpected_kind(file_type: std::fs::FileType) -> Option<&'static str> {
     if file_type.is_file() || file_type.is_dir() {
-        return Ok(());
-    }
-    let what = if file_type.is_symlink() {
-        "a symbolic link"
+        None
+    } else if file_type.is_symlink() {
+        Some("a symbolic link")
     } else {
-        "not a regular file"
-    };
-    Err(Error::Config(format!(
-        "source '{rel}' is {what}; rustow deploys regular files only. Add it to {} to skip it",
-        crate::ignore::IGNORE_FILE
-    )))
+        Some("not a regular file")
+    }
 }
 
 fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
