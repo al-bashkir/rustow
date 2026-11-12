@@ -90,6 +90,19 @@ fn copy_to_link_transition_needs_authorization() {
 }
 
 #[test]
+fn mode_without_owner_read_is_a_configuration_error() {
+    for bad in ["0200", "044", "+64"] {
+        let fx = with_rule(&format!("mode = \"{bad}\""));
+        let out = fx.run(&["check"]);
+        assert_eq!(out.code, 2, "{bad}: {out:?}");
+        assert!(out.stderr.contains("mode"), "{bad}: {out:?}");
+        let out = fx.run(&["apply"]);
+        assert_eq!(out.code, 2, "{bad}: {out:?}");
+        assert!(!fx.home_path(".ssh/config").exists(), "{bad}: nothing deployed");
+    }
+}
+
+#[test]
 fn link_to_copy_transition_is_automatic() {
     let fx = Fixture::new();
     fx.write(".rustow.toml", "version = 1\n");

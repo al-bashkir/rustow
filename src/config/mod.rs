@@ -266,12 +266,18 @@ impl RawRule {
 /// (setuid, setgid, sticky) are rejected: dotfiles never need them.
 fn parse_mode(text: &str) -> std::result::Result<u32, String> {
     let bad = || format!("mode \"{text}\" must be 3 or 4 octal digits no greater than 0777, e.g. \"0600\"");
-    if !(3..=4).contains(&text.len()) {
+    // from_str_radix alone would accept a sign.
+    if !(3..=4).contains(&text.len()) || !text.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
         return Err(bad());
     }
     let mode = u32::from_str_radix(text, 8).map_err(|_| bad())?;
     if mode > 0o777 {
         return Err(bad());
+    }
+    if mode & 0o400 == 0 {
+        return Err(format!(
+            "mode \"{text}\" lacks owner read (0400); rustow must read the deployed file to detect changes"
+        ));
     }
     Ok(mode)
 }
@@ -432,10 +438,12 @@ group = "root"
 
     #[test]
     fn mode_rejects_bad_values() {
-        for bad in ["0999", "04755", "rwx", "", "07777"] {
+        for bad in ["0999", "04755", "rwx", "", "07777", "+64", "+644", "0200", "044"] {
             let e = rule_mode(bad).unwrap_err().to_string();
             assert!(e.contains("mode"), "{bad}: {e}");
         }
+        let e = rule_mode("0200").unwrap_err().to_string();
+        assert!(e.contains("owner read") && e.contains("detect changes"), "{e}");
     }
 
     #[test]
