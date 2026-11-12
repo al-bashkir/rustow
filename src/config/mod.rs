@@ -247,11 +247,11 @@ fn key_at(text: &str, pos: usize, line_start: usize) -> Option<String> {
 
 type Found = Option<(usize, String)>;
 
+/// Keeps the candidate that starts last at or before `pos`. No two
+/// candidates (keys, array elements) start at the same offset.
 fn consider(start: Option<usize>, path: &str, pos: usize, best: &mut Found) {
-    if let Some(s) = start.filter(|s| *s <= pos)
-        && best.as_ref().is_none_or(|(b, _)| s >= *b)
-    {
-        *best = Some((s, path.to_owned()));
+    if let Some(s) = start.filter(|s| *s <= pos) {
+        *best = best.take().max(Some((s, path.to_owned())));
     }
 }
 
