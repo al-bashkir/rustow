@@ -93,13 +93,13 @@ fn check_fails_on_a_broken_meta_block_but_apply_only_warns() {
         ".rustow.toml",
         "version = 1\n[[template_rules]]\nsource = \"b.tmpl\"\nmode = \"0600\"\n",
     );
-    fx.write(".x.tmpl", "{%- meta.owner = \"root\" %}\nx\n");
+    fx.write(".x.tmpl", "{%- meta.user = \"root\" %}\nx\n");
     fx.write("b.tmpl", "{%- meta.uid = 0 %}\nb\n");
     let out = fx.run(&["check"]);
     assert_eq!(out.code, 1, "{out:?}");
     assert!(
         out.stdout
-            .contains("problem: .x.tmpl: template meta block, line 1: unknown meta key 'meta.owner'"),
+            .contains("problem: .x.tmpl: template meta block, line 1: unknown meta key 'meta.user'"),
         "{out:?}"
     );
     assert!(out.stdout.contains("problem: b.tmpl: set metadata either"), "{out:?}");

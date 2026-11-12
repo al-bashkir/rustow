@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn meta_settings_replace_the_default_metadata_of_a_system_template() {
-        let dir = repo_with(&[(".rustowroot/etc/x.tmpl", "{%- meta.user = \"root\" %}\nx\n")]);
+        let dir = repo_with(&[(".rustowroot/etc/x.tmpl", "{%- meta.owner = \"root\" %}\nx\n")]);
         let d = run(&dir, &cfg("")).unwrap();
         let want = Metadata {
             owner: Some(crate::config::Owner::Name("root".into())),

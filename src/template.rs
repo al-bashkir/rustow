@@ -265,7 +265,7 @@ fn add_setting(s: &mut Metadata, stmt: &Stmt) -> Result<(), String> {
             s.mode = Some(parse_mode(text_value(stmt)?)?);
             return Ok(());
         }
-        "uid" | "user" => (&mut s.owner, "uid", "user"),
+        "uid" | "owner" => (&mut s.owner, "uid", "owner"),
         "gid" | "group" => (&mut s.group, "gid", "group"),
         _ => return Err(format!("unknown meta key 'meta.{key}'")),
     };
@@ -461,15 +461,29 @@ mod tests {
     }
 
     #[test]
+    fn owner_names_the_owner_like_template_rules() {
+        let b = split_meta("{%- meta.owner = \"root\" %}\n").unwrap();
+        assert_eq!(b.meta.settings.owner, Some(Owner::Name("root".into())));
+        assert_eq!(
+            split_meta("{%- meta.uid = 0 %}\n{%- meta.owner = \"root\" %}\n").unwrap_err(),
+            "line 2: meta.uid and meta.owner cannot both be set"
+        );
+        assert_eq!(
+            split_meta("{%- meta.user = \"root\" %}\n").unwrap_err(),
+            "line 1: unknown meta key 'meta.user'"
+        );
+    }
+
+    #[test]
     fn meta_errors_name_the_line() {
         for (text, want) in [
             ("{%- meta.color = \"red\" %}\n", "line 1: "),
             ("{%- meta.os = \"linux\" %}\n", "line 1: "),
             ("{%- meta.uid == 1 %}\n", "line 1: "),
             ("{%- meta.uid = \"root\" %}\n", "line 1: "),
-            ("{%- meta.user = 7 %}\n", "line 1: "),
+            ("{%- meta.owner = 7 %}\n", "line 1: "),
             (
-                "{%- meta.os == \"linux\" %}\n{%- meta.uid = 1 %}\n{%- meta.user = \"me\" %}\n",
+                "{%- meta.os == \"linux\" %}\n{%- meta.uid = 1 %}\n{%- meta.owner = \"me\" %}\n",
                 "line 3: ",
             ),
             ("{%- meta.gid = 1 %}\n{%- meta.group = \"g\" %}\n", "line 2: "),
