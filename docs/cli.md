@@ -145,7 +145,7 @@ When the source and the destination both changed, `diff` prints "<dest>: conflic
 
 ## check and doctor
 
-`check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2. It prints a warning for each [skipped source](#skipped-sources). A warning is not a problem and does not change the exit code. `check --json` prints `sources`, `problems` and `warnings`.
+`check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2. It prints a warning for each [skipped source](#skipped-sources). A warning is not a problem and does not change the exit code. Exception: a mistake in a template [meta block](templates.md#meta-block) is a problem. `check --json` prints `sources`, `problems` and `warnings`.
 
 `doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
 

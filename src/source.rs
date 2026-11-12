@@ -131,6 +131,17 @@ pub struct Skipped {
     pub reason: String,
 }
 
+const META_ERROR: &str = "template meta block, ";
+const META_CONFLICT: &str = "set metadata either in the template meta block or in [[template_rules]], not both";
+
+impl Skipped {
+    /// A mistake in a template's meta block (or its clash with a rule):
+    /// `check` reports it as a problem, not only as a warning.
+    pub fn is_meta_problem(&self) -> bool {
+        self.reason.starts_with(META_ERROR) || self.reason == META_CONFLICT
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Discovery {
     /// Sorted by path.
@@ -259,7 +270,7 @@ fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Disco
     let path = source.path.clone();
     let placed = match text.as_deref().map(split_meta) {
         None => Placed::Deploy(source),
-        Some(Err(e)) => Placed::Skip(format!("template meta block, {e}")),
+        Some(Err(e)) => Placed::Skip(format!("{META_ERROR}{e}")),
         Some(Ok(block)) => {
             let has_rule = cfg.template_rules.contains_key(&path);
             apply_meta(source, block.meta, has_rule, host)
@@ -276,9 +287,7 @@ fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Disco
 /// one home, so meta settings and a `[[template_rules]]` entry conflict.
 fn apply_meta(source: Source, meta: TemplateMeta, has_rule: bool, host: &Host) -> Placed {
     if meta.has_settings() && has_rule {
-        return Placed::Skip(
-            "set metadata either in the template meta block or in [[template_rules]], not both".into(),
-        );
+        return Placed::Skip(META_CONFLICT.into());
     }
     if let Some(c) = meta.failed(host) {
         return Placed::Inactive(format!("{c} is false here"));

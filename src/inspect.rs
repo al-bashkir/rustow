@@ -15,7 +15,7 @@ use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::Printer;
-use crate::source::{Discovery, Mode, Selector, check_collisions, shown_label};
+use crate::source::{Discovery, Mode, Selector, Skipped, check_collisions, shown_label};
 use crate::state::{Record, State};
 use crate::template;
 
@@ -437,15 +437,19 @@ pub fn orphan_reports(
 /// Offline validation: discovery (configuration, ignore rules,
 /// registrations), destination collisions, owner and group names and
 /// plaintext template rendering. Never decrypts. Exit 0 clean, 1 findings.
-/// Skipped sources are warnings, not findings.
+/// Skipped sources are warnings, not findings, except a template whose
+/// meta block is wrong: `apply` would quietly stop managing it.
 pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
     let discovery = ctx.discover()?;
-    printer.warn(&discovery.skipped);
+    let (meta_problems, skipped): (Vec<&Skipped>, Vec<&Skipped>) =
+        discovery.skipped.iter().partition(|s| s.is_meta_problem());
+    printer.warn(skipped);
     printer.warn(&discovery.rule_warnings);
     let mut findings: Vec<String> = check_collisions(&discovery.sources, crate::plan::case_folding(ctx))
         .iter()
         .map(ToString::to_string)
         .collect();
+    findings.extend(meta_problems.iter().map(|s| format!("{}: {}", s.path, s.reason)));
     findings.extend(unknown_ids(ctx));
     let context = template::context(&ctx.config.vars, &ctx.home_target);
     for s in discovery

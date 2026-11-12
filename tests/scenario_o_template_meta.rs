@@ -85,3 +85,28 @@ fn meta_lines_in_an_encrypted_template_fail_to_render() {
     assert!(out.stdout.contains(".x.tmpl.age"), "{out:?}");
     assert!(!fx.home_path(".x").exists());
 }
+
+#[test]
+fn check_fails_on_a_broken_meta_block_but_apply_only_warns() {
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[[template_rules]]\nsource = \"b.tmpl\"\nmode = \"0600\"\n",
+    );
+    fx.write(".x.tmpl", "{%- meta.owner = \"root\" %}\nx\n");
+    fx.write("b.tmpl", "{%- meta.uid = 0 %}\nb\n");
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("problem: .x.tmpl: template meta block, line 1: unknown meta key 'meta.owner'"),
+        "{out:?}"
+    );
+    assert!(out.stdout.contains("problem: b.tmpl: set metadata either"), "{out:?}");
+    let applied = fx.run(&["apply"]);
+    assert_eq!(applied.code, 0, "{applied:?}");
+    assert!(
+        applied.stderr.contains("warning: .x.tmpl: template meta block"),
+        "{applied:?}"
+    );
+}
