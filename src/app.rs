@@ -260,9 +260,14 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         stop: &stop,
     };
     let items = execute::execute(plan, &run, &mut state);
-    state.save(&ctx.state_dir, &ctx.repo_id)?;
-    printer.items(&items, RunKind::Applied);
-    Ok(execute::exit_code(&items))
+    finish(&ctx, &state, printer, &items)
+}
+
+/// Reports the items first, so a state write failure cannot hide what changed on disk.
+fn finish(ctx: &Context, state: &State, printer: &Printer, items: &[ItemReport]) -> Result<i32> {
+    let saved = state.save(&ctx.state_dir, &ctx.repo_id);
+    printer.items(items, RunKind::Applied);
+    saved.map(|()| execute::exit_code(items))
 }
 
 fn undeploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
@@ -277,9 +282,7 @@ fn undeploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], sele
     }
     let stop = interrupt_flag()?;
     let items = execute::remove(removals, &stop, &mut state);
-    state.save(&ctx.state_dir, &ctx.repo_id)?;
-    printer.items(&items, RunKind::Applied);
-    Ok(execute::exit_code(&items))
+    finish(&ctx, &state, printer, &items)
 }
 
 /// The first SIGINT/SIGTERM/SIGHUP asks the executor to stop between

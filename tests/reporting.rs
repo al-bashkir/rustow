@@ -222,3 +222,39 @@ fn cache_clean_removes_only_rustow_workspaces() {
     assert!(!stale.exists());
     assert_eq!(read(&fx.home_path("work/edit/my-video-project/cut.txt")), "precious");
 }
+
+/// Spec §6.2, §11.3: a state write failure still reports what changed on disk.
+#[test]
+fn state_write_failure_still_reports_items() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b");
+    fx.ok(&["apply"]);
+    let dir = fx.state.join("rustow");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();
+    fx.write(".zshrc", "z");
+    fx.write(".vimrc", "v");
+    let apply = fx.run(&["apply"]);
+    let undeploy = fx.run(&["undeploy", ".bashrc"]);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(apply.code, 4, "{apply:?}");
+    for name in [".zshrc", ".vimrc"] {
+        assert!(is_symlink(&fx.home_path(name)), "{apply:?}");
+        assert!(
+            apply.stdout.lines().any(|l| l.contains("create") && l.contains(name)),
+            "{apply:?}"
+        );
+    }
+    assert!(apply.stderr.contains("rustow: error:"), "{apply:?}");
+    assert_eq!(undeploy.code, 4, "{undeploy:?}");
+    assert!(
+        undeploy
+            .stdout
+            .lines()
+            .any(|l| l.contains("remove") && l.contains(".bashrc")),
+        "{undeploy:?}"
+    );
+}
