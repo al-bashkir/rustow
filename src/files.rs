@@ -36,7 +36,7 @@ fn discover_registered(ctx: &Context, paths: &[String]) -> Result<Discovery> {
             config.files.insert(rel);
         }
     }
-    discover(&ctx.root, &ctx.ignore, &config)
+    discover(&ctx.root, &ctx.ignore, &config, &crate::template::Host::current())
 }
 
 /// Registers one source in the configuration text. `discovery` comes

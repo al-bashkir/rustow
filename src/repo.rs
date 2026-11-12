@@ -8,6 +8,7 @@ use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore};
 use crate::paths::{RelPath, Scope, expand_tilde, normalize};
 use crate::source::{Discovery, Skipped, Source, discover};
+use crate::template::Host;
 
 /// Values from the command line that select the repository and targets.
 #[derive(Debug, Clone, Default)]
@@ -111,7 +112,7 @@ impl Context {
     }
 
     pub fn discover(&self) -> Result<Discovery> {
-        discover(&self.root, &self.ignore, &self.config)
+        discover(&self.root, &self.ignore, &self.config, &Host::current())
     }
 
     pub fn target_root(&self, scope: Scope) -> &Path {
@@ -165,7 +166,9 @@ impl Context {
         if self.ignore.is_ignored(&rel, is_dir) {
             return Err(Error::Usage(format!("'{rel}' is ignored by {IGNORE_FILE}")));
         }
-        if discovery.sources.iter().any(|s| s.path.starts_with(&rel)) {
+        // An inactive template is not for this host: selecting it is not an error.
+        let mut paths = (discovery.sources.iter().map(|s| &s.path)).chain(discovery.inactive.iter().map(|s| &s.path));
+        if paths.any(|p| p.starts_with(&rel)) {
             return Ok(rel);
         }
         if let Some(s) = discovery.skipped.iter().find(|s| s.path == rel) {
@@ -687,6 +690,15 @@ mod tests {
             names(&ctx.select(&d, &["./.bashrc".into(), ".bashrc".into()]).unwrap()),
             [".bashrc"]
         );
+    }
+
+    #[test]
+    fn inactive_template_argument_selects_nothing_without_error() {
+        let f = fx();
+        fs::write(f.base.join("home/dot/off.tmpl"), "{%- meta.os == \"plan9\" %}\nx\n").unwrap();
+        let ctx = open(&f, GlobalOpts::default()).unwrap();
+        let d = ctx.discover().unwrap();
+        assert!(ctx.select(&d, &["off.tmpl".into()]).unwrap().is_empty());
     }
 
     #[test]

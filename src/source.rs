@@ -7,6 +7,7 @@ use crate::config::{Backend, Config, Metadata};
 use crate::error::{Error, Result};
 use crate::ignore::{Ignore, ROOT_DIR};
 use crate::paths::{RelPath, Scope};
+use crate::template::{Host, TemplateMeta, split_meta};
 
 /// The one final deployment mode of a source. Encrypted templates are
 /// `Template*` with a backend; ordinary links and copies never carry one.
@@ -138,6 +139,9 @@ pub struct Discovery {
     pub ignored: Vec<RelPath>,
     /// Files and entries that cannot deploy, sorted by path.
     pub skipped: Vec<Skipped>,
+    /// Plaintext templates whose meta condition is false on this host,
+    /// sorted by path. Not a problem, so no warning.
+    pub inactive: Vec<Skipped>,
 }
 
 /// Two or more sources that would write the same destination, or one
@@ -164,8 +168,9 @@ impl std::fmt::Display for Collision {
 
 /// Walks the repository and classifies every non-ignored file with
 /// `classify`. A file that cannot deploy, and a registration or template
-/// rule that names no deployable file, go to `skipped`.
-pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery> {
+/// rule that names no deployable file, go to `skipped`. A plaintext
+/// template's meta block is read here; `host` decides its conditions.
+pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Result<Discovery> {
     let mut out = Discovery::default();
     let mut walker = walkdir::WalkDir::new(repo)
         .min_depth(1)
@@ -179,10 +184,69 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery>
             walker.skip_current_dir();
         }
     }
+    let sources = std::mem::take(&mut out.sources);
+    for source in sources {
+        place(repo, source, cfg, host, &mut out);
+    }
     let unmatched = check_registrations(repo, ignore, cfg, &out);
     out.skipped.extend(unmatched);
     out.skipped.sort();
+    out.inactive.sort();
     Ok(out)
+}
+
+/// Where a classified source goes once its meta block is applied.
+#[derive(Debug, PartialEq, Eq)]
+enum Placed {
+    Deploy(Source),
+    /// A condition is false on this host; the reason names it.
+    Inactive(String),
+    Skip(String),
+}
+
+/// Applies a plaintext template's meta block (if any) and files the source.
+fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Discovery) {
+    let plain_template = matches!(source.mode, Mode::TemplateLink(None) | Mode::TemplateCopy(None, _));
+    // Unreadable or non-UTF-8 text: no meta block here; rendering reports the problem.
+    let text = plain_template
+        .then(|| std::fs::read(repo.join(source.path.as_path())).ok())
+        .flatten()
+        .and_then(|b| String::from_utf8(b).ok());
+    let path = source.path.clone();
+    let placed = match text.as_deref().map(split_meta) {
+        None => Placed::Deploy(source),
+        Some(Err(e)) => Placed::Skip(format!("template meta block, {e}")),
+        Some(Ok(block)) => {
+            let has_rule = cfg.template_rules.contains_key(&path);
+            apply_meta(source, block.meta, has_rule, host)
+        }
+    };
+    match placed {
+        Placed::Deploy(s) => out.sources.push(s),
+        Placed::Inactive(reason) => out.inactive.push(Skipped { path, reason }),
+        Placed::Skip(reason) => out.skipped.push(Skipped { path, reason }),
+    }
+}
+
+/// The meta block's effect on one plaintext template. Each setting has
+/// one home, so meta settings and a `[[template_rules]]` entry conflict.
+fn apply_meta(source: Source, meta: TemplateMeta, has_rule: bool, host: &Host) -> Placed {
+    if meta.has_settings() && has_rule {
+        return Placed::Skip(
+            "set metadata either in the template meta block or in [[template_rules]], not both".into(),
+        );
+    }
+    if let Some(c) = meta.failed(host) {
+        return Placed::Inactive(format!("{c} is false here"));
+    }
+    if meta.has_settings() {
+        let backend = source.mode.backend();
+        return Placed::Deploy(Source {
+            mode: Mode::TemplateCopy(backend, meta.settings),
+            ..source
+        });
+    }
+    Placed::Deploy(source)
 }
 
 /// Sorts one walked entry into sources, skipped files or ignored paths. True when the walker must skip the directory.
@@ -240,7 +304,7 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
         .sources
         .iter()
         .map(|s| &s.path)
-        .chain(found.skipped.iter().map(|s| &s.path))
+        .chain(found.skipped.iter().chain(&found.inactive).map(|s| &s.path))
         .collect();
     let entries = cfg.files.iter().map(|p| ("[[files]]", p));
     let entries = entries.chain(cfg.template_rules.keys().map(|p| ("[[template_rules]]", p)));
@@ -454,7 +518,7 @@ mod tests {
 
     fn run(dir: &tempfile::TempDir, c: &Config) -> Result<Discovery> {
         let ig = Ignore::load(dir.path(), vec![]).unwrap();
-        discover(dir.path(), &ig, c)
+        discover(dir.path(), &ig, c, &test_host())
     }
 
     fn paths(d: &Discovery) -> Vec<&str> {
@@ -758,5 +822,110 @@ mod tests {
             ],
             "the root scope is case-sensitive here"
         );
+    }
+
+    fn test_host() -> Host {
+        Host {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            family: "unix".into(),
+            hostname: "laptop".into(),
+            username: "me".into(),
+        }
+    }
+
+    fn repo_with(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (f, body) in files {
+            let p = dir.path().join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn meta_settings_make_a_template_copy() {
+        let dir = repo_with(&[(".x.conf.tmpl", "{%- meta.mode = \"0600\" %}\nx\n")]);
+        let d = run(&dir, &cfg("")).unwrap();
+        let want = Metadata {
+            mode: Some(0o600),
+            ..Default::default()
+        };
+        assert_eq!(d.sources[0].mode, Mode::TemplateCopy(None, want));
+    }
+
+    #[test]
+    fn meta_settings_replace_the_default_metadata_of_a_system_template() {
+        let dir = repo_with(&[(".rustowroot/etc/x.tmpl", "{%- meta.user = \"root\" %}\nx\n")]);
+        let d = run(&dir, &cfg("")).unwrap();
+        let want = Metadata {
+            owner: Some(crate::config::Owner::Name("root".into())),
+            ..Default::default()
+        };
+        assert_eq!(d.sources[0].mode, Mode::TemplateCopy(None, want));
+    }
+
+    #[test]
+    fn conditions_only_keep_the_normal_mode() {
+        let dir = repo_with(&[(".x.tmpl", "{%- meta.os == \"linux\" %}\nx\n")]);
+        assert_eq!(run(&dir, &cfg("")).unwrap().sources[0].mode, Mode::TemplateLink(None));
+    }
+
+    #[test]
+    fn false_condition_goes_to_inactive_not_skipped() {
+        let dir = repo_with(&[(".x.tmpl", "{%- meta.os == \"plan9\" %}\nx\n")]);
+        let d = run(&dir, &cfg("")).unwrap();
+        assert!(d.sources.is_empty() && d.skipped.is_empty(), "{d:?}");
+        assert_eq!(d.inactive[0].path.as_str(), ".x.tmpl");
+        assert_eq!(d.inactive[0].reason, "meta.os == \"plan9\" is false here");
+    }
+
+    #[test]
+    fn settings_plus_rule_is_skipped_but_conditions_plus_rule_is_fine() {
+        let c = cfg("[[template_rules]]\nsource = \"a.tmpl\"\nmode = \"0600\"\n\
+                     [[template_rules]]\nsource = \"b.tmpl\"\nmode = \"0600\"\n");
+        let dir = repo_with(&[
+            ("a.tmpl", "{%- meta.uid = 1 %}\n"),
+            ("b.tmpl", "{%- meta.os == \"linux\" %}\n"),
+        ]);
+        let d = run(&dir, &c).unwrap();
+        assert!(
+            d.skipped
+                .iter()
+                .any(|s| s.path.as_str() == "a.tmpl" && s.reason.contains("not both")),
+            "{d:?}"
+        );
+        assert_eq!(paths(&d), vec!["b.tmpl"]);
+    }
+
+    #[test]
+    fn rule_on_an_inactive_template_is_not_reported_missing() {
+        let c = cfg("[[template_rules]]\nsource = \"a.tmpl\"\nmode = \"0600\"\n");
+        let dir = repo_with(&[("a.tmpl", "{%- meta.os == \"plan9\" %}\n")]);
+        assert!(run(&dir, &c).unwrap().skipped.is_empty());
+    }
+
+    #[test]
+    fn bad_meta_block_skips_with_line() {
+        let dir = repo_with(&[("a.tmpl", "{%- meta.color = \"red\" %}\n")]);
+        let d = run(&dir, &cfg("")).unwrap();
+        assert!(
+            d.skipped[0].reason.starts_with("template meta block, line 1: "),
+            "{}",
+            d.skipped[0].reason
+        );
+    }
+
+    #[test]
+    fn encrypted_templates_are_not_read_for_meta() {
+        let dir = repo_with(&[("a.tmpl.age", "{%- meta.os == \"plan9\" %}\n")]);
+        assert_eq!(paths(&run(&dir, &cfg("")).unwrap()), vec!["a.tmpl.age"]);
+    }
+
+    #[test]
+    fn plain_files_are_not_read_for_meta() {
+        let dir = repo_with(&[("a.conf", "{%- meta.os == \"plan9\" %}\n")]);
+        assert_eq!(paths(&run(&dir, &cfg("")).unwrap()), vec!["a.conf"]);
     }
 }
