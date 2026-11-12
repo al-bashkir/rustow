@@ -47,7 +47,7 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 
 ## Cache
 
-Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<scope-id>/<dest>`. Directories are 0700 and files 0600. rustow checks that the root is a real 0700 directory owned by you before it writes. Entries that feed copies are refreshed.
+Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<scope-id>/<dest>`. Directories are 0700 and files 0600. Before it writes, rustow creates the cache root, or sets its mode to 0700 without a message. It refuses a cache root that is not a directory (it never follows a symlink there) or that another user owns (`fsops::ensure_private_dir`). Entries that feed copies are refreshed.
 
 ## State
 

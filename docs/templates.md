@@ -60,4 +60,4 @@ Encrypted templates (`name.tmpl.age`) are decrypted first, then rendered. `check
 
 ## Cache
 
-Rendered files go to `<cache>/rendered/<repo-id>/<scope-id>/<dest>`. The directories have mode 0700 and the files 0600. If you edit the deployed file through the symlink, you edit the cache entry. `status` reports this as MODIFIED (cache entry). `--dry-run` writes no cache.
+Rendered files go to `<cache>/rendered/<repo-id>/<scope-id>/<dest>`. The directories have mode 0700 and the files 0600. If you edit the deployed file through the symlink, you edit the cache entry. `status` shows the item as MODIFIED. `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--dry-run` writes no cache.

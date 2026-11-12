@@ -4,12 +4,30 @@
 
 - It never runs `sudo` and never runs commands from templates.
 - It writes files with a temporary file in the same directory (mode 0600), then `fchown`/`fchmod`, `fsync` and `rename`. It never follows a symlink at the final destination.
-- It follows a symlink in a destination ancestor only when it points to a directory that you or root own, and that others cannot write to. Sticky root directories are allowed.
+- It checks every symlink before it plans it, and every symlinked ancestor of a destination before it follows it. See [Trust rule](#trust-rule).
 - It never changes a destination that resolves inside the repository or the cache.
 - It creates private cache (0700/0600) and state (0700/0600) directories. It refuses a cache root or state directory that you do not own.
 - It checks identity files (owner, mode, location) and the GnuPG home.
 - It never prints decrypted content, except in `diff` (explicit command) and in the editor workspace of `enc edit`.
-- Error messages name templates and lines. They do not show values.
+
+## Trust rule
+
+A symlink must point only at a file that other users cannot change. rustow checks each path on the chain of the link target: the repository source of an ordinary link, or the cache entry of a template or a decrypted file. This applies in every scope, for home files and for system files.
+
+- Each path must be owned by root or by the owner of the destination directory.
+- No path may be writable by others. A sticky directory that root owns, such as `/tmp`, is the exception.
+- A path may be writable by its group only when that group is the user-private group of the owner: the primary group of the owner, with the owner's name and no other members. Thus a repository made with the default umask 002 of such systems is trusted.
+
+When a check fails, the item is a conflict. The message starts with "untrusted link target: repository source: …" or "untrusted link target: cache entry: …". It gives the path and the cause, for example "writable by others" or "writable by group N, which is not the private group of uid M; run `chmod g-w <path>`". It also tells you to copy the file instead.
+
+A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow follows it only when its target directory passes the same rule for the current user. Otherwise the item is a conflict: "symlink target is not safe: …".
+
+## Error messages
+
+- Configuration (TOML) errors show only the file, the line, the column and the key path. They never show the source line or a value.
+- Validation messages can name schema values that are not secret, such as `mode`, `owner`, `engine`, `extension` and source paths.
+- Error messages never show `[vars]` values.
+- Template errors name the template and the line.
 
 ## Limits
 
@@ -17,9 +35,8 @@
 - rustow has no transactional rollback. State is updated per successful item.
 - The state file holds content hashes. Treat it as sensitive metadata.
 - The cache holds decrypted and rendered content on disk, with mode 0600. Anyone who can read your account can read it.
-- A cache-backed symlink in `.rustowroot/` is planned only when the cache path is trusted. Otherwise use a copy.
 - Trust of GnuPG keys is never overridden.
-- `diff` can print secrets.
+- `diff` can print secrets. `diff --json` includes the content too.
 
 ## Reporting
 

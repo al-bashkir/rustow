@@ -18,7 +18,7 @@ rustow never runs `sudo`. To write to `/etc` you must start rustow with the need
 
 Use a copy for system files. Set a `[[template_rules]]` entry, or use `rustow file add`.
 
-Every symlink under `.rustowroot/` is checked before it is planned. Its target is the cache entry (templates, decrypted files) or the repository file (ordinary links). Every directory on the target path must be owned by root or by the owner of the destination directory, and no other user may write to it. Otherwise rustow reports an "untrusted cache" conflict, and the message says to copy instead. So when you run rustow as root with a repository in your home, use copies for system files (`rustow file add`, or template metadata).
+Every symlink is checked before it is planned, in every scope. Its target is the cache entry (templates, decrypted files) or the repository file (ordinary links). Every path on the target chain must be owned by root or by the owner of the destination directory. See the [trust rule](security.md#trust-rule) for write access. When the check fails, rustow reports a conflict. The message starts with "untrusted link target: repository source: …; copy it instead with `rustow file add`", or with "untrusted link target: cache entry: …". So when you run rustow as root with a repository in your home, use copies for system files (`rustow file add`, or template metadata).
 
 The cache inside the repository belongs to the repository owner. When another user (normally root) runs rustow, it uses a private cache in its own state directory (`<state_dir>/cache`) and prints a notice. Root and user runs never share or block one cache.
 

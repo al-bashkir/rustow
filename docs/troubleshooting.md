@@ -39,9 +39,15 @@ The state records a destination whose source is gone. Run `rustow undeploy`.
 
 Read the message. Common causes: missing `version = 1`, an unknown key, a rule on a non-template, a registered source that does not exist or is ignored, a bad mode string.
 
-## Untrusted cache
+## Untrusted link target
 
-For a file under `.rustowroot/`, rustow reports "untrusted cache" when a directory on the cache path is not owned by root or by the destination owner, or others can write to it. Deploy the file as a copy: use a template rule or `rustow file add`.
+rustow checks every symlink, in every scope (see the [trust rule](security.md#trust-rule)). The conflict starts with "untrusted link target: repository source: …; copy it instead with `rustow file add`", or "untrusted link target: cache entry: …". A path on the link target chain is not owned by root or by the destination owner, or others can write to it, or a group other than the owner's private group can write to it.
+
+- "writable by group N, which is not the private group of uid M": run the `chmod g-w` command in the message.
+- "writable by others": run `chmod o-w` on that path.
+- Otherwise deploy the file as a copy: use `rustow file add`, or a template rule for a template.
+
+"symlink target is not safe: …" names a symlinked ancestor of the destination, for example `~/.config`. Its target directory fails the same rule. Fix the permissions of that directory.
 
 ## Permission errors for system files
 
