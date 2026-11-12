@@ -1317,4 +1317,26 @@ mod tests {
         assert_eq!(collided.len(), 2, "{collided:?}");
         assert!(collided.values().all(|d| d == want), "{collided:?}");
     }
+
+    /// The owner resolves as a user and the group as a group: a name that
+    /// names only a group fails as owner and works as group.
+    #[test]
+    fn resolve_meta_looks_up_owner_as_user_and_group_as_group() {
+        use nix::unistd::{Group, User};
+        let Some(name) = ["wheel", "users", "staff"]
+            .into_iter()
+            .find(|n| matches!(Group::from_name(n), Ok(Some(_))) && matches!(User::from_name(n), Ok(None)))
+        else {
+            eprintln!("SKIP: no group without a user of the same name");
+            return;
+        };
+        let gid = Group::from_name(name).unwrap().unwrap().gid.as_raw();
+        let meta = |owner: Option<&str>, group: Option<&str>| Metadata {
+            mode: None,
+            owner: owner.map(|n| Owner::Name(n.into())),
+            group: group.map(|n| Owner::Name(n.into())),
+        };
+        assert_eq!(resolve_meta(&meta(None, Some(name))).unwrap().gid, Some(gid));
+        assert!(resolve_meta(&meta(Some(name), None)).is_err());
+    }
 }
