@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 120" width="450" height="120" role="img" aria-labelledby="title">
+  <title id="title">rustow</title>
+  <style>
+    .ink { stroke: #24292f; }
+    .rust { stroke: #ce422b; }
+    @media (prefers-color-scheme: dark) { .ink { stroke: #e6edf3; } .rust { stroke: #f0643a; } }
+  </style>
+  <g id="icon">
+    <rect x="6" y="70" width="74" height="42" rx="8" fill="#ce422b"/>
+    <rect x="16" y="32" width="54" height="34" rx="7" fill="#e8692e"/>
+    <path d="M6 84 H80 M16 44 H70" stroke="#a8321f" stroke-width="3" fill="none" opacity="0.55"/>
+    <path d="M33 97 H53 M36 55 H50" stroke="#fbd3bf" stroke-width="5" stroke-linecap="round" fill="none"/>
+    <rect class="ink" x="86" y="8" width="28" height="28" rx="6" fill="none" stroke-width="5"/>
+    <path class="ink" d="M43 30 C43 16 52 22 74 22" fill="none" stroke-width="5" stroke-linecap="round"/>
+    <path class="ink" d="M68 15 L75 22 L68 29" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g fill="none" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <g class="rust">
+      <path d="M145 48 V92 M145 66 C145 54 153 48 165 48 H171"/>
+      <path transform="translate(183 0)" d="M5 48 V72 C5 85 12 92 21 92 C30 92 37 85 37 72 M37 48 V92"/>
+      <path transform="translate(237 0)" d="M33 54 C30 50 25 48 18 48 C10 48 5 52 5 58 C5 64 11 67 19 69 C28 71 34 74 34 81 C34 88 27 92 18 92 C10 92 5 89 2 85"/>
+      <path transform="translate(285 0)" d="M13 34 V80 C13 88 17 92 25 92 H31 M3 52 H29"/>
+    </g>
+    <g class="ink">
+      <ellipse cx="350" cy="70" rx="19" ry="22"/>
+      <path transform="translate(381 0)" d="M3 48 L13 92 L24 60 L35 92 L45 48"/>
+    </g>
+  </g>
+</svg>
