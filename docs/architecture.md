@@ -67,6 +67,8 @@ Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<sc
 
 `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow` (or `defaults.state_dir`). The file `<repo-id>.json` (mode 0600, directory 0700) is keyed by absolute destination. It also holds the registrations of this machine: `files` (`file add`) and `links` (`link <path>` in copy mode). It holds content hashes, not plaintext. The hashes are sensitive metadata. The file `<repo-id>.lock` stops concurrent runs (exit 4, "another rustow process"). rustow refuses corrupt, foreign or newer state. Move such a file away to continue. You must own the state directory.
 
+The file has a `version` (`state::STATE_VERSION`, now 1). `State::load` reads each version from 1 up to it and runs the steps in `state::MIGRATIONS` that the file needs, in order. A newer version fails with "written by a newer rustow". After a migration, `save` first keeps the old bytes as `backups/<repo-id>/state-v<N>.json`. A new field with a default needs no new version: `files` and `links` came that way. An older rustow ignores such a field and drops it when it saves. Raise `STATE_VERSION` only for a change that needs a step, and add one step that turns the old JSON into the new JSON.
+
 ## Tests
 
 Integration tests are in `tests/scenario_*.rs`. They use the `Fixture` in `tests/common/mod.rs`. `tests/examples.rs` checks the example repository.

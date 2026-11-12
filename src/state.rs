@@ -15,7 +15,15 @@ use crate::fsops::{self, FileMeta};
 use crate::hash::Hash;
 use crate::paths::{RelPath, Scope};
 
+/// The state format this rustow writes. Raise it only for a change that
+/// needs a step in `MIGRATIONS`: a new field with a default needs none.
 pub const STATE_VERSION: u32 = 1;
+
+/// One upgrade step: turns the JSON of version N into version N + 1.
+type Migration = fn(&mut serde_json::Value);
+
+/// Entry `i` upgrades version `i + 1`. Its length ties it to `STATE_VERSION`.
+const MIGRATIONS: [Migration; (STATE_VERSION - 1) as usize] = [];
 
 /// What rustow last applied at one destination.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +78,10 @@ pub struct State {
     /// Sources that `rustow link <path>` registered in copy mode.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub links: BTreeSet<RelPath>,
+    /// The old version and bytes of a file that `load` migrated; `save`
+    /// keeps them in `backups/<repo-id>/state-v<N>.json` before it writes.
+    #[serde(skip)]
+    migrated_from: Option<(u32, Vec<u8>)>,
 }
 
 impl State {
@@ -97,10 +109,7 @@ impl State {
                 file.display()
             ))
         };
-        let state: State = serde_json::from_slice(&bytes).map_err(|e| bad(e.to_string()))?;
-        if state.version != STATE_VERSION {
-            return Err(bad(format!("unsupported state version {}", state.version)));
-        }
+        let state = parse_versioned(&bytes, &MIGRATIONS).map_err(bad)?;
         if state.repo != repo {
             return Err(bad(format!("it belongs to repository {}", state.repo.display())));
         }
@@ -108,8 +117,17 @@ impl State {
     }
 
     /// Writes the state privately and atomically; skips identical content.
+    /// After a migration, it first keeps the old file (once per version).
     pub fn save(&self, dir: &Path, repo_id: &str) -> Result<()> {
         fsops::ensure_private_dir(dir)?;
+        if let Some((old, bytes)) = &self.migrated_from {
+            let backups = dir.join("backups").join(repo_id);
+            let copy = backups.join(format!("state-v{old}.json"));
+            if fs::symlink_metadata(&copy).is_err() {
+                fsops::ensure_private_dir(&backups)?;
+                fsops::write_atomic(&copy, bytes, 0o600, None, None)?;
+            }
+        }
         let file = State::file(dir, repo_id);
         let mut bytes = serde_json::to_vec_pretty(self).map_err(|e| Error::Failed(format!("encode state: {e}")))?;
         bytes.push(b'\n');
@@ -118,6 +136,35 @@ impl State {
         }
         fsops::write_atomic(&file, &bytes, 0o600, None, None)
     }
+}
+
+/// Parses state JSON of version 1 up to `steps.len() + 1` (with
+/// `MIGRATIONS`: `STATE_VERSION`) and runs the steps it needs, in order.
+/// The error is the reason, without the file name.
+fn parse_versioned(bytes: &[u8], steps: &[Migration]) -> std::result::Result<State, String> {
+    let newest = steps.len() as u32 + 1;
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let version = value["version"]
+        .as_u64()
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(0);
+    if version > newest {
+        return Err(format!(
+            "written by a newer rustow (state version {version}; this rustow reads up to version {newest}); upgrade rustow first"
+        ));
+    }
+    if version == 0 {
+        return Err(format!("unsupported state version {}", value["version"]));
+    }
+    for (step, next) in steps[version as usize - 1..].iter().zip(version + 1..) {
+        step(&mut value);
+        value["version"] = next.into();
+    }
+    let mut state: State = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if version < newest {
+        state.migrated_from = Some((version, bytes.to_vec()));
+    }
+    Ok(state)
 }
 
 /// Exclusive per-repository lock, held while a command changes anything.
@@ -233,6 +280,56 @@ mod tests {
         std::fs::remove_file(State::file(d.path(), "id")).unwrap();
         future.save(d.path(), "id").unwrap();
         assert!(State::load(d.path(), "id", Path::new("/r")).is_err());
+    }
+
+    /// Two made-up steps: version 1 to 2 adds "/v2", version 2 to 3 adds "/v3".
+    fn add_dir(value: &mut serde_json::Value, dir: &str) {
+        value["created_dirs"].as_array_mut().unwrap().push(dir.into());
+    }
+    const STEPS: [Migration; 2] = [|v| add_dir(v, "/v2"), |v| add_dir(v, "/v3")];
+
+    #[test]
+    fn older_versions_run_the_missing_steps_in_order() {
+        let mut old = serde_json::to_value(sample()).unwrap();
+        old["version"] = 2.into();
+        let bytes = serde_json::to_vec(&old).unwrap();
+        let s = parse_versioned(&bytes, &STEPS).unwrap();
+        assert_eq!(s.version, 3);
+        let dirs: Vec<_> = s.created_dirs.iter().map(|d| d.to_str().unwrap()).collect();
+        assert_eq!(dirs, ["/h/.config", "/v3"], "only the step from version 2 runs");
+        assert_eq!(s.migrated_from, Some((2, bytes)));
+        old["version"] = 1.into();
+        let s = parse_versioned(&serde_json::to_vec(&old).unwrap(), &STEPS).unwrap();
+        assert_eq!(s.created_dirs.len(), 3);
+        let current = serde_json::to_vec(&sample()).unwrap();
+        assert_eq!(parse_versioned(&current, &MIGRATIONS).unwrap(), sample());
+    }
+
+    #[test]
+    fn a_migrated_state_keeps_the_old_file_once() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = sample();
+        s.migrated_from = Some((1, b"old".to_vec()));
+        s.save(d.path(), "id").unwrap();
+        let copy = d.path().join("backups/id/state-v1.json");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"old");
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        s.migrated_from = Some((1, b"newer".to_vec()));
+        s.save(d.path(), "id").unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"old", "the first copy stays");
+    }
+
+    #[test]
+    fn newer_state_names_the_versions() {
+        let d = tempfile::tempdir().unwrap();
+        let mut future = sample();
+        future.version = STATE_VERSION + 1;
+        future.save(d.path(), "id").unwrap();
+        let e = State::load(d.path(), "id", Path::new("/r")).unwrap_err().to_string();
+        assert!(
+            e.contains("newer rustow") && e.contains(&format!("version {}", STATE_VERSION + 1)),
+            "{e}"
+        );
     }
 
     #[test]
