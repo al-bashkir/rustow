@@ -104,6 +104,9 @@ pub enum Command {
     /// Manage the repository cache
     #[command(subcommand)]
     Cache(CacheCommand),
+    /// Export or import the registrations of `file add` and copy-mode `link`
+    #[command(subcommand)]
+    State(StateCommand),
     /// Encrypt a repository source in place (age by default), or `enc edit` an encrypted source
     Enc(EncArgs),
     /// Print a shell completion script
@@ -165,6 +168,20 @@ pub enum EncCommand {
 pub enum CacheCommand {
     /// Remove cache entries no managed symlink uses, and stale edit workspaces
     Clean,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StateCommand {
+    /// Print the registrations of this machine as JSON (or write them to FILE)
+    Export {
+        #[arg(value_name = "FILE")]
+        file: Option<PathBuf>,
+    },
+    /// Add the registrations in FILE ("-" for stdin) to this machine
+    Import {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]

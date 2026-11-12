@@ -28,7 +28,7 @@ There are two lists of copies. rustow deploys a source as a copy when either lis
 | state file                  | `rustow file add` | this machine and this user             |
 | `[[files]]` in .rustow.toml | you, by hand      | every machine that uses the repository |
 
-Use `[[files]]` for a file that every machine must copy. The state belongs to the user who runs rustow. `sudo rustow apply` reads the state of root, not yours. So register a system file with `sudo rustow file add`, or list it in `[[files]]`. See [system files](system-files.md).
+Use `[[files]]` for a file that every machine must copy. The state belongs to the user who runs rustow. To move the state registrations to another machine, run `rustow state export FILE` there and `rustow state import FILE` here. See [cli](cli.md#state-export-and-import).
 
 A registration whose file no longer exists gives a warning, for example "warning: gone.json: `rustow file add` registration does not exist (remove the entry, e.g. with `rustow file remove`)".
 

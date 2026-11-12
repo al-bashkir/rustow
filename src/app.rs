@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::cli::{
-    CacheCommand, Cli, Command, EncArgs, EncCommand, FileCommand, Global, Paths, StatusArgs, TemplateCommand,
+    CacheCommand, Cli, Command, EncArgs, EncCommand, FileCommand, Global, Paths, StateCommand, StatusArgs,
+    TemplateCommand,
 };
 use crate::config::DefaultMode;
 use crate::error::{Error, Result};
@@ -19,10 +20,8 @@ use crate::{files, fsops, inspect};
 /// Runs the parsed command and returns the process exit code.
 pub fn run(cli: Cli) -> Result<i32> {
     let env = Env::from_process()?;
+    refuse_sudo(&cli, env.sudo_user.as_deref())?;
     let g = &cli.global;
-    if !matches!(cli.command, Some(Command::Completions { .. })) {
-        refuse_sudo(env.sudo_user.as_deref(), g.target.is_some())?;
-    }
     let mut printer = Printer::new(g.json, g.quiet, g.verbose, g.no_color);
     let p = &mut printer;
     match cli.command.unwrap_or(Command::Apply(Paths::default())) {
@@ -41,16 +40,19 @@ pub fn run(cli: Cli) -> Result<i32> {
             undeploy(g, &env, p, &a.paths.paths, Selector::All, ask)
         }
         Command::Cache(CacheCommand::Clean) => cache_clean(g, &env, p),
+        Command::State(c) => state_cmd(g, &env, p, c),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
         Command::Completions { shell } => completions(shell),
     }
 }
 
 /// Under `sudo`, HOME and the state directory are root's: rustow would put
-/// the user's dotfiles into root's home. An explicit `--target` is a real root setup.
-fn refuse_sudo(sudo_user: Option<&str>, explicit_target: bool) -> Result<()> {
+/// the user's dotfiles into root's home. An explicit `--target` is a real
+/// root setup; `completions` touches no files.
+fn refuse_sudo(cli: &Cli, sudo_user: Option<&str>) -> Result<()> {
+    let completions = matches!(cli.command, Some(Command::Completions { .. }));
     match sudo_user {
-        Some(user) if !explicit_target => Err(Error::Usage(format!(
+        Some(user) if !completions && cli.global.target.is_none() => Err(Error::Usage(format!(
             "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of {user}; \
              run rustow as {user} (pass --target to deploy into root's home on purpose)"
         ))),
@@ -131,6 +133,20 @@ fn cache_clean(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
     let changes = crate::cache::clean(&ctx, &state, g.dry_run)?;
     p.changes(None, &changes, g.dry_run);
     Ok(0)
+}
+
+fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Result<i32> {
+    let ctx = open(g, env, p)?;
+    match cmd {
+        StateCommand::Export { .. } if g.dry_run => Err(Error::Usage(
+            "`rustow state export` has no --dry-run; it changes no state".into(),
+        )),
+        StateCommand::Export { file } => crate::transfer::export(&ctx, file.as_deref()),
+        StateCommand::Import { file } => {
+            let _lock = lock(&ctx, g.dry_run)?;
+            crate::transfer::import(&ctx, p, &file, g.dry_run)
+        }
+    }
 }
 
 fn enc_cmd(g: &Global, env: &Env, p: &mut Printer, e: EncArgs) -> Result<i32> {
@@ -435,19 +451,24 @@ fn interrupt_flag() -> Result<Arc<AtomicBool>> {
 #[cfg(test)]
 mod tests {
     use super::{is_yes, refuse_sudo};
+    use crate::cli::Cli;
+    use clap::Parser;
 
     #[test]
     fn sudo_without_a_target_is_refused() {
-        let e = refuse_sudo(Some("alice"), false).unwrap_err().to_string();
+        let cli = |args: &[&str]| Cli::parse_from([&["rustow"], args].concat());
+        let e = refuse_sudo(&cli(&["status"]), Some("alice")).unwrap_err().to_string();
         assert!(
             e.contains("do not run rustow with sudo") && e.contains("as alice"),
             "{e}"
         );
+        assert!(refuse_sudo(&cli(&[]), Some("alice")).is_err(), "the default apply too");
         assert!(
-            refuse_sudo(Some("alice"), true).is_ok(),
+            refuse_sudo(&cli(&["--target", "/root", "apply"]), Some("alice")).is_ok(),
             "an explicit --target is a real root setup"
         );
-        assert!(refuse_sudo(None, false).is_ok());
+        assert!(refuse_sudo(&cli(&["completions", "bash"]), Some("alice")).is_ok());
+        assert!(refuse_sudo(&cli(&["status"]), None).is_ok());
     }
 
     #[test]

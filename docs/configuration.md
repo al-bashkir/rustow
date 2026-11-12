@@ -81,7 +81,7 @@ With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys
 - `rustow enc <path>` moves the registration to the encrypted name. A registered link then deploys as decrypt+link.
 - A path argument that names only files that are not linked exits 2, for example `rustow apply .vimrc`.
 
-The state file is per machine and per user. On a new machine, run `rustow link <path>` and `rustow file add <path>` again, or list the copies in `[[files]]`. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before are not registered. `apply` does not change them, and `status` does not show them. Run `rustow link <path>` to register one, or `rustow unlink <path>` to remove it. Templates that rustow linked before become copies on the next `apply`.
+The state file is per machine and per user. On a new machine, run `rustow link <path>` and `rustow file add <path>` again, move the registrations with `rustow state export` and `rustow state import`, or list the copies in `[[files]]`. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before are not registered. `apply` does not change them, and `status` does not show them. Run `rustow link <path>` to register one, or `rustow unlink <path>` to remove it. Templates that rustow linked before become copies on the next `apply`.
 
 `.rustowroot/` sources work the same in both modes.
 

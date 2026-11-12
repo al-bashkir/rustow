@@ -97,7 +97,7 @@ rustow never runs `sudo`. Run rustow with the needed rights. An unreadable desti
 
 ## State file refused
 
-rustow refuses corrupt, foreign or newer state. For newer state ("written by a newer rustow"), upgrade rustow. Otherwise move the file `<state_dir>/<repo-id>.json` away. Then run `rustow status`. Existing correct destinations appear as UNMANAGED. `rustow apply` adopts them. The registrations of `file add` and copy-mode `link` are lost then: register them again.
+rustow refuses corrupt, foreign or newer state. For newer state ("written by a newer rustow"), upgrade rustow. Otherwise move the file `<state_dir>/<repo-id>.json` away. Then run `rustow status`. Existing correct destinations appear as UNMANAGED. `rustow apply` adopts them. The registrations of `file add` and copy-mode `link` are lost then: register them again, or `rustow state import` an earlier export.
 
 ## Stale edit workspace
 

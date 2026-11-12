@@ -47,6 +47,8 @@ Without a command, rustow runs `apply`.
 | `doctor`                        | Report on the environment.                                                                                                             |
 | `undeploy [-y] [PATH]...`       | Remove managed destinations of any mode. Without a path, asks first.                                                                   |
 | `cache clean`                   | Remove unused cache entries and stale edit workspaces.                                                                                 |
+| `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON.                                                            |
+| `state import FILE`             | Add the registrations in FILE (`-` for stdin) to this machine.                                                                         |
 | `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                                                                                      |
 | `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                                                                              |
 | `completions <SHELL>`           | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). See [shell completions](installation.md#shell-completions). |
@@ -160,3 +162,14 @@ rustow also removes parent directories that it created, only when they are empty
 ## cache clean
 
 Removes this repository's cache entries that no recorded symlink uses, and empty directories. It also removes stale `enc edit` workspaces: only directories named `edit-*` that you own, that hold a `.lock` file, and that no running edit uses. It never follows symlinks.
+
+## state export and import
+
+The state file of one machine holds registrations: `file add` copies and copy-mode `link` links. To use them on another machine:
+
+```sh
+rustow state export regs.json      # on the old machine (no FILE: print to stdout)
+rustow state import regs.json      # on the new machine ("-" reads stdin)
+```
+
+The export is JSON: `{"version": 1, "files": [...], "links": [...]}`. It holds repository-relative paths only. The records of deployed files stay out: they belong to one machine. `import` adds each registration that is not there yet and prints it. It removes nothing. It checks each path as a repository path, and it rejects an unknown version or an unknown key with exit 2. Then it changes nothing. `import -n` shows what it would add. `export` has no `--dry-run`.

@@ -28,6 +28,7 @@ rustow has one planner and one executor. Every command that changes files builds
 | `execute`           | Predict, execute, remove.                              |
 | `fsops`             | Safe file operations (temp file, rename, ancestors).   |
 | `state`             | Per-repository JSON state and lock.                    |
+| `transfer`          | `state export/import` of the registrations.            |
 | `cache`             | Rendered and decrypted entries, edit workspaces.       |
 | `template`          | MiniJinja context and rendering.                       |
 | `crypto` (age, gpg) | Encryption backends.                                   |
