@@ -717,6 +717,11 @@ mod tests {
         let made = create_dirs(&d, &["a".into(), "b".into()], 0o700).unwrap();
         assert_eq!(made, vec![d.join("a"), d.join("a/b")]);
         assert_eq!(mode_of(&d.join("a/b")), 0o700);
+        // An existing directory is fine; a file in its place is not.
+        assert_eq!(create_dirs(&d, &["a".into()], 0o700).unwrap(), Vec::<PathBuf>::new());
+        fs::write(d.join("f"), "x").unwrap();
+        let e = create_dirs(&d, &["f".into()], 0o700).unwrap_err().to_string();
+        assert!(e.contains("create directory") && e.contains("/f"), "{e}");
     }
 
     /// A path whose group has the same id as its owner (a user-private group).

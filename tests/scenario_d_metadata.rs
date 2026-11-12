@@ -78,6 +78,26 @@ fn chown_to_root_without_privilege_fails_clearly() {
     assert!(!fx.home_path(".ssh/config").exists(), "no partial file is left");
 }
 
+/// A change of the owner alone on a deployed copy still runs chown:
+/// without privilege, owner 0 fails clearly and the content stays.
+#[test]
+fn owner_only_change_without_privilege_fails_clearly() {
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP: running as root");
+        return;
+    }
+    let fx = with_rule("mode = \"0600\"");
+    fx.ok(&["apply"]);
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[vars]\nhost = \"github.com\"\n[[template_rules]]\nsource = \".ssh/config.tmpl\"\nmode = \"0600\"\nowner = \"0\"\n",
+    );
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("set owner"), "{out:?}");
+    assert_eq!(read(&fx.home_path(".ssh/config")), "Host github.com\n");
+}
+
 #[test]
 fn copy_to_link_transition_needs_authorization() {
     let fx = with_rule("mode = \"0600\"");
