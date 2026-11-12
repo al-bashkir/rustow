@@ -173,25 +173,22 @@ fn ancestors(path: &RelPath) -> Vec<RelPath> {
     out
 }
 
-/// The destination of `dir` is missing (with usable parents) or is still
-/// rustow's own folded link.
 /// The destination of `dir` is still exactly the symlink rustow recorded.
 fn still_linked(ctx: &Context, dir: &RelPath, record: &Record) -> bool {
     let text = fs::read_link(ctx.home_target.join(dir.as_path())).ok();
     text.is_some() && text == record.link_target
 }
 
+/// The destination of `dir` is missing (with usable parents) or is still
+/// rustow's own folded link. `record` is one of the recorded folds that
+/// `analyze` kept, so its link is still in place.
 fn dest_allows_fold(ctx: &Context, dir: &RelPath, record: Option<&Record>) -> Result<bool> {
-    let dest = ctx.home_target.join(dir.as_path());
-    match fs::symlink_metadata(&dest) {
+    match fs::symlink_metadata(ctx.home_target.join(dir.as_path())) {
         Err(_) => Ok(!matches!(
             fsops::parent_state(&ctx.home_target, dir)?,
             ParentState::Blocked { .. }
         )),
-        Ok(m) if m.file_type().is_symlink() => {
-            let text = fs::read_link(&dest).ok();
-            Ok(record.is_some_and(|r| r.link_target.is_some() && r.link_target == text))
-        }
+        Ok(m) if m.file_type().is_symlink() => Ok(record.is_some()),
         Ok(_) => Ok(false),
     }
 }
