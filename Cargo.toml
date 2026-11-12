@@ -28,6 +28,10 @@ toml_edit = { version = "0.25.19", features = ["serde"] }
 walkdir = "2.5.0"
 zeroize = "1.9.1"
 
+[dev-dependencies]
+# openpty for tests that answer a prompt on a terminal
+nix = { version = "0.31.3", features = ["term"] }
+
 [profile.release]
 lto = "thin"
 

@@ -84,6 +84,19 @@ impl Fixture {
     }
 
     pub fn run_env(&self, args: &[&str], env: &[(&str, &str)]) -> Out {
+        output(self.command(args, env))
+    }
+
+    /// Runs with a pseudo terminal on stdin that already holds `input`.
+    pub fn run_tty(&self, args: &[&str], input: &str) -> Out {
+        let pty = nix::pty::openpty(None, None).unwrap();
+        nix::unistd::write(&pty.master, input.as_bytes()).unwrap();
+        let mut cmd = self.command(args, &[]);
+        cmd.stdin(fs::File::from(pty.slave));
+        output(cmd) // pty.master stays open until rustow exits
+    }
+
+    fn command(&self, args: &[&str], env: &[(&str, &str)]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_rustow"));
         cmd.current_dir(&self.cwd)
             .env_clear()
@@ -109,12 +122,7 @@ impl Fixture {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let out = cmd.output().expect("run rustow");
-        Out {
-            code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        }
+        cmd
     }
 
     /// Runs and asserts the exit code.
@@ -122,6 +130,15 @@ impl Fixture {
         let out = self.run(args);
         assert_eq!(out.code, 0, "{args:?}\n{out:?}");
         out
+    }
+}
+
+fn output(mut cmd: Command) -> Out {
+    let out = cmd.output().expect("run rustow");
+    Out {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     }
 }
 

@@ -45,7 +45,7 @@ Without a command, rustow runs `apply`.
 | `status [--ignored] [PATH]...`  | Show the state of each destination.                                        |
 | `check`                         | Validate offline.                                                          |
 | `doctor`                        | Report on the environment.                                                 |
-| `undeploy [PATH]...`            | Remove managed destinations of any mode.                                   |
+| `undeploy [-y] [PATH]...`       | Remove managed destinations of any mode. Without a path, asks first.       |
 | `cache clean`                   | Remove unused cache entries and stale edit workspaces.                     |
 | `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                          |
 | `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                  |
@@ -154,6 +154,8 @@ When the source and the destination both changed, `diff` prints "<dest>: conflic
 `unlink` removes link-mode records and folded directory links whose symlink still has the recorded text. `undeploy` removes all modes. It removes a copy only if the content hash is unchanged. Both accept sources that you removed from the repository. If you replaced a folded directory link yourself, they forget its record and leave what is there.
 
 rustow also removes parent directories that it created, only when they are empty.
+
+`undeploy` without a path removes every managed destination. So a real run asks first. It prints the list on stderr, then "Remove N destinations? [y/N]". Only `y` or `yes` continues. Any other answer prints "cancelled, nothing removed" and exits 0. Use `--yes` (`-y`) to skip the question. Without a terminal on stdin and without `--yes`, rustow removes nothing and exits 2. rustow does not ask for `--dry-run`, for a path argument, for `unlink`, or when nothing would be removed.
 
 ## cache clean
 

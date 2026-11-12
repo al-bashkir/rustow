@@ -32,7 +32,7 @@ The destination is correct but not recorded. `rustow apply` records it. It write
 
 ## ORPHANED
 
-The state records a destination whose source is gone. `status` and the deploy commands show it, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". Run the `rustow undeploy` command in the message. `rustow undeploy` with no path removes every managed destination.
+The state records a destination whose source is gone. `status` and the deploy commands show it, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". Run the `rustow undeploy` command in the message. `rustow undeploy` with no path removes every managed destination, after it asks you.
 
 ## Exit code 4
 

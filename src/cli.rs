@@ -99,7 +99,7 @@ pub enum Command {
     /// Report on the environment: directories, permissions, GnuPG, identities
     Doctor,
     /// Remove rustow-managed destinations of any mode (verified first)
-    Undeploy(Paths),
+    Undeploy(UndeployArgs),
     /// Manage the repository cache
     #[command(subcommand)]
     Cache(CacheCommand),
@@ -171,6 +171,15 @@ pub struct StatusArgs {
     /// Also list ignored repository paths
     #[arg(long)]
     pub ignored: bool,
+    #[command(flatten)]
+    pub paths: Paths,
+}
+
+#[derive(Debug, Args)]
+pub struct UndeployArgs {
+    /// Do not ask before removing everything (required without a terminal)
+    #[arg(short, long)]
+    pub yes: bool,
     #[command(flatten)]
     pub paths: Paths,
 }

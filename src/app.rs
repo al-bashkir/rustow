@@ -7,7 +7,7 @@ use crate::cli::{
     CacheCommand, Cli, Command, EncArgs, EncCommand, FileCommand, Global, Paths, StatusArgs, TemplateCommand,
 };
 use crate::error::{Error, Result};
-use crate::execute::{self, ItemReport, Policy, Run};
+use crate::execute::{self, Action, ItemReport, Policy, Run};
 use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
 use crate::report::{Printer, RunKind};
@@ -24,7 +24,7 @@ pub fn run(cli: Cli) -> Result<i32> {
     match cli.command.unwrap_or(Command::Apply(Paths::default())) {
         Command::Apply(a) => deploy(g, &env, p, &a.paths, Selector::All),
         Command::Link(a) => deploy(g, &env, p, &a.paths, Selector::Link),
-        Command::Unlink(a) => undeploy(g, &env, p, &a.paths, Selector::Link),
+        Command::Unlink(a) => undeploy(g, &env, p, &a.paths, Selector::Link, false),
         Command::Init => init_cmd(g, &env, p),
         Command::File(c) => file_cmd(g, &env, p, c),
         Command::Template(c) => template_cmd(g, &env, p, c),
@@ -32,7 +32,10 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Status(a) => status_cmd(g, &env, p, &a),
         Command::Check => inspect::check(&open(g, &env, p)?, p),
         Command::Doctor => crate::doctor::doctor(&open(g, &env, p)?, p),
-        Command::Undeploy(a) => undeploy(g, &env, p, &a.paths, Selector::All),
+        Command::Undeploy(a) => {
+            let ask = a.paths.paths.is_empty() && !a.yes;
+            undeploy(g, &env, p, &a.paths.paths, Selector::All, ask)
+        }
         Command::Cache(CacheCommand::Clean) => cache_clean(g, &env, p),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
         Command::Completions { shell } => completions(shell),
@@ -277,19 +280,67 @@ fn finish(ctx: &Context, state: &State, printer: &Printer, items: &[ItemReport])
     saved.map(|()| execute::exit_code(items))
 }
 
-fn undeploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
+/// Removes managed destinations. With `ask`, a real run that removes
+/// anything shows the list and needs a "yes" first.
+fn undeploy(
+    g: &Global,
+    env: &Env,
+    printer: &mut Printer,
+    paths: &[String],
+    selector: Selector,
+    ask: bool,
+) -> Result<i32> {
     let ctx = open(g, env, printer)?;
     let _lock = lock(&ctx, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let removals = plan::plan_removal(&ctx, paths, selector, &state)?;
+    let predicted = execute::predict_removal(&removals);
     if g.dry_run {
-        let items = execute::predict_removal(&removals);
-        printer.items(&items, RunKind::DryRun);
-        return Ok(execute::exit_code(&items));
+        printer.items(&predicted, RunKind::DryRun);
+        return Ok(execute::exit_code(&predicted));
+    }
+    if !confirm_removal(ask, printer, &predicted)? {
+        eprintln!("cancelled, nothing removed");
+        return Ok(0);
     }
     let stop = interrupt_flag()?;
     let items = execute::remove(removals, &stop, &mut state);
     finish(&ctx, &state, printer, &items)
+}
+
+/// With `ask`, shows on stderr what would go and asks on the terminal.
+/// True when nothing would be removed. Without a terminal, only `--yes` confirms.
+fn confirm_removal(ask: bool, printer: &Printer, items: &[ItemReport]) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal};
+    let n = items.iter().filter(|i| i.action == Action::Remove).count();
+    if !ask || n == 0 {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(Error::Usage(
+            "`rustow undeploy` without paths removes every managed destination; add --yes to confirm".into(),
+        ));
+    }
+    for i in items {
+        eprintln!(
+            "{:>8} {}  <- {} ({})",
+            i.action.as_str(),
+            printer.path(&i.dest),
+            i.source,
+            i.mode
+        );
+    }
+    eprint!("Remove {n} destination{}? [y/N] ", if n == 1 { "" } else { "s" });
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| Error::Failed(format!("read the answer: {e}")))?;
+    Ok(is_yes(&answer))
+}
+
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// The first SIGINT/SIGTERM/SIGHUP asks the executor to stop between
@@ -303,4 +354,19 @@ fn interrupt_flag() -> Result<Arc<AtomicBool>> {
             .map_err(|e| Error::Failed(format!("install signal handler: {e}")))?;
     }
     Ok(stop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_yes;
+
+    #[test]
+    fn only_y_or_yes_confirms() {
+        for a in ["y\n", "Y\n", "yes\n", " YES \r\n"] {
+            assert!(is_yes(a), "{a:?}");
+        }
+        for a in ["", "\n", "n\n", "no\n", "yess\n", "y es\n"] {
+            assert!(!is_yes(a), "{a:?}");
+        }
+    }
 }

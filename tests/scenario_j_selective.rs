@@ -168,11 +168,55 @@ fn undeploy_removes_managed_and_refuses_modified() {
     let fx = mixed();
     fx.ok(&["apply"]);
     fs::write(fx.home_path("copied.conf"), "edited\n").unwrap();
-    let out = fx.run(&["undeploy"]);
+    let out = fx.run(&["undeploy", "--yes"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(!fx.home_path(".bashrc").exists());
     assert!(fs::symlink_metadata(fx.home_path(".gitconfig")).is_err());
     assert_eq!(read(&fx.home_path("copied.conf")), "edited\n");
+}
+
+#[test]
+fn undeploy_all_without_terminal_needs_yes() {
+    let fx = mixed();
+    fx.ok(&["apply"]);
+    let out = fx.run(&["undeploy"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("--yes"), "{out:?}");
+    assert_eq!(deployed(&fx), [true, true, true], "nothing removed");
+    fx.ok(&["undeploy", "-y"]);
+    assert_eq!(deployed(&fx), [false, false, false]);
+}
+
+#[test]
+fn undeploy_all_on_a_terminal_removes_only_after_yes() {
+    let fx = mixed();
+    fx.ok(&["apply"]);
+    let out = fx.run_tty(&["undeploy"], "n\n");
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains("  remove ~/.bashrc  <- .bashrc (link)"), "{out:?}");
+    assert!(out.stderr.contains("Remove 3 destinations? [y/N]"), "{out:?}");
+    assert!(out.stderr.contains("cancelled, nothing removed"), "{out:?}");
+    assert_eq!(deployed(&fx), [true, true, true]);
+    let out = fx.run_tty(&["undeploy"], "yes\n");
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(deployed(&fx), [false, false, false]);
+
+    let one = Fixture::new();
+    one.write(".bashrc", "b\n");
+    one.ok(&["apply"]);
+    let out = one.run_tty(&["undeploy"], "\n");
+    assert!(out.stderr.contains("Remove 1 destination? [y/N]"), "{out:?}");
+    assert!(one.home_path(".bashrc").exists(), "an empty answer is no");
+}
+
+#[test]
+fn undeploy_asks_only_for_a_full_real_run() {
+    let fx = mixed();
+    fx.ok(&["undeploy"]); // nothing recorded: nothing to confirm
+    fx.ok(&["apply"]);
+    assert!(fx.ok(&["undeploy", "-n"]).stdout.contains("dry run"));
+    fx.ok(&["undeploy", ".bashrc"]);
+    assert_eq!(deployed(&fx), [false, true, true]);
 }
 
 #[test]
