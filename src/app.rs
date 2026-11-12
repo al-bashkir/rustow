@@ -130,7 +130,9 @@ fn enc_run(ctx: &mut Context, state: &mut State, e: EncArgs, p: &Printer) -> Res
 
 fn completions(shell: clap_complete::Shell) -> Result<i32> {
     use clap::CommandFactory;
-    clap_complete::generate(shell, &mut Cli::command(), "rustow", &mut std::io::stdout());
+    let mut script = Vec::new();
+    clap_complete::generate(shell, &mut Cli::command(), "rustow", &mut script);
+    crate::report::out(format_args!("{}", String::from_utf8_lossy(&script)));
     Ok(0)
 }
 

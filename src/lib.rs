@@ -1,5 +1,10 @@
 //! rustow: a flat-repository dotfiles and configuration manager.
 
+/// `println!` for command results; see [`report::out`].
+macro_rules! outln {
+    ($($arg:tt)*) => { $crate::report::out(format_args!("{}\n", format_args!($($arg)*))) };
+}
+
 pub mod app;
 pub mod cache;
 pub mod cli;

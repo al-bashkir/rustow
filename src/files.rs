@@ -107,10 +107,10 @@ pub fn list(ctx: &Context, printer: &Printer) -> Result<i32> {
             .iter()
             .map(|(s, d, m)| json!({ "source": s, "dest": d, "mode": m }))
             .collect();
-        println!("{}", json!({ "files": files }));
+        outln!("{}", json!({ "files": files }));
     } else {
         for (source, dest, mode) in &rows {
-            println!("{source} -> {dest} ({mode})");
+            outln!("{source} -> {dest} ({mode})");
         }
     }
     Ok(0)

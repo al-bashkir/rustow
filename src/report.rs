@@ -8,6 +8,21 @@ use serde_json::json;
 use crate::execute::{Action, ItemReport};
 use crate::source::Skipped;
 
+/// Writes command results to stdout. rustow prints only after its work is
+/// done, so a reader that closed the pipe (`rustow status | head`) costs only
+/// output: exit at once with 141, as a shell reports SIGPIPE. SIGPIPE itself
+/// stays ignored, so a gpg child that exits early cannot kill rustow mid-write.
+pub fn out(args: std::fmt::Arguments) {
+    use std::io::Write;
+    if let Err(e) = std::io::stdout().lock().write_fmt(args) {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            std::process::exit(141);
+        }
+        eprintln!("rustow: error: write output: {e}");
+        std::process::exit(4);
+    }
+}
+
 /// Whether the reported items were applied or only planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunKind {
@@ -94,7 +109,7 @@ impl Printer {
                 "summary": summary_counts(items),
                 "warnings": self.warnings,
             });
-            println!("{out}");
+            outln!("{out}");
             return;
         }
         for i in items {
@@ -102,7 +117,7 @@ impl Printer {
             let show = problem || (!self.quiet && (i.action != Action::Unchanged || self.verbose));
             if show {
                 let detail = i.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-                println!(
+                outln!(
                     "{} {}  <- {} ({}){detail}",
                     self.verb(i.action),
                     self.path(&i.dest),
@@ -112,7 +127,7 @@ impl Printer {
             }
         }
         if !self.quiet {
-            println!("{}", summary_line(items, run));
+            outln!("{}", summary_line(items, run));
         }
     }
 
@@ -123,26 +138,26 @@ impl Printer {
                 .iter()
                 .map(|c| json!({ "path": c.path, "action": c.action, "detail": c.detail }))
                 .collect();
-            println!(
+            outln!(
                 "{}",
                 json!({ "repository": repository, "dry_run": dry_run, "changes": list })
             );
             return;
         }
         if let (false, Some(root)) = (self.quiet, repository) {
-            println!("repository: {}", root.display());
+            outln!("repository: {}", root.display());
         }
         let mut changed = 0;
         for c in changes {
             changed += usize::from(c.action != "ok");
             if !self.quiet && (c.action != "ok" || self.verbose || c.detail.is_some()) {
                 let detail = c.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-                println!("{:>8} {}{detail}", c.action, c.path);
+                outln!("{:>8} {}{detail}", c.action, c.path);
             }
         }
         if !self.quiet {
             let line = format!("{changed} changed, {} unchanged", changes.len() - changed);
-            println!(
+            outln!(
                 "{}",
                 if dry_run {
                     format!("dry run, nothing written: {line}")
@@ -264,10 +279,10 @@ impl Printer {
                 .iter()
                 .map(|(s, d, m)| json!({ "source": s, "dest": d, "mode": m }))
                 .collect();
-            println!("{}", json!({ key: list }));
+            outln!("{}", json!({ key: list }));
         } else {
             for (source, dest, mode) in &rows {
-                println!("{source} -> {dest} ({mode})");
+                outln!("{source} -> {dest} ({mode})");
             }
         }
     }

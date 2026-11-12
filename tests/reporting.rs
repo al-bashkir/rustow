@@ -286,3 +286,19 @@ fn state_write_failure_still_reports_items() {
         "{undeploy:?}"
     );
 }
+
+#[test]
+fn closed_stdout_ends_quietly_without_a_panic() {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rustow"))
+        .args(["completions", "zsh"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(out.status.code(), Some(141), "{:?}", out.status);
+}

@@ -55,10 +55,10 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
             .iter()
             .map(|c| json!({ "level": c.level, "check": c.name, "detail": c.detail }))
             .collect();
-        println!("{}", json!({ "checks": list }));
+        outln!("{}", json!({ "checks": list }));
     } else {
         for c in &checks {
-            println!("{:>5}  {}: {}", c.level, c.name, c.detail);
+            outln!("{:>5}  {}: {}", c.level, c.name, c.detail);
         }
     }
     Ok(i32::from(checks.iter().any(|c| c.level == "fail")))

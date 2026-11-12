@@ -45,7 +45,7 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
                 ("error", Some(msg)) => {
                     eprintln!("rustow: {}: cannot compute desired content: {msg}", s.item.source.path)
                 }
-                _ => print!("{}", s.text),
+                _ => crate::report::out(format_args!("{}", s.text)),
             }
         }
     }
@@ -102,7 +102,7 @@ fn print_json(shown: &[Shown], warnings: &[serde_json::Value]) {
             })
         })
         .collect();
-    println!("{}", json!({ "items": items, "warnings": warnings }));
+    outln!("{}", json!({ "items": items, "warnings": warnings }));
 }
 
 /// Diff text of a deploy step, and whether it is binary; marks a
@@ -251,7 +251,7 @@ pub fn status(
             .iter()
             .map(|r| json!({ "source": r.source, "dest": r.dest, "mode": r.mode, "status": r.status, "detail": r.detail }))
             .collect();
-        println!("{}", json!({ "items": items }));
+        outln!("{}", json!({ "items": items }));
     } else {
         print_rows(&rows, attention, printer);
     }
@@ -275,10 +275,10 @@ fn print_rows(rows: &[Row], attention: usize, printer: &Printer) {
             format!(" ({})", r.mode)
         };
         let detail = r.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-        println!("{:>9} {dest}{}{mode}{detail}", r.status, r.source);
+        outln!("{:>9} {dest}{}{mode}{detail}", r.status, r.source);
     }
     if !printer.quiet {
-        println!("{}", summary(rows, attention));
+        outln!("{}", summary(rows, attention));
     }
 }
 
@@ -438,16 +438,16 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
         }
     }
     if printer.json {
-        println!(
+        outln!(
             "{}",
             json!({ "sources": discovery.sources.len(), "problems": findings, "warnings": printer.warnings })
         );
     } else {
         for f in &findings {
-            println!("problem: {f}");
+            outln!("problem: {f}");
         }
         if !printer.quiet {
-            println!(
+            outln!(
                 "{} sources checked, {} problems",
                 discovery.sources.len(),
                 findings.len()
