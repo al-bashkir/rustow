@@ -65,7 +65,7 @@ rustow takes the symlink model of GNU Stow and the templates, copies, encryption
 | System files | A separate stow directory with target `/` | Not the main use | `.rustowroot/`, copies only, with privilege hints |
 | Conflicts | Stop | Prompt by default | Stop and change nothing by default; `skip`, `backup` or `overwrite` on request |
 | State | None; the links are the state | Persistent state | Persistent state, plus a check of the real filesystem before every change |
-| Directory folding | On by default | No | On by default, never directly under `~`; per file or directory with `[[file_rules]]` |
+| Directory folding | On by default | No | On by default, never directly under `~` or `~/.local`; per file or directory with `[[file_rules]]` |
 
 ## Limits
 

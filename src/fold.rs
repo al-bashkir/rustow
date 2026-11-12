@@ -1,8 +1,8 @@
 //! Directory folding (spec §7.1). A home directory whose repository copy
 //! holds only ordinary link sources that may fold (`fold_allowed`), and
 //! that does not exist at the destination yet, is deployed as one symlink.
-//! A direct child of home never folds: on a fresh machine `~/.ssh`,
-//! `~/.gnupg` or `~/.config` would then take private files into the repo.
+//! A direct child of home or of `~/.local` never folds: on a fresh machine `~/.ssh`,
+//! `~/.gnupg`, `~/.config` or `~/.local/share` would then take private files into the repo.
 //! A folded link that no longer qualifies is unfolded into a real
 //! directory, but only when every file it exposes is a source and the same
 //! run deploys every one of them again (see `plan`), so that no content
@@ -75,6 +75,17 @@ pub fn fold_allowed(rules: &BTreeMap<RelPath, bool>, default: bool, path: &RelPa
         .unwrap_or(default)
 }
 
+/// A direct child of home, or of `~/.local` (`share`, `state`, `bin`, ...):
+/// on a new machine these are often missing, and a fold would let
+/// programs write keys, tokens and history into the repository.
+fn never_folds(dir: &RelPath) -> bool {
+    let mut parts = dir.components();
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (_, None, _) | (Some(".local"), Some(_), None)
+    )
+}
+
 /// A home link source that may sit below a folded directory.
 fn foldable(ctx: &Context, source: &Source) -> bool {
     is_home(source)
@@ -104,7 +115,7 @@ fn fold_candidates(
     let mut candidates: Vec<RelPath> = chosen
         .iter()
         .flat_map(|p| ancestors(p))
-        .filter(|d| d.components().count() > 1)
+        .filter(|d| !never_folds(d))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();

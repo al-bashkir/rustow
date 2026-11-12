@@ -94,12 +94,12 @@ fn new_false_rule_unfolds_an_existing_fold() {
 fn recorded_top_level_fold_is_unfolded_on_upgrade() {
     let fx = Fixture::new();
     fx.write(".rustow.toml", "version = 1\n");
-    fx.write(".local/bin/x", "x\n");
-    fs::create_dir_all(fx.home_path(".local")).unwrap();
+    fx.write(".vim/pack/x", "x\n");
+    fs::create_dir_all(fx.home_path(".vim")).unwrap();
     fx.ok(&["apply"]);
-    assert!(is_symlink(&fx.home_path(".local/bin")));
+    assert!(is_symlink(&fx.home_path(".vim/pack")));
 
-    // Turn the recorded `.local/bin` fold into a `.local` fold.
+    // Turn the recorded `.vim/pack` fold into a `.vim` fold.
     let state_file = walkdir::WalkDir::new(&fx.state)
         .into_iter()
         .map(|e| e.unwrap().into_path())
@@ -107,21 +107,21 @@ fn recorded_top_level_fold_is_unfolded_on_upgrade() {
         .expect("state file");
     let mut state: serde_json::Value = serde_json::from_str(&read(&state_file)).unwrap();
     let entries = state["entries"].as_object_mut().unwrap();
-    let old_key = fx.home_path(".local/bin").display().to_string();
+    let old_key = fx.home_path(".vim/pack").display().to_string();
     let mut record = entries.remove(&old_key).expect("recorded fold");
-    let target = fx.repo.join(".local");
-    record["source"] = ".local".into();
+    let target = fx.repo.join(".vim");
+    record["source"] = ".vim".into();
     record["link_target"] = target.display().to_string().into();
-    entries.insert(fx.home_path(".local").display().to_string(), record);
+    entries.insert(fx.home_path(".vim").display().to_string(), record);
     fs::write(&state_file, serde_json::to_string(&state).unwrap()).unwrap();
-    fs::remove_file(fx.home_path(".local/bin")).unwrap();
-    fs::remove_dir(fx.home_path(".local")).unwrap();
-    std::os::unix::fs::symlink(&target, fx.home_path(".local")).unwrap();
+    fs::remove_file(fx.home_path(".vim/pack")).unwrap();
+    fs::remove_dir(fx.home_path(".vim")).unwrap();
+    std::os::unix::fs::symlink(&target, fx.home_path(".vim")).unwrap();
 
     fx.ok(&["apply"]);
-    assert!(is_dir(&fx.home_path(".local")), "unfolded");
-    assert!(is_symlink(&fx.home_path(".local/bin/x")));
-    assert_eq!(read(&fx.home_path(".local/bin/x")), "x\n");
+    assert!(is_dir(&fx.home_path(".vim")), "unfolded");
+    assert!(is_symlink(&fx.home_path(".vim/pack/x")));
+    assert_eq!(read(&fx.home_path(".vim/pack/x")), "x\n");
 }
 
 #[test]
@@ -141,4 +141,35 @@ fn file_rule_warning_prints_but_status_has_no_row() {
     let st = fx.run(&["status", "-v"]);
     assert_eq!(st.code, 0, "{st:?}");
     assert!(!st.stdout.contains("SKIPPED"), "{st:?}");
+}
+
+/// `~/.local/share`, `~/.local/state` and the like hold keyrings, shell
+/// history and editor state: like a direct child of home, they never fold.
+#[test]
+fn a_direct_child_of_local_never_folds() {
+    let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n");
+    fx.write(".local/share/fonts/x.ttf", "f\n");
+    fx.write(".local/bin/tool", "t\n");
+    fx.ok(&["apply"]);
+    assert!(is_dir(&fx.home_path(".local")));
+    assert!(is_dir(&fx.home_path(".local/share")), ".local/share never folds");
+    assert!(is_dir(&fx.home_path(".local/bin")), ".local/bin never folds");
+    assert!(is_symlink(&fx.home_path(".local/bin/tool")));
+    assert!(
+        is_symlink(&fx.home_path(".local/share/fonts")),
+        "one level deeper folds"
+    );
+}
+
+#[test]
+fn a_rule_cannot_fold_a_direct_child_of_local() {
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[[file_rules]]\nsource = \".local/bin\"\nfold_directories = true\n",
+    );
+    fx.write(".local/bin/tool", "t\n");
+    fx.ok(&["apply"]);
+    assert!(is_dir(&fx.home_path(".local/bin")));
 }
