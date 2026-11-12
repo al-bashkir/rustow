@@ -213,51 +213,63 @@ fn meta_line(line: &str) -> Option<Stmt<'_>> {
     let s = s.strip_prefix("meta.")?;
     let key_len = s.bytes().take_while(u8::is_ascii_lowercase).count();
     let (key, s) = s.split_at(key_len);
-    let s = s.trim_start();
-    let (test, s) = match s.strip_prefix("==") {
-        Some(rest) => (true, rest),
-        None => (false, s.strip_prefix('=')?),
-    };
-    let s = s.trim_start();
-    let (value, s) = match s.strip_prefix('"') {
-        Some(rest) => {
-            let (inner, rest) = rest.split_once('"')?;
-            (!inner.contains('\\')).then_some((MetaValue::Text(inner), rest))?
-        }
-        None => {
-            let n = s.bytes().take_while(u8::is_ascii_digit).count();
-            (n > 0).then_some((MetaValue::Number(&s[..n]), &s[n..]))?
-        }
-    };
+    let (test, s) = operator(s.trim_start())?;
+    let (value, s) = meta_value(s.trim_start())?;
     let s = s.trim_start();
     let s = s.strip_prefix('-').unwrap_or(s);
     (!key.is_empty() && s == "%}").then_some(Stmt { key, test, value })
 }
 
+/// `==` (a test, true) or `=` (a setting, false), and the text after it.
+fn operator(s: &str) -> Option<(bool, &str)> {
+    match s.strip_prefix("==") {
+        Some(rest) => Some((true, rest)),
+        None => Some((false, s.strip_prefix('=')?)),
+    }
+}
+
+/// A double-quoted string without `"` or `\` inside, or a run of digits; and the text after it.
+fn meta_value(s: &str) -> Option<(MetaValue<'_>, &str)> {
+    if let Some(rest) = s.strip_prefix('"') {
+        let (inner, rest) = rest.split_once('"')?;
+        return (!inner.contains('\\')).then_some((MetaValue::Text(inner), rest));
+    }
+    let n = s.bytes().take_while(u8::is_ascii_digit).count();
+    (n > 0).then_some((MetaValue::Number(&s[..n]), &s[n..]))
+}
+
 /// Adds one meta statement to `meta`; the error is without the line.
 fn apply(meta: &mut TemplateMeta, stmt: &Stmt) -> Result<(), String> {
-    let key = stmt.key;
-    if let Some(fact) = Fact::parse(key) {
-        if !stmt.test {
-            return Err(format!("meta.{key} is a condition; use =="));
-        }
-        let value = text_value(stmt)?;
-        meta.conditions.push(Condition {
-            fact,
-            value: value.to_owned(),
-        });
-        return Ok(());
+    match Fact::parse(stmt.key) {
+        Some(fact) => add_condition(meta, fact, stmt),
+        None => add_setting(&mut meta.settings, stmt),
     }
+}
+
+fn add_condition(meta: &mut TemplateMeta, fact: Fact, stmt: &Stmt) -> Result<(), String> {
+    if !stmt.test {
+        return Err(format!("meta.{} is a condition; use ==", stmt.key));
+    }
+    let value = text_value(stmt)?.to_owned();
+    meta.conditions.push(Condition { fact, value });
+    Ok(())
+}
+
+fn add_setting(s: &mut Metadata, stmt: &Stmt) -> Result<(), String> {
+    let key = stmt.key;
     if stmt.test {
         return Err(format!("meta.{key} is a setting; use ="));
     }
-    let s = &mut meta.settings;
-    match key {
-        "mode" => s.mode = Some(parse_mode(text_value(stmt)?)?),
-        "uid" | "user" => s.owner = Some(owner_value(stmt, s.owner.is_some(), "uid", "user")?),
-        "gid" | "group" => s.group = Some(owner_value(stmt, s.group.is_some(), "gid", "group")?),
+    let (slot, id_key, name_key) = match key {
+        "mode" => {
+            s.mode = Some(parse_mode(text_value(stmt)?)?);
+            return Ok(());
+        }
+        "uid" | "user" => (&mut s.owner, "uid", "user"),
+        "gid" | "group" => (&mut s.group, "gid", "group"),
         _ => return Err(format!("unknown meta key 'meta.{key}'")),
-    }
+    };
+    *slot = Some(owner_value(stmt, slot.is_some(), id_key, name_key)?);
     Ok(())
 }
 
