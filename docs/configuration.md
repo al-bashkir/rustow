@@ -4,6 +4,8 @@ The file is `<repo>/.rustow.toml`. It is optional. Without it, rustow uses the d
 
 rustow rejects unknown keys everywhere, except under `[vars]`. A configuration error gives exit code 2.
 
+A TOML error reads `.rustow.toml: line L, column C, key <path>: <message>`, for example `.rustow.toml: line 7, column 22, key defaults.create_directories: invalid type, expected a boolean`. The key part is missing when rustow cannot find the key. The message never shows the source line or a value. Other validation messages can name values that are not secret, such as a `mode`, an `owner`, the `engine`, the `extension` or a source path. rustow never shows `[vars]` values.
+
 ## Full example
 
 ```toml
@@ -55,16 +57,33 @@ mode = "0600"
 | `create_directories` | `true` | Create missing parent directories. |
 | `fold_directories` | `false` | Fold plain directories into one symlink. See below. |
 
+### Cache and state directories
+
+rustow compares `cache_dir` and `state_dir` with the repository in canonical form. So it also finds a directory inside the repository when the path goes through a symlink, for example a symlinked repository path, or a HOME behind a symlink such as `/home -> /var/home`.
+
+- rustow never deploys a cache or state directory inside the repository.
+- A cache or state directory must not be the repository or one of its parents. Inside the repository, it must not be in `.rustowroot` or `.git`. Otherwise every command stops with exit 2.
+- A configured in-repository `cache_dir` or `state_dir` may hold only rustow's names: `rendered/`, `decrypted/`, `edit/`, `backups/`, `cache/`, `<repo-id>.json`, `<repo-id>.lock` and temporary files that start with `.rustow-tmp-`. Any other name stops every command with exit 2. Thus `cache_dir = ".config"` cannot hide your `.config` sources.
+- The built-in `.rustowcache` is exempt from that content rule. It is reserved by name, so a file such as `.DS_Store` in it does no harm.
+- A symlink or a non-directory above an in-repository cache or state directory stops every command with exit 3.
+
 ### Folding
 
-When `fold_directories = true`, rustow uses one symlink for the shallowest home directory when both conditions are true:
+When `fold_directories = true`, rustow uses one symlink for the shallowest home directory when all these conditions are true:
 
 - The repository directory holds only ordinary link sources.
+- It holds no reserved directory, such as `.git` or an in-repository `cache_dir` or `state_dir`. This is also true for a configured directory that does not exist yet.
+- No destination collision is on the directory or below it.
 - The destination directory does not exist.
+- For a new fold, the run selects every source below the directory. A selective run (a path argument, or a command such as `rustow link`) folds a new directory only then. It keeps an existing fold.
 
 rustow never folds in `.rustowroot/`.
 
-A recorded folded link that no longer qualifies becomes a real directory. This happens when you add a template, a copy, an encrypted file or an ignored file, or when you turn folding off. rustow refuses to unfold when files under the directory are not sources, because they would disappear from the destination. Files below a folded link that cannot be unfolded are blocked too. If you replace rustow's folded link yourself (with a directory or your own symlink), rustow treats it as yours: it plans the files below it against what is there, with the normal conflict rules, and `unlink` forgets the old record.
+A recorded folded link that no longer qualifies becomes a real directory. This happens when you add a template, a copy, an encrypted file or an ignored file, or when you turn folding off. rustow refuses to unfold when files under the directory are not sources, because they would disappear from the destination.
+
+rustow unfolds only when the same run deploys every source below the directory again. A partial run cannot unfold: a command that deploys only some modes, a path argument, or an item below the directory that is in conflict or fails. Then the folded link is a conflict, "cannot unfold the folded directory: X would not be deployed again; run `rustow apply <dir>`". Each item below it is a conflict too: "the folded directory D cannot be unfolded yet". The command exits with 3. Run `rustow apply <dir>` to unfold.
+
+If you replace rustow's folded link yourself (with a directory or your own symlink), rustow treats it as yours: it plans the files below it against what is there, with the normal conflict rules, and `unlink` forgets the old record.
 
 `unlink` of a file inside a folded directory matches nothing. Unlink the directory.
 
@@ -112,7 +131,7 @@ group = "root"
 
 A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`.
 
-- `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits.
+- `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. Only the digits 0–7 are allowed, with no sign or space. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits. The mode must include owner read (`0400`), because rustow reads the deployed file to find changes. Any other mode is a configuration error (exit 2).
 - `owner` and `group` are a name or a numeric id. An unknown name is an error.
 
 A rule on a file that is not a template is an error. A registered source or a rule source must exist. It must not be ignored or reserved.
@@ -129,3 +148,7 @@ A rule on a file that is not a template is an error. A registered source or a ru
 | TemplateCopy | template+copy | Template with a rule |
 
 Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. Nested names such as `x.age.gpg` are rejected. The destination name drops the encryption suffix, then the template extension.
+
+The state file and mode selection use these labels. Output names the decrypt step and the backend of an encrypted source: `decrypt(age)+link`, `decrypt(gpg)+copy`, `decrypt(gpg)+template+link`. Plans (text and JSON), `status`, `undeploy`, `template list` and `file list` show these labels.
+
+Two sources that map to one destination collide, for example `x`, `x.age` and `x.tmpl`. A destination below another destination collides too. On a case-insensitive target filesystem, names that differ only in case collide. rustow tests each target for this. A root target of `/` always counts as case-sensitive (known limit).

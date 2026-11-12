@@ -16,9 +16,15 @@ A "broken symlink" at a destination is a foreign symlink. It is a conflict.
 
 Replacing a regular file with a symlink always needs `--backup` or `--force`.
 
+"cannot unfold the folded directory: X would not be deployed again; run `rustow apply <dir>`": the run is partial. It selects only some sources below a folded link, or an item below it is in conflict or fails. Items below show "the folded directory D cannot be unfolded yet". Fix the other conflicts, then run `rustow apply <dir>`.
+
+"... is not a directory (symlinks are not followed); move it away first" for `cache_dir` or `state_dir`: a symlink or a file is above an in-repository cache or state directory. Every command stops until you move it away.
+
 ## MODIFIED
 
 The destination changed since the last apply. For a copy, you edited the file. For a symlink into the cache, you edited the cache entry through the symlink. Edit the source in the repository. Use `--backup` or `--force` to replace the change.
+
+When the source changed too, `status` shows CONFLICT: "source and destination both changed since rustow last applied it". `diff` shows the same line before the content diff. Merge your edit into the source, then use `--backup` or `--force`.
 
 ## UNMANAGED
 
@@ -26,18 +32,23 @@ The destination is correct but not recorded. `rustow apply` records it. It write
 
 ## ORPHANED
 
-The state records a destination whose source is gone. Run `rustow undeploy`.
+The state records a destination whose source is gone. `status` and the deploy commands show it, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". Run the `rustow undeploy` command in the message. `rustow undeploy` with no path removes every managed destination.
 
 ## Exit code 4
 
 - "another rustow process": a second run holds the lock. Wait for it.
 - Render error: the message gives the template and line. Check for undefined variables. Use `is defined`.
 - Decrypt error: see below.
+- "cannot write to directory X: Permission denied …; elevated privileges may be required": you cannot write the directory of the destination. Run rustow with the needed rights, or change the directory. Under the default policy nothing was written.
+- State file error after the report: rustow wrote the items in the report, but it could not save the state. Fix the state directory, then run `rustow apply` again. It adopts correct destinations.
 - Interrupted: rustow stopped between items. Run again.
 
 ## Exit code 2: configuration
 
-Read the message. Common causes: missing `version = 1`, an unknown key, a rule on a non-template, a registered source that does not exist or is ignored, a bad mode string.
+Read the message. A TOML error gives the line, the column and the key path: `.rustow.toml: line L, column C, key <path>: <message>`. Common causes: missing `version = 1`, an unknown key, a rule on a non-template, a registered source that does not exist or is ignored, a bad mode string, a template `mode` without owner read (0400).
+
+- "holds 'X', which is not rustow's": a configured in-repository `cache_dir` or `state_dir` holds a file that rustow did not write. Move the file, or choose another directory.
+- "is reserved by rustow and is never deployed": the path is reserved, for example a name that starts with `.rustow-tmp-`.
 
 ## Untrusted link target
 

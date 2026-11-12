@@ -26,8 +26,9 @@ rustow always excludes these. A `!` pattern or an explicit path cannot re-includ
 - `.git` at any depth.
 - `.gitignore`, `.rustow.toml` and `.rustowignore` in the repository root.
 - The `.rustowcache/` subtree.
-- A cache or state directory that the configuration puts inside the repository.
+- A cache or state directory that the configuration puts inside the repository. See [cache and state directories](configuration.md#cache-and-state-directories).
 - A file named `.rustowroot`.
+- Any path component that starts with `.rustow-tmp-`, at any depth. rustow names its temporary files `.rustow-tmp-XXXXXX`.
 
 ## Special files
 

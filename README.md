@@ -10,7 +10,7 @@ The repository root mirrors your home directory. The `.rustowroot/` directory mi
 - Templates use MiniJinja. Undefined variables are errors.
 - Encrypted sources: age (built in) and GnuPG (installed `gpg`).
 - System files under `.rustowroot/`. rustow never runs `sudo`.
-- Safe conflict handling. By default rustow changes nothing when any item conflicts.
+- Safe conflict handling. By default rustow changes nothing when any item conflicts or fails to plan.
 - State file per repository. `status`, `diff` and `check` show differences. They exit with code 1 when they find some.
 - `.rustowignore` with gitignore syntax.
 

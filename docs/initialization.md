@@ -24,10 +24,11 @@ Path arguments of commands are always relative to the repository. They are never
 - Creates a minimal `.rustow.toml` with `version = 1` and `cache_dir`.
 - If `.rustow.toml` exists, adds only a missing `version = 1` at the top. Comments and CRLF line ends stay. rustow rejects a malformed file and other versions.
 - Appends `/.rustowcache/` to `.gitignore` and `.rustowignore`. It also appends in-repository cache and state directories. It does this only when the rules of that file do not already exclude the directory. If a later negation re-includes the directory, init repairs it once.
+- Escapes `\`, `*`, `?` and `[` in these entries with a backslash. For `cache_dir = "c[1]"` the entry is `/c\[1]/`.
 - Handles a missing final newline and CRLF.
 - Creates the cache directory with mode 0700, or tightens it to 0700.
 
-If a symlink or directory stands in place of one of these files, init stops with exit code 3.
+init does all its checks before it writes. When a check fails, init changes nothing. If a symlink or directory stands in place of one of these files, or something other than a directory is at the cache path, init stops with exit code 3. A configuration error stops it with exit code 2.
 
 A second run writes nothing. It prints "0 changed".
 

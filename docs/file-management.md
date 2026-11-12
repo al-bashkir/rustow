@@ -15,7 +15,7 @@ rustow file remove .config/example/settings.json
 `file add` registers a plaintext or an encrypted non-template source in `.rustow.toml`. It never deploys. Run `rustow file apply` or `rustow apply` afterwards.
 
 - It is idempotent. A repeat prints "already registered".
-- It keeps comments in `.rustow.toml`.
+- It keeps comments and CRLF line endings in `.rustow.toml`. `file remove` keeps them too.
 - It exits with code 2 for a template, a directory, an ignored path, a reserved path or an unknown path.
 - `file add x.age` makes a `decrypt+copy` source with mode 0600.
 
@@ -31,6 +31,7 @@ rustow file remove .config/example/settings.json
 - rustow writes a temporary file in the same directory (mode 0600), sets owner and mode, calls `fsync`, then renames it. It never follows a symlink at the destination.
 - If you change a copy by hand, rustow reports MODIFIED and a conflict. It does not overwrite your change unless you use `--backup` or `--force`.
 - To replace a regular file with a symlink (copy to link), you must use `--backup` or `--force`. To replace rustow's own symlink with a file is automatic.
+- An exception: you edited a cache entry through rustow's link, then you switch the source to a copy (`file add x.age`, or a `[[template_rules]]` entry). Then `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--backup` saves your edit under `<state_dir>/backups/<repo-id>/<time>/cache/<dest>`. `--force` discards it.
 
 ## Selecting by mode
 
