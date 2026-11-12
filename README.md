@@ -17,8 +17,18 @@ The repository root mirrors your home directory. The `.rustowroot/` directory mi
 
 ## Install
 
+With [Homebrew](https://brew.sh) on macOS (Apple silicon) or Linux:
+
 ```sh
-cargo install --path .
+brew install al-bashkir/tools/rustow
+```
+
+Or download an archive from [GitHub releases](https://github.com/al-bashkir/rustow/releases). There are static binaries for Linux x86_64 and arm64, and a binary for macOS on Apple silicon.
+
+On other systems, build from source with Rust 1.99 or newer:
+
+```sh
+cargo install --locked --git https://github.com/al-bashkir/rustow
 ```
 
 See [docs/installation.md](docs/installation.md).

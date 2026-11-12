@@ -8,6 +8,25 @@
 
 age needs no extra program. rustow includes it.
 
+## Homebrew
+
+The [al-bashkir/tools](https://github.com/al-bashkir/homebrew-tools) tap has a formula for macOS on Apple silicon and for Linux on x86_64 and arm64:
+
+```sh
+brew install al-bashkir/tools/rustow
+```
+
+Or tap first, then install:
+
+```sh
+brew tap al-bashkir/tools
+brew install rustow
+```
+
+The formula installs the release binary and the bash, zsh and fish completions. On Linux, it is the same musl binary as in the release archive. See the musl note in [Download a release](#download-a-release). There is no formula for macOS on Intel. Build from source there.
+
+To update, run `brew upgrade rustow`.
+
 ## Download a release
 
 Each [GitHub release](https://github.com/al-bashkir/rustow/releases) has archives for these targets:
