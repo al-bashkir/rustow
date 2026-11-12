@@ -88,7 +88,7 @@ fn template_list(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 
 fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
     let prepared = prepare(g, env, p, paths, selector, false)?;
-    inspect::diff(&prepared.plan, p)
+    inspect::diff(&prepared.plan, &prepared.state, p)
 }
 
 fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<i32> {

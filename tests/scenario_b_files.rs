@@ -209,6 +209,49 @@ fn binary_diff_message() {
     assert!(out.stdout.contains("Binary files"), "{out:?}");
 }
 
+/// Spec §8.5: when the source and the destination both changed, status and
+/// diff show a conflict, not a plain local modification.
+#[test]
+fn both_changed_is_a_conflict_in_status_and_diff() {
+    let fx = registered();
+    fx.write(".gitconfig.tmpl", "x\n");
+    fx.ok(&["apply"]);
+    fs::write(fx.home_path(SRC), "{\"a\": \"mine\"}\n").unwrap();
+    // Writes through the link into the cache entry.
+    fs::write(fx.home_path(".gitconfig"), "mine\n").unwrap();
+    let status = fx.run(&["status"]);
+    for name in [SRC, ".gitconfig"] {
+        assert!(
+            status
+                .stdout
+                .lines()
+                .any(|l| l.contains("MODIFIED") && l.contains(name)),
+            "{status:?}"
+        );
+    }
+    fx.write(SRC, "{\"a\": 2}\n");
+    fx.write(".gitconfig.tmpl", "y\n");
+    let status = fx.run(&["status"]);
+    assert_eq!(status.code, 1, "{status:?}");
+    for name in [SRC, ".gitconfig"] {
+        let line = status.stdout.lines().find(|l| l.contains(name)).unwrap_or_default();
+        assert!(
+            line.contains("CONFLICT") && line.contains("source and destination both changed"),
+            "{status:?}"
+        );
+    }
+    let diff = fx.run(&["diff"]);
+    assert_eq!(diff.code, 1, "{diff:?}");
+    for name in [SRC, ".gitconfig"] {
+        assert!(
+            diff.stdout
+                .contains(&format!("~/{name}: conflict: source and destination both changed")),
+            "{diff:?}"
+        );
+    }
+    assert!(diff.stdout.contains("+{\"a\": 2}"), "{diff:?}");
+}
+
 #[test]
 fn file_apply_rejects_non_registered_path() {
     let fx = registered();

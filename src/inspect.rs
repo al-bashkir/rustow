@@ -14,12 +14,12 @@ use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step};
 use crate::repo::Context;
 use crate::report::Printer;
 use crate::source::{Discovery, Mode, check_collisions};
-use crate::state::State;
+use crate::state::{Record, State};
 use crate::template;
 
 /// Prints differences; exit 0 when none, 1 when some, 4 when desired
 /// content could not be computed for an item.
-pub fn diff(plan: &Plan, printer: &Printer) -> Result<i32> {
+pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
     let (mut differs, mut failed) = (false, false);
     for item in &plan.items {
         let label = printer.path(&item.dest);
@@ -33,7 +33,7 @@ pub fn diff(plan: &Plan, printer: &Printer) -> Result<i32> {
                 format!("{label}: {}: {detail}\n", conflict.describe())
             }
             Step::Unfold { .. } => format!("{label}: folded directory link; would become a real directory\n"),
-            Step::Deploy(d) => describe(&label, d)?,
+            Step::Deploy(d) => deploy_text(&label, d, state.entries.get(&item.dest))?,
         };
         if !text.is_empty() {
             differs = true;
@@ -41,6 +41,15 @@ pub fn diff(plan: &Plan, printer: &Printer) -> Result<i32> {
         }
     }
     Ok(if failed { 4 } else { i32::from(differs) })
+}
+
+/// Diff text of a deploy step; marks a destination whose source changed too.
+fn deploy_text(label: &str, d: &Deploy, old: Option<&Record>) -> Result<String> {
+    let text = describe(label, d)?;
+    if both_changed(d, old) {
+        return Ok(format!("{label}: conflict: {BOTH_CHANGED}\n{text}"));
+    }
+    Ok(text)
 }
 
 fn describe(label: &str, d: &Deploy) -> Result<String> {
@@ -143,7 +152,7 @@ pub fn status(
     ignored: bool,
     printer: &Printer,
 ) -> Result<i32> {
-    let mut rows: Vec<Row> = plan.items.iter().map(row).collect();
+    let mut rows: Vec<Row> = plan.items.iter().map(|i| row(i, state)).collect();
     rows.extend(orphans(ctx, discovery, state, args)?);
     if ignored {
         rows.extend(discovery.ignored.iter().map(|p| Row {
@@ -186,8 +195,8 @@ pub fn status(
     Ok(i32::from(attention > 0))
 }
 
-fn row(item: &PlanItem) -> Row {
-    let (status, detail) = classify_item(item);
+fn row(item: &PlanItem, state: &State) -> Row {
+    let (status, detail) = classify_item(item, state.entries.get(&item.dest));
     Row {
         source: item.source.path.to_string(),
         dest: Some(item.dest.clone()),
@@ -197,19 +206,30 @@ fn row(item: &PlanItem) -> Row {
     }
 }
 
-fn classify_item(item: &PlanItem) -> (&'static str, Option<String>) {
+fn classify_item(item: &PlanItem, old: Option<&Record>) -> (&'static str, Option<String>) {
     match &item.step {
         Step::Failed(msg) => ("ERROR", Some(msg.clone())),
         Step::Blocked { conflict, detail } => ("CONFLICT", Some(format!("{}: {detail}", conflict.describe()))),
         Step::Unfold { .. } => ("OUTDATED", Some("folded directory will be unfolded".into())),
-        Step::Deploy(d) => classify_deploy(d, &item.source.mode),
+        Step::Deploy(d) => classify_deploy(d, &item.source.mode, old),
     }
 }
 
+const BOTH_CHANGED: &str = "source and destination both changed since rustow last applied it";
+
+/// A modified destination (or cache entry) whose desired content changed too
+/// since the last apply (spec §8.5). `old` is the record of that apply.
+fn both_changed(d: &Deploy, old: Option<&Record>) -> bool {
+    let modified = Decision::Conflict(Conflict::Modified);
+    (d.decision == modified || d.cache.as_ref().is_some_and(|c| c.decision == modified))
+        && old.is_some_and(|r| r.applied_hash != d.record.applied_hash)
+}
+
 /// Status of a deploy step from its destination and cache decisions.
-fn classify_deploy(d: &Deploy, mode: &Mode) -> (&'static str, Option<String>) {
+fn classify_deploy(d: &Deploy, mode: &Mode, old: Option<&Record>) -> (&'static str, Option<String>) {
     let cache = d.cache.as_ref().map(|c| c.decision);
     match (d.decision, cache) {
+        _ if both_changed(d, old) => ("CONFLICT", Some(BOTH_CHANGED.into())),
         (Decision::Conflict(Conflict::Modified), _) | (_, Some(Decision::Conflict(Conflict::Modified))) => {
             ("MODIFIED", None)
         }
