@@ -98,16 +98,17 @@ fn dry_run_reports_unreadable_destination_and_lists_the_rest() {
 }
 
 /// Review I5: a system symlink into a source that others can modify is
-/// refused, as for cache-backed links.
+/// refused, as for cache-backed links. (A group-writable directory may be
+/// trusted in a user-private group; see scenario_h_conflicts.)
 #[test]
 fn root_link_into_writable_source_tree_is_refused() {
     use std::os::unix::fs::PermissionsExt;
     let fx = Fixture::new();
     fx.write(".rustowroot/etc/x.conf", "x");
-    fs::set_permissions(fx.repo.join(".rustowroot/etc"), fs::Permissions::from_mode(0o775)).unwrap();
+    fs::set_permissions(fx.repo.join(".rustowroot/etc"), fs::Permissions::from_mode(0o757)).unwrap();
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");
-    assert!(out.stdout.contains("writable by group or others"), "{out:?}");
+    assert!(out.stdout.contains("writable by others"), "{out:?}");
     assert!(!fx.root_path("etc/x.conf").exists());
     fs::set_permissions(fx.repo.join(".rustowroot/etc"), fs::Permissions::from_mode(0o755)).unwrap();
     fx.ok(&["apply"]);

@@ -373,21 +373,28 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-/// Owner and permission bits of one directory on a path.
+/// Owner, group and permission bits of one path on a link target's chain.
 #[derive(Debug, Clone)]
 pub struct Owned {
     pub path: PathBuf,
     pub uid: u32,
+    pub gid: u32,
     pub mode: u32,
 }
 
-/// Trust rule for a cache entry that a system symlink will point to:
-/// every directory on its path is owned by root or by `owner` (the owner
-/// of the destination directory) and is not writable by group or others
+/// Trust rule for the file a symlink will point to: every path on the
+/// chain is owned by root or by `owner` (the owner of the destination
+/// directory), is not writable by others, and is writable by its group
+/// only when that group is `private_gid`, the owner's user-private group
 /// (sticky root-owned directories such as /tmp excepted). Directories
 /// still to be created by `creator` must be created by a trusted user.
-pub fn check_chain(chain: &[Owned], creator: Option<u32>, owner: u32) -> std::result::Result<(), String> {
-    chain.iter().try_for_each(|dir| check_dir(dir, owner))?;
+pub fn check_chain(
+    chain: &[Owned],
+    creator: Option<u32>,
+    owner: u32,
+    private_gid: Option<u32>,
+) -> std::result::Result<(), String> {
+    chain.iter().try_for_each(|dir| check_dir(dir, owner, private_gid))?;
     match creator {
         Some(uid) if uid != 0 && uid != owner => Err(format!(
             "cache directories would be created by uid {uid}, not by uid {owner} or root"
@@ -396,20 +403,47 @@ pub fn check_chain(chain: &[Owned], creator: Option<u32>, owner: u32) -> std::re
     }
 }
 
-/// One directory of the chain: trusted owner, not writable by group or others.
-fn check_dir(dir: &Owned, owner: u32) -> std::result::Result<(), String> {
+/// One path of the chain: trusted owner, no write access for others or for
+/// a group other than the owner's user-private group.
+fn check_dir(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result::Result<(), String> {
+    let path = dir.path.display();
     if dir.uid != 0 && dir.uid != owner {
         return Err(format!(
-            "{} is owned by uid {}, but the destination directory belongs to uid {owner}",
-            dir.path.display(),
+            "{path} is owned by uid {}, but the destination directory belongs to uid {owner}",
             dir.uid
         ));
     }
-    let sticky_root = dir.mode & 0o1000 != 0 && dir.uid == 0;
-    if dir.mode & 0o022 != 0 && !sticky_root {
-        return Err(format!("{} is writable by group or others", dir.path.display()));
+    if dir.mode & 0o1000 != 0 && dir.uid == 0 {
+        return Ok(()); // sticky and root-owned, such as /tmp
+    }
+    if dir.mode & 0o002 != 0 {
+        return Err(format!("{path} is writable by others"));
+    }
+    if dir.mode & 0o020 != 0 && Some(dir.gid) != private_gid {
+        return Err(format!(
+            "{path} is writable by group {}, which is not the private group of uid {owner}; run `chmod g-w {path}`",
+            dir.gid
+        ));
     }
     Ok(())
+}
+
+/// The owner's user-private group: the owner's primary group, when it has
+/// the owner's name and lists no other member. Only that group may have
+/// write access on a link target's chain.
+/// shortcut: users whose primary group this is are not listed in `members`;
+/// scan the account database if such setups must be caught.
+pub fn user_private_gid(owner: &str, primary_gid: u32, group: &str, members: &[String]) -> Option<u32> {
+    (group == owner && members.iter().all(|m| m == owner)).then_some(primary_gid)
+}
+
+/// `user_private_gid` of a uid from the account database; `None` when the
+/// account or its group is unknown.
+fn private_gid_of(owner: u32) -> Option<u32> {
+    use nix::unistd::{Group, Uid, User};
+    let user = User::from_uid(Uid::from_raw(owner)).ok().flatten()?;
+    let group = Group::from_gid(user.gid).ok().flatten()?;
+    user_private_gid(&user.name, user.gid.as_raw(), &group.name, &group.mem)
 }
 
 /// Applies `check_chain` to the real path of a cache entry, which may not
@@ -427,10 +461,11 @@ pub fn trust_cache(entry: &Path, owner: u32) -> std::result::Result<(), String> 
         chain.push(Owned {
             path: dir.to_path_buf(),
             uid: m.uid(),
+            gid: m.gid(),
             mode: m.mode() & 0o7777,
         });
     }
-    check_chain(&chain, creator, owner)
+    check_chain(&chain, creator, owner, private_gid_of(owner))
 }
 
 /// Owner of the deepest existing directory at or above `dir`.
@@ -681,10 +716,12 @@ mod tests {
         assert_eq!(mode_of(&d.join("a/b")), 0o700);
     }
 
+    /// A path whose group has the same id as its owner (a user-private group).
     fn owned(path: &str, uid: u32, mode: u32) -> Owned {
         Owned {
             path: path.into(),
             uid,
+            gid: uid,
             mode,
         }
     }
@@ -696,45 +733,89 @@ mod tests {
             owned("/var", 0, 0o755),
             owned("/var/cache/rustow", 0, 0o700),
         ];
-        assert!(check_chain(&chain, None, 0).is_ok());
+        assert!(check_chain(&chain, None, 0, None).is_ok());
         let user = [
             owned("/", 0, 0o755),
             owned("/home/u", 1000, 0o700),
             owned("/home/u/dot", 1000, 0o755),
         ];
-        assert!(check_chain(&user, Some(1000), 1000).is_ok());
+        assert!(check_chain(&user, Some(1000), 1000, None).is_ok());
     }
 
     #[test]
     fn chain_rejects_foreign_owner() {
         let chain = [owned("/", 0, 0o755), owned("/home/u", 1000, 0o700)];
-        let e = check_chain(&chain, None, 0).unwrap_err();
+        let e = check_chain(&chain, None, 0, None).unwrap_err();
         assert!(e.contains("/home/u") && e.contains("1000"), "{e}");
     }
 
     #[test]
     fn chain_rejects_writable_by_others_but_allows_sticky_root() {
         let open = [owned("/", 0, 0o755), owned("/shared", 0, 0o775)];
-        assert!(check_chain(&open, None, 0).unwrap_err().contains("writable"));
+        assert!(check_chain(&open, None, 0, None).unwrap_err().contains("writable"));
         let tmp = [
             owned("/", 0, 0o755),
             owned("/tmp", 0, 0o1777),
             owned("/tmp/x", 1000, 0o700),
         ];
-        assert!(check_chain(&tmp, None, 1000).is_ok());
+        assert!(check_chain(&tmp, None, 1000, None).is_ok());
         let sticky_user = [owned("/", 0, 0o755), owned("/tmp", 1000, 0o1777)];
-        assert!(check_chain(&sticky_user, None, 1000).is_err());
+        assert!(check_chain(&sticky_user, None, 1000, None).is_err());
     }
 
     #[test]
     fn chain_rejects_untrusted_creator() {
         let chain = [owned("/", 0, 0o755)];
-        assert!(check_chain(&chain, Some(1000), 0).unwrap_err().contains("1000"));
-        assert!(check_chain(&chain, Some(0), 0).is_ok());
+        assert!(check_chain(&chain, Some(1000), 0, None).unwrap_err().contains("1000"));
+        assert!(check_chain(&chain, Some(0), 0, None).is_ok());
         assert!(
-            check_chain(&chain, Some(0), 1000).is_ok(),
+            check_chain(&chain, Some(0), 1000, None).is_ok(),
             "root may create cache dirs for anyone"
         );
+    }
+
+    #[test]
+    fn user_private_group_rule() {
+        let names = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            user_private_gid("alice", 1000, "alice", &[]),
+            Some(1000),
+            "user-private group"
+        );
+        assert_eq!(
+            user_private_gid("alice", 1000, "alice", &names(&["alice"])),
+            Some(1000),
+            "the owner may be listed"
+        );
+        assert_eq!(
+            user_private_gid("alice", 100, "users", &names(&["alice", "bob"])),
+            None,
+            "shared group"
+        );
+        assert_eq!(
+            user_private_gid("alice", 1000, "alice", &names(&["bob"])),
+            None,
+            "extra member"
+        );
+        assert_eq!(user_private_gid("alice", 1000, "staff", &[]), None, "name mismatch");
+    }
+
+    #[test]
+    fn chain_trusts_group_write_only_in_the_owners_private_group() {
+        let dot = owned("/home/u/dot", 1000, 0o775);
+        let chain = [owned("/", 0, 0o755), owned("/home/u", 1000, 0o700), dot.clone()];
+        assert!(
+            check_chain(&chain, None, 1000, Some(1000)).is_ok(),
+            "umask 002 repository"
+        );
+        let e = check_chain(&chain, None, 1000, None).unwrap_err();
+        assert!(e.contains("chmod g-w /home/u/dot"), "no private group: {e}");
+        let shared = [Owned { gid: 100, ..dot }];
+        let e = check_chain(&shared, None, 1000, Some(1000)).unwrap_err();
+        assert!(e.contains("/home/u/dot") && e.contains("chmod g-w /home/u/dot"), "{e}");
+        let world = [owned("/home/u/dot", 1000, 0o777)];
+        let e = check_chain(&world, None, 1000, Some(1000)).unwrap_err();
+        assert!(e.contains("writable by others") && !e.contains("chmod g-w"), "{e}");
     }
 
     #[test]

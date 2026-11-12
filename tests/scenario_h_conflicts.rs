@@ -215,6 +215,37 @@ fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
     );
 }
 
+/// With umask 002, a repository is group-writable. That is trusted only
+/// when the group is the user's private group (named like the user, no
+/// other members); a shared primary group, as on some CI runners, is not.
+#[test]
+fn group_writable_repository_is_trusted_only_in_a_user_private_group() {
+    use nix::unistd::{Group, User, geteuid};
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let src = fx.write(".config/app/x", "x\n");
+    let user = User::from_uid(geteuid()).unwrap().expect("test user");
+    let group = Group::from_gid(user.gid).unwrap().expect("primary group");
+    let private = group.name == user.name && group.mem.iter().all(|m| *m == user.name);
+    for p in src.ancestors().take_while(|p| p.starts_with(&fx.base)) {
+        std::os::unix::fs::chown(p, None, Some(user.gid.as_raw())).unwrap();
+        let mode = fs::metadata(p).unwrap().permissions().mode();
+        fs::set_permissions(p, fs::Permissions::from_mode(mode | 0o020)).unwrap();
+    }
+    let out = fx.run(&["apply"]);
+    if private {
+        assert_eq!(out.code, 0, "{out:?}");
+        assert_eq!(read(&fx.home_path(".config/app/x")), "x\n");
+    } else {
+        assert_eq!(out.code, 3, "{out:?}");
+        assert!(
+            out.stdout.contains("untrusted") && out.stdout.contains("chmod g-w"),
+            "{out:?}"
+        );
+        assert!(!fx.home_path(".config/app/x").exists());
+    }
+}
+
 /// A dry run predicts what the real run cannot write: a destination below
 /// a directory the user cannot write fails in the plan, with the directory
 /// named and the privilege hint, and the real run tries nothing there.
