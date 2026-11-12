@@ -648,16 +648,18 @@ fn deploy_step(
     })))
 }
 
-/// Decision for a cache entry. A `guarded` entry backs a symlink, so a
-/// change rustow did not make is a user edit (conflict); an entry that
-/// only feeds a copy may simply be refreshed.
-fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>, guarded: bool) -> Result<CacheWrite> {
+/// Decision for a cache entry. An entry that backs a symlink (`links`) or
+/// that backed the recorded symlink is guarded: a change rustow did not
+/// make is a user edit (conflict). An entry that only feeds a copy may
+/// simply be refreshed.
+fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>, links: bool) -> Result<CacheWrite> {
     let observed = fsops::inspect(&path)?;
     let desired = Desired::File {
         hash: Hash::of(&bytes),
         meta: FileMeta::default(),
     };
-    let previous = match (&observed, guarded) {
+    let linked = record.is_some_and(|r| r.link_target.is_some() && r.cache_path.as_ref() == Some(&path));
+    let previous = match (&observed, links || linked) {
         (Observed::File { hash, .. }, false) => Recorded::Copy(hash),
         _ => record
             .and_then(|r| r.applied_hash.as_ref())
