@@ -262,12 +262,15 @@ impl InternalDirs {
     /// Relative values resolve against the repository, never the working directory.
     pub fn resolve(root: &Path, home: &Path, config: &Config, env: &Env) -> Result<InternalDirs> {
         let resolve = |value: &str| normalize(&root.join(expand_tilde(value, home)));
-        let cache_dir = resolve(&config.defaults.cache_dir);
-        let state_dir = match (&config.defaults.state_dir, &env.xdg_state_home) {
-            (Some(value), _) => resolve(value),
-            (None, Some(xdg)) if xdg.is_absolute() => xdg.join("rustow"),
-            (None, _) => home.join(".local/state/rustow"),
-        };
+        let cache_dir = locate(resolve(&config.defaults.cache_dir), root);
+        let state_dir = locate(
+            match (&config.defaults.state_dir, &env.xdg_state_home) {
+                (Some(value), _) => resolve(value),
+                (None, Some(xdg)) if xdg.is_absolute() => xdg.join("rustow"),
+                (None, _) => home.join(".local/state/rustow"),
+            },
+            root,
+        );
         let inside = internal_dirs(root, &[("cache_dir", &cache_dir), ("state_dir", &state_dir)])?;
         let owner = std::fs::metadata(root).map_or(0, |m| std::os::unix::fs::MetadataExt::uid(&m));
         let (cache_dir, private) = cache_for_user(cache_dir, root, owner, nix::unistd::geteuid().as_raw(), &state_dir);
@@ -312,6 +315,27 @@ fn internal_dirs(root: &Path, dirs: &[(&str, &PathBuf)]) -> Result<Vec<RelPath>>
         out.push(rel);
     }
     Ok(out)
+}
+
+/// The form of `path` that compares with the canonical `root`. A path
+/// below `root` is kept, so a symlink inside the repository is refused
+/// later instead of followed. Otherwise the nearest existing ancestor of
+/// the parent is canonicalized and the other components are appended; the
+/// last component is never resolved, so a symlinked directory stays visible.
+fn locate(path: PathBuf, root: &Path) -> PathBuf {
+    if path.starts_with(root) {
+        return path;
+    }
+    let mut tail = Vec::new();
+    let mut cur = path.as_path();
+    while let (Some(parent), Some(name)) = (cur.parent(), cur.file_name()) {
+        tail.push(name);
+        if let Ok(real) = parent.canonicalize() {
+            return tail.iter().rev().fold(real, |p, name| p.join(name));
+        }
+        cur = parent;
+    }
+    path
 }
 
 /// Resolves `.` and `..` without touching the filesystem.
@@ -475,6 +499,28 @@ mod tests {
             ctx.ignore
                 .is_reserved(&RelPath::parse(".rustowcache/x").unwrap(), false)
         );
+    }
+
+    #[test]
+    fn internal_dirs_named_through_symlinks_are_inside() {
+        let f = fx();
+        std::os::unix::fs::symlink(f.base.join("home"), f.base.join("home-link")).unwrap();
+        let link = f.base.join("home-link/dot");
+        fs::write(
+            f.base.join("home/dot/.rustow.toml"),
+            format!(
+                "version = 1\n[defaults]\ncache_dir = \"{}/var/c\"\nstate_dir = \"~/dot/st\"\n",
+                link.display()
+            ),
+        )
+        .unwrap();
+        let root = f.base.join("home/dot");
+        let config = Config::load(&root).unwrap();
+        let dirs = InternalDirs::resolve(&root, &f.base.join("home-link"), &config, &f.env).unwrap();
+        assert_eq!(dirs.cache_dir, root.join("var/c"));
+        assert_eq!(dirs.state_dir, root.join("st"));
+        let inside: Vec<&str> = dirs.inside.iter().map(RelPath::as_str).collect();
+        assert_eq!(inside, ["var/c", "st"]);
     }
 
     #[test]

@@ -91,6 +91,24 @@ fn ignore_applies_to_root_relative_files_and_templates() {
 }
 
 #[test]
+fn in_repo_cache_named_through_a_symlink_is_excluded() {
+    let fx = Fixture::new();
+    let link = fx.base.join("repo-link");
+    std::os::unix::fs::symlink(&fx.repo, &link).unwrap();
+    fx.write(
+        ".rustow.toml",
+        &format!("version = 1\n[defaults]\ncache_dir = \"{}/var/c\"\n", link.display()),
+    );
+    fx.write("var/c/rendered/x", "cache");
+    fx.write(".bashrc", "b");
+    let out = fx.ok(&["apply", "--dry-run"]);
+    assert!(!out.stdout.contains("var/c"), "{out:?}");
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+    assert!(fs::symlink_metadata(fx.home_path("var")).is_err());
+}
+
+#[test]
 fn leftover_rustow_temp_files_are_reserved_at_any_depth() {
     let fx = Fixture::new();
     fx.write(".rustowignore", "!.rustow-tmp-*\n!**/.rustow-tmp-*\n");

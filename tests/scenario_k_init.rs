@@ -196,6 +196,35 @@ fn custom_cache_dir_is_created_and_ignored() {
 }
 
 #[test]
+fn cache_dir_through_symlinked_home_or_repo_is_ignored() {
+    // HOME behind a symlink, as with /home -> /var/home on Fedora Atomic.
+    let fx = Fixture::new();
+    let home_link = fx.base.join("home-link");
+    std::os::unix::fs::symlink(&fx.home, &home_link).unwrap();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[defaults]\ncache_dir = \"~/dotfiles/var/c\"\n",
+    );
+    let out = fx.run_env(&["init"], &[("HOME", home_link.to_str().unwrap())]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(read(&fx.repo.join(".gitignore")), "/.rustowcache/\n/var/c/\n");
+    assert_eq!(mode(&fx.repo.join("var/c")), 0o700);
+
+    let fx = Fixture::new();
+    let repo_link = fx.base.join("repo-link");
+    std::os::unix::fs::symlink(&fx.repo, &repo_link).unwrap();
+    fx.write(
+        ".rustow.toml",
+        &format!(
+            "version = 1\n[defaults]\ncache_dir = \"{}/var/c\"\n",
+            repo_link.display()
+        ),
+    );
+    fx.ok(&["init"]);
+    assert_eq!(read(&fx.repo.join(".rustowignore")), "/.rustowcache/\n/var/c/\n");
+}
+
+#[test]
 fn init_deploys_nothing() {
     let fx = Fixture::new();
     fx.write(".bashrc", "x");
