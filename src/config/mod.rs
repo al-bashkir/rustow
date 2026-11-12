@@ -575,6 +575,7 @@ group = "root"
         assert_eq!(p("0600"), Some(0o600));
         assert_eq!(p("644"), Some(0o644));
         assert_eq!(p("0755"), Some(0o755));
+        assert_eq!(p("0777"), Some(0o777), "the highest mode without special bits");
     }
 
     #[test]
@@ -596,6 +597,19 @@ group = "root"
         assert_eq!(m.owner, Some(Owner::Id(0)));
         assert_eq!(m.group, Some(Owner::Name("wheel".into())));
         assert_eq!(m.mode, None);
+    }
+
+    #[test]
+    fn owner_and_group_reject_empty_and_separator_names() {
+        for (field, bad) in [("owner", ""), ("owner", "a:b"), ("group", "a/b"), ("group", "a b")] {
+            let e = err(&format!(
+                "version = 1\n[[template_rules]]\nsource = \"a.tmpl\"\n{field} = \"{bad}\"\n"
+            ));
+            assert!(
+                e.contains(&format!("{field} \"{bad}\" is not a valid user or group name")),
+                "{e}"
+            );
+        }
     }
 
     #[test]
