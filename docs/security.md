@@ -2,7 +2,7 @@
 
 ## What rustow does
 
-- It never runs `sudo` and never runs commands from templates.
+- It runs `sudo` only to start its own helper, and only for system files that you cannot write (see [system files](system-files.md#privileges)). It never runs commands from templates.
 - It writes files with a temporary file in the same directory (mode 0600), then `fchown`/`fchmod`, `fsync` and `rename`. It never follows a symlink at the final destination.
 - It deploys system files (`.rustowroot/`) only as copies. A symlink into a private cache is unusable for other programs. A symlink into a user-writable repository or cache is unsafe.
 - It checks every symlink before it plans it, and every symlinked ancestor of a destination before it follows it. See [Trust rule](#trust-rule).

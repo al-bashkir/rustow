@@ -10,11 +10,21 @@ The `.rustowroot` directory itself is never deployed.
 
 ## Privileges
 
-Do not run rustow with `sudo`. Then HOME and the state directory are root's, so rustow would link your home files into `/root`. When rustow runs as root and `$SUDO_USER` names another user, every command except `completions` stops with exit 2: "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of alice; run rustow as alice (pass --target to deploy into root's home on purpose)". With an explicit `--target`, rustow runs. A real root login has no `$SUDO_USER`, so it is not affected.
+Run rustow as yourself. Your HOME, your state, your keys and your cache stay in use. When a system file needs root, rustow asks `sudo` for it:
 
-rustow never runs `sudo`. To write to `/etc` you must start rustow with the needed rights yourself. The state file belongs to the user that runs rustow, so use the same user each time, or set `--repo` and a state directory on purpose. An unreadable destination is an error for that item, with a privilege hint. A destination in a directory that you cannot write is an error too: "cannot write to directory X: Permission denied …; elevated privileges may be required". rustow finds it in the plan, so the dry run and `status` show it. A dry-run still lists the other items. `apply` exits with 4, and under the default policy it writes nothing. `diff` still shows the desired content without these rights.
+- rustow plans as you. A system file needs sudo when it must change and you cannot write its directory, or when it must belong to another user or group (for example a root-owned file in `/etc`, or `owner`/`group` in a template rule).
+- `apply`, `file apply` and `template apply` write the other items first. Then they run `sudo rustow __sudo-helper` once for all system files that need it. sudo asks for your password on the terminal. rustow renders and decrypts as you, writes the cache entry as you, and sends the planned content to the helper on a pipe. The helper checks each destination again, writes it with the same code as a normal run, and verifies it. Your state records the result.
+- `undeploy` removes such a system file, and the empty directories that rustow created for it, through the helper in the same way.
+- The plan and the dry run show these items with "via sudo". A dry run, `status` and `diff` never run sudo.
+- When sudo fails (wrong password, no terminal), each of these items fails with a message, for example "sudo failed (exit status: 1); system files that you cannot write need it". The other items stay done. The exit code is 4.
+- A home file never uses sudo. A home destination that you cannot write fails with "…; elevated privileges may be required".
+- `RUSTOW_SUDO` names another program, for example `doas`. rustow runs `$RUSTOW_SUDO -- <rustow> __sudo-helper`.
+- A backup (`--backup`) of a system file that the helper replaced is owned by root.
+- Anyone who may run `sudo rustow` may write any file as root: do not allow rustow in sudoers without a password unless you mean that.
 
-`owner` and `group` in a template rule need privilege. Without it, rustow fails with a privilege hint and leaves no partial file.
+An unreadable destination is an error for that item, with a privilege hint. rustow does not use sudo to read it.
+
+Do not run rustow itself with `sudo`. Then HOME and the state directory are root's, so rustow would link your home files into `/root`. When rustow runs as root and `$SUDO_USER` names another user, every command except `completions` stops with exit 2: "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of alice; run rustow as alice: it asks for sudo when a system file needs it (pass --target to deploy into root's home on purpose)". With an explicit `--target`, rustow runs. A real root login has no `$SUDO_USER`, so it is not affected.
 
 ## Copies only
 

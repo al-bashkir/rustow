@@ -117,7 +117,7 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 Two sources collide when they have the same destination, for example `x`, `x.age` and `x.tmpl`. On a case-insensitive target filesystem, names that differ only in case collide too. A root target of `/` always counts as case-sensitive (known limit).
 
-A destination in a directory that you cannot write is an error already in the plan: "cannot write to directory X: Permission denied …; elevated privileges may be required". So the dry run, `status` (ERROR) and the real run show it. `apply` exits with 4, also with `--dry-run`. Under the default policy, rustow then writes nothing. `diff` only reads, so it still shows the desired content of such an item.
+A home destination in a directory that you cannot write is an error already in the plan: "cannot write to directory X: Permission denied …; elevated privileges may be required". So the dry run, `status` (ERROR) and the real run show it. `apply` exits with 4, also with `--dry-run`. Under the default policy, rustow then writes nothing. `diff` only reads, so it still shows the desired content of such an item. A system file that you cannot write goes through sudo instead ("via sudo"). See [system files](system-files.md#privileges).
 
 Before it replaces an object, rustow checks the object again. If it changed, the item fails. rustow creates a new destination only if nothing appeared at that path in the meantime. After it writes, rustow verifies. rustow updates the state for each successful item. There is no global rollback. SIGINT, SIGTERM and SIGHUP stop rustow between items. A second signal exits at once.
 
