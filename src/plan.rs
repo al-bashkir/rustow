@@ -280,9 +280,14 @@ fn case_insensitive(dir: &Path) -> bool {
     false
 }
 
-/// Collision text for every source involved in a collision.
-fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(Scope, &'a RelPath), String> {
-    let folded = case_folding(ctx);
+/// Collision text for every source involved in a collision. `dest_path`
+/// gives a source's absolute destination; `folded` tells whether a
+/// scope's target ignores case.
+fn collision_details(
+    discovery: &Discovery,
+    dest_path: impl Fn(&Source) -> PathBuf,
+    folded: impl Fn(Scope) -> bool,
+) -> BTreeMap<(Scope, &RelPath), String> {
     let mut collided = BTreeMap::new();
     for c in check_collisions(&discovery.sources, &folded) {
         let detail = c.to_string();
@@ -293,7 +298,7 @@ fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(S
     // The home and root targets can overlap (`.rustowroot/home/<user>/x`).
     let mut by_path: BTreeMap<PathBuf, Vec<&Source>> = BTreeMap::new();
     for s in &discovery.sources {
-        let path = ctx.dest_path(s);
+        let path = dest_path(s);
         let key = match folded(s.scope) {
             true => PathBuf::from(collision_key(&path.to_string_lossy(), true)),
             false => path,
@@ -305,7 +310,7 @@ fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(S
         let detail = format!(
             "sources {} map to the same destination '{}'",
             names.join(", "),
-            ctx.dest_path(group[0]).display()
+            dest_path(group[0]).display()
         );
         for s in group {
             collided.entry((s.scope, &s.dest)).or_insert_with(|| detail.clone());
@@ -318,7 +323,7 @@ fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(S
 /// `discovery`, so a selected source that collides with an unselected
 /// one is still blocked.
 pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Plan> {
-    let collided = collision_details(ctx, discovery);
+    let collided = collision_details(discovery, |s| ctx.dest_path(s), case_folding(ctx));
     let mut folding = fold::analyze(ctx, discovery, selected, state, &collided)?;
     let mut items = Vec::with_capacity(selected.len());
     for dir in &folding.folds {
@@ -1255,5 +1260,33 @@ mod tests {
         assert!(super::Conflict::FileToSymlink.resolvable());
         assert!(!super::Conflict::Directory.resolvable());
         assert!(!super::Conflict::Special.resolvable());
+    }
+
+    /// The root target holds the home target here, so `.rustowroot/home/X`
+    /// and the home source `x` meet only where the target ignores case.
+    #[test]
+    fn overlapping_targets_collide_by_case_only_where_case_is_ignored() {
+        let source = |path: &str, scope, dest: &str| Source {
+            path: RelPath::parse(path).unwrap(),
+            scope,
+            dest: RelPath::parse(dest).unwrap(),
+            mode: Mode::Link,
+        };
+        let discovery = Discovery {
+            sources: vec![
+                source(".rustowroot/home/X", Scope::Root, "home/X"),
+                source("x", Scope::Home, "x"),
+            ],
+            ..Default::default()
+        };
+        let dest_path = |s: &Source| match s.scope {
+            Scope::Home => Path::new("/t/home").join(s.dest.as_path()),
+            Scope::Root => Path::new("/t").join(s.dest.as_path()),
+        };
+        assert!(collision_details(&discovery, dest_path, |_| false).is_empty());
+        let collided = collision_details(&discovery, dest_path, |_| true);
+        let want = "sources .rustowroot/home/X, x map to the same destination '/t/home/X'";
+        assert_eq!(collided.len(), 2, "{collided:?}");
+        assert!(collided.values().all(|d| d == want), "{collided:?}");
     }
 }
