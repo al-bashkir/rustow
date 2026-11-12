@@ -6,12 +6,13 @@ use std::sync::atomic::AtomicBool;
 use crate::cli::{
     CacheCommand, Cli, Command, EncArgs, EncCommand, FileCommand, Global, Paths, StatusArgs, TemplateCommand,
 };
+use crate::config::DefaultMode;
 use crate::error::{Error, Result};
 use crate::execute::{self, Action, ItemReport, Policy, Run};
 use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
 use crate::report::{Printer, RunKind};
-use crate::source::{Discovery, Selector, Source};
+use crate::source::{Discovery, Mode, Selector, Source};
 use crate::state::{self, Lock, State};
 use crate::{files, fsops, inspect};
 
@@ -203,7 +204,7 @@ fn prepare(
     let lock = lock(&ctx, !locked)?;
     let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let discovery = ctx.discover()?;
-    let sources = selected(&ctx, &discovery, paths, selector)?;
+    let sources = selected(&ctx, &discovery, &state, paths, selector)?;
     let plan = plan::build(&ctx, &discovery, &sources, &state)?;
     Ok(Prepared {
         ctx,
@@ -215,26 +216,49 @@ fn prepare(
 }
 
 /// Selected sources the command deploys. A path argument that matches
-/// only sources of other modes is a usage error; one that matches only
-/// skipped files selects nothing.
+/// only sources of other modes, or only files that copy mode does not
+/// link, is a usage error; one that matches only skipped files selects nothing.
 fn selected<'a>(
     ctx: &Context,
     discovery: &'a Discovery,
+    state: &State,
     paths: &[String],
     selector: Selector,
 ) -> Result<Vec<&'a Source>> {
+    let explicit = selector == Selector::Link && !paths.is_empty();
+    let deploys = |s: &&Source| selector.includes(&s.mode) && (explicit || may_link(ctx, state, s));
     let all = ctx.select(discovery, paths)?;
     for arg in paths {
         let one = ctx.select(discovery, std::slice::from_ref(arg))?;
-        if !one.is_empty() && !one.iter().any(|s| selector.includes(&s.mode)) {
-            let modes: Vec<&str> = one.iter().map(|s| s.mode.label()).collect();
+        if one.is_empty() || one.iter().any(deploys) {
+            continue;
+        }
+        if one.iter().any(|s| selector.includes(&s.mode)) {
             return Err(Error::Usage(format!(
-                "'{arg}' has no sources this command deploys (found: {}); use `rustow apply`",
-                modes.join(", ")
+                "'{arg}' is not linked; in copy mode, `rustow link {arg}` links a plain file and `rustow file add {arg}` registers a copy"
             )));
         }
+        let modes: Vec<&str> = one.iter().map(|s| s.mode.label()).collect();
+        return Err(Error::Usage(format!(
+            "'{arg}' has no sources this command deploys (found: {}); use `rustow apply`",
+            modes.join(", ")
+        )));
     }
-    Ok(all.into_iter().filter(|s| selector.includes(&s.mode)).collect())
+    Ok(all.into_iter().filter(deploys).collect())
+}
+
+/// Copy mode makes no new symlink unless `rustow link <path>` asks: a
+/// link source deploys only when the state records a link at its
+/// destination or at a folded parent directory.
+fn may_link(ctx: &Context, state: &State, source: &Source) -> bool {
+    let linked = || {
+        ctx.dest_path(source)
+            .ancestors()
+            .any(|d| state.entries.get(d).is_some_and(|r| r.link_target.is_some()))
+    };
+    ctx.config.defaults.mode == DefaultMode::Symlink
+        || !matches!(source.mode, Mode::Link | Mode::DecryptLink(_))
+        || linked()
 }
 
 fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {

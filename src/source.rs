@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::config::{Backend, Config, Metadata};
+use crate::config::{Backend, Config, DefaultMode, Metadata};
 use crate::error::{Error, Result};
 use crate::ignore::{Ignore, ROOT_DIR};
 use crate::paths::{RelPath, Scope};
@@ -401,7 +401,7 @@ pub fn classify(path: &RelPath, cfg: &Config) -> std::result::Result<Source, Str
         path: path.clone(),
         scope,
         dest: inner.with_file_name(name),
-        mode: scoped_mode(scope, mode, path)?,
+        mode: scoped_mode(scope, cfg.defaults.mode, mode, path)?,
     })
 }
 
@@ -409,9 +409,12 @@ pub fn classify(path: &RelPath, cfg: &Config) -> std::result::Result<Source, Str
 /// into a private cache is unusable for other users, and a link into a
 /// user-writable repository is unsafe. A template without a rule becomes
 /// a copy with no explicit metadata; any other file must be registered.
-fn scoped_mode(scope: Scope, mode: Mode, path: &RelPath) -> std::result::Result<Mode, String> {
+/// In copy mode, a home template also becomes a copy; a plain home link
+/// stays a link, and the command selection decides if it deploys.
+fn scoped_mode(scope: Scope, default: DefaultMode, mode: Mode, path: &RelPath) -> std::result::Result<Mode, String> {
+    let copies = scope == Scope::Root || default == DefaultMode::Copy;
     match (scope, mode) {
-        (Scope::Root, Mode::TemplateLink(b)) => Ok(Mode::TemplateCopy(b, Metadata::default())),
+        (_, Mode::TemplateLink(b)) if copies => Ok(Mode::TemplateCopy(b, Metadata::default())),
         (Scope::Root, Mode::Link | Mode::DecryptLink(_)) => Err(format!(
             "system files deploy only as copies; register it with `rustow file add {path}`"
         )),

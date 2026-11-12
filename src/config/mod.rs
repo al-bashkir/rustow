@@ -51,6 +51,17 @@ pub struct Metadata {
     pub group: Option<Owner>,
 }
 
+/// `defaults.mode`: how a plain home file deploys when nothing registers it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultMode {
+    /// `apply` links every plain home file.
+    #[default]
+    Symlink,
+    /// `apply` makes no new link: only `rustow link <path>` does, and the state keeps it.
+    Copy,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Defaults {
@@ -60,6 +71,7 @@ pub struct Defaults {
     pub state_dir: Option<String>,
     pub create_directories: bool,
     pub fold_directories: bool,
+    pub mode: DefaultMode,
 }
 
 impl Default for Defaults {
@@ -71,6 +83,7 @@ impl Default for Defaults {
             state_dir: None,
             create_directories: true,
             fold_directories: true,
+            mode: DefaultMode::Symlink,
         }
     }
 }
