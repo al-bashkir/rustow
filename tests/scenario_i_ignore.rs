@@ -8,7 +8,7 @@ use std::fs;
 #[test]
 fn reserved_files_never_deployed_even_with_negations() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = true\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = true\n");
     fx.write(
         ".rustowignore",
         "!.rustowcache/\n!.rustowcache/**\n!.gitignore\n!.git\n",
@@ -18,7 +18,7 @@ fn reserved_files_never_deployed_even_with_negations() {
     fx.write(".rustowcache/rendered/x", "cache");
     fx.write(".bashrc", "b");
     fx.ok(&["apply"]);
-    for name in [".rustow.toml", ".rustowignore", ".gitignore", ".git", ".rustowcache"] {
+    for name in ["rustow.toml", ".rustowignore", ".gitignore", ".git", ".rustowcache"] {
         assert!(
             fs::symlink_metadata(fx.home_path(name)).is_err(),
             "{name} must not be deployed"
@@ -45,7 +45,7 @@ fn cache_is_excluded_without_init_and_cannot_be_selected() {
 fn configured_in_repo_cache_and_state_excluded() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[defaults]\ncache_dir = \"var/cache\"\nstate_dir = \"var/state\"\n",
     );
     fx.write("var/cache/rendered/old", "c");
@@ -93,13 +93,13 @@ fn custom_patterns_and_negation() {
 fn ignore_applies_to_root_relative_files_and_templates() {
     let fx = Fixture::new();
     // The ignored system file is not registered: it is skipped before the copy-only check.
-    fx.write(".rustowignore", "/.rustowroot/etc/secret.conf\n*.tmpl\n");
+    fx.write(".rustowignore", "/rustowroot/etc/secret.conf\n*.tmpl\n");
     fx.write(
-        ".rustow.toml",
-        "version = 1\n[[files]]\nsource = \".rustowroot/etc/public.conf\"\n",
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/public.conf\"\n",
     );
-    fx.write(".rustowroot/etc/secret.conf", "s");
-    fx.write(".rustowroot/etc/public.conf", "p");
+    fx.write("rustowroot/etc/secret.conf", "s");
+    fx.write("rustowroot/etc/public.conf", "p");
     fx.write(".gitconfig.tmpl", "{{ undefined_would_fail }}");
     fx.ok(&["apply"]);
     assert!(!fx.root_path("etc/secret.conf").exists());
@@ -112,7 +112,7 @@ fn internal_dir_that_overlaps_sources_is_a_configuration_error() {
     for key in ["cache_dir", "state_dir"] {
         let fx = Fixture::new();
         fx.write(
-            ".rustow.toml",
+            "rustow.toml",
             &format!("version = 1\n[defaults]\n{key} = \".config\"\n"),
         );
         fx.write(".config/nvim/init.lua", "x");
@@ -126,10 +126,10 @@ fn internal_dir_that_overlaps_sources_is_a_configuration_error() {
         }
         assert!(!fx.home_path(".config").exists());
     }
-    for dir in [".", "./", "~/dotfiles", ".rustowroot", ".rustowroot/c", ".git/c"] {
+    for dir in [".", "./", "~/dotfiles", "rustowroot", "rustowroot/c", ".git/c"] {
         let fx = Fixture::new();
         fx.write(
-            ".rustow.toml",
+            "rustow.toml",
             &format!("version = 1\n[defaults]\ncache_dir = \"{dir}\"\n"),
         );
         let out = fx.run(&["check"]);
@@ -142,7 +142,7 @@ fn internal_dir_that_overlaps_sources_is_a_configuration_error() {
 fn internal_dir_may_hold_rustow_entries() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[defaults]\ncache_dir = \"var\"\nstate_dir = \"var\"\n",
     );
     for name in [
@@ -170,7 +170,7 @@ fn in_repo_cache_named_through_a_symlink_is_excluded() {
     let link = fx.base.join("repo-link");
     std::os::unix::fs::symlink(&fx.repo, &link).unwrap();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         &format!("version = 1\n[defaults]\ncache_dir = \"{}/var/c\"\n", link.display()),
     );
     fx.write("var/c/rendered/x", "cache");

@@ -1,5 +1,5 @@
 //! `rustow file add|remove|list`: copy registrations. `file add` writes
-//! the state of this machine; `[[files]]` in `.rustow.toml` is the hand-written,
+//! the state of this machine; `[[files]]` in `rustow.toml` is the hand-written,
 //! shared list. Registration never deploys or changes a destination.
 
 use std::fs;
@@ -66,7 +66,7 @@ fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) 
     Ok(Change::new(rel.as_str(), "register", None))
 }
 
-/// Removes registrations from the state and from `[[files]]` in `.rustow.toml`.
+/// Removes registrations from the state and from `[[files]]` in `rustow.toml`.
 pub fn remove(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: bool) -> Result<i32> {
     let mut state = ctx.load_state()?;
     let (old, mode) = read_config(ctx)?;
@@ -85,7 +85,7 @@ pub fn remove(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: b
 fn unregister(text: &mut String, state: &mut State, arg: &str) -> Result<Change> {
     let rel = RelPath::parse(arg)?;
     let in_state = state.files.remove(&rel);
-    // "" is a missing `.rustow.toml` (an empty one fails to load before this).
+    // "" is a missing `rustow.toml` (an empty one fails to load before this).
     let edited = if text.is_empty() {
         None
     } else {

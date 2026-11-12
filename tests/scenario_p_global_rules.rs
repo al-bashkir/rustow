@@ -11,7 +11,7 @@ const RULE1: &str = "[[global_rules]] #1 (family == \"unix\")";
 fn matching_rules_merge_vars_in_file_order() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         r#"version = 1
 [vars]
 user = "alice"
@@ -45,7 +45,7 @@ vars = { user = "last" }
 fn matching_rule_ignores_paths_quietly() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         r#"version = 1
 [[files]]
 source = ".gitconfig"
@@ -89,11 +89,11 @@ ignore = [".bashrc"]
 #[test]
 fn rule_ignore_after_deploy_is_orphaned_and_kept() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".gitconfig", "g\n");
     fx.ok(&["apply"]);
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[global_rules]]\nfamily = \"unix\"\nignore = [\".gitconfig\"]\n",
     );
     let out = fx.ok(&["apply"]);
@@ -128,7 +128,7 @@ fn bad_rules_are_configuration_errors_without_values() {
             "[[global_rules]] #1: ignore: error parsing glob",
         ),
     ] {
-        fx.write(".rustow.toml", &format!("version = 1\n[[global_rules]]\n{rule}"));
+        fx.write("rustow.toml", &format!("version = 1\n[[global_rules]]\n{rule}"));
         let out = fx.run(&["apply"]);
         assert_eq!(out.code, 2, "{rule}: {out:?}");
         assert!(out.stderr.contains(want), "{rule}: {out:?}");

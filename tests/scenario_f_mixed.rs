@@ -9,7 +9,7 @@ const FOLD: &str = "version = 1\n[defaults]\nfold_directories = true\n";
 
 fn nvim(config: &str) -> Fixture {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", config);
+    fx.write("rustow.toml", config);
     fx.write(".config/nvim/init.lua", "init\n");
     fx.write(".config/nvim/lua/plugins.lua", "plugins\n");
     fs::create_dir_all(fx.home_path(".config")).unwrap();
@@ -20,7 +20,7 @@ fn nvim(config: &str) -> Fixture {
 fn mixed_directory_deploys_each_mode_and_never_folds() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[defaults]\nfold_directories = true\n[vars]\nv = \"r\"\n[[files]]\nsource = \".config/app/copied.conf\"\n",
     );
     fx.write(".rustowignore", "*.swp\n");
@@ -143,7 +143,7 @@ fn diff_json_shows_unfold_and_collision_as_text() {
 fn unfold_when_folding_is_turned_off() {
     let fx = nvim(FOLD);
     fx.ok(&["apply"]);
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.ok(&["apply"]);
     assert!(fs::symlink_metadata(fx.home_path(".config/nvim")).unwrap().is_dir());
     assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")));
@@ -335,7 +335,7 @@ fn unfold_is_a_conflict_when_an_item_below_it_is_not_deployed() {
 fn directory_holding_an_internal_directory_never_folds() {
     for (setting, init) in [("cache_dir", true), ("cache_dir", false), ("state_dir", false)] {
         let fx = Fixture::new();
-        fx.write(".rustow.toml", &format!("{FOLD}{setting} = \".local/rc\"\n"));
+        fx.write("rustow.toml", &format!("{FOLD}{setting} = \".local/rc\"\n"));
         fx.write(".local/share/x", "x\n");
         fx.write(".gitconfig.tmpl", "g\n");
         if init {
@@ -394,7 +394,7 @@ fn unfold_below_an_unsafe_parent_symlink_is_a_conflict() {
 fn collision_on_or_below_a_directory_blocks_its_fold() {
     for (file, template) in [("d/a", "d.tmpl"), ("d/e/a", "d/e.tmpl")] {
         let fx = Fixture::new();
-        fx.write(".rustow.toml", FOLD);
+        fx.write("rustow.toml", FOLD);
         fx.write(file, "a\n");
         fx.write(template, "t\n");
         let out = fx.run(&["apply", "--on-conflict", "skip"]);
@@ -409,7 +409,7 @@ fn collision_on_or_below_a_directory_blocks_its_fold() {
 #[test]
 fn selective_apply_folds_only_fully_selected_directories() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", FOLD);
+    fx.write("rustow.toml", FOLD);
     fx.write(".config/a/x", "x\n");
     fx.write(".config/b/y", "y\n");
     let out = fx.ok(&["apply", ".config/a/x"]);
@@ -423,11 +423,11 @@ fn selective_apply_folds_only_fully_selected_directories() {
 /// same relative path.
 #[test]
 fn collisions_elsewhere_do_not_block_a_home_fold() {
-    let fx = nvim(&format!("{FOLD}[[files]]\nsource = \".rustowroot/.config/nvim/x\"\n"));
+    let fx = nvim(&format!("{FOLD}[[files]]\nsource = \"rustowroot/.config/nvim/x\"\n"));
     fx.write("c", "c\n");
     fx.write("c.tmpl", "t\n");
-    fx.write(".rustowroot/.config/nvim/x", "x\n");
-    fx.write(".rustowroot/.config/nvim/x.tmpl", "t\n");
+    fx.write("rustowroot/.config/nvim/x", "x\n");
+    fx.write("rustowroot/.config/nvim/x.tmpl", "t\n");
     let out = fx.run(&["apply", "--on-conflict", "skip"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(is_symlink(&fx.home_path(".config/nvim")), "{out:?}");
@@ -438,7 +438,7 @@ fn collisions_elsewhere_do_not_block_a_home_fold() {
 fn selective_run_elsewhere_keeps_a_recorded_fold() {
     let fx = nvim(FOLD);
     fx.ok(&["apply"]);
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".bashrc", "b\n");
     let out = fx.ok(&["apply", ".bashrc"]);
     assert!(is_symlink(&fx.home_path(".config/nvim")), "{out:?}");

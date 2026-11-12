@@ -12,9 +12,9 @@ Without a command, rustow runs `apply`.
 
 | Option                   | Meaning                                                                                                                                                                                                                      |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <DIR>`           | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `.rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                |
+| `--repo <DIR>`           | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                 |
 | `--target <DIR>`         | Target of home sources.                                                                                                                                                                                                      |
-| `--root-target <DIR>`    | Target of `.rustowroot/` sources.                                                                                                                                                                                            |
+| `--root-target <DIR>`    | Target of `rustowroot/` sources.                                                                                                                                                                                             |
 | `-n`, `--dry-run`        | Show what would change. Change nothing.                                                                                                                                                                                      |
 | `--backup`               | Same as `--on-conflict backup`.                                                                                                                                                                                              |
 | `--force`                | Same as `--on-conflict overwrite`.                                                                                                                                                                                           |
@@ -53,7 +53,7 @@ Without a command, rustow runs `apply`.
 | `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                                                                              |
 | `completions <SHELL>`           | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). See [shell completions](installation.md#shell-completions). |
 
-Path arguments are repository-relative. They are never relative to the current directory. A path argument that matches only sources of other modes is a usage error (exit 2). A path argument that names a [skipped source](#skipped-sources) is a usage error (exit 2) with the reason, for example "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". A directory argument that holds skipped sources deploys the other sources and prints a warning for each skipped one.
+Path arguments are repository-relative. They are never relative to the current directory. A path argument that matches only sources of other modes is a usage error (exit 2). A path argument that names a [skipped source](#skipped-sources) is a usage error (exit 2) with the reason, for example "source 'rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`". A directory argument that holds skipped sources deploys the other sources and prints a warning for each skipped one.
 
 ## Exit codes
 
@@ -80,10 +80,10 @@ A problem with one source does not stop the run. rustow skips that source and de
 `apply`, `rustow` without a command, `link`, `file apply`, `template apply` and `diff` print one line on stderr for each skipped source in the path selection:
 
 ```text
-warning: .rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`
+warning: rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`
 warning: n.age.gpg: nested encryption suffixes are not supported
 warning: .vimrc: is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it
-warning: gone.json: .rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)
+warning: gone.json: rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)
 ```
 
 `-q` hides these lines. With `--json`, the output has a `warnings` array. Each object has `source` and `reason`. Warnings do not change the exit code. `status` shows a skipped source as SKIPPED. `check` prints the warnings, but they are not problems. `unlink` and `undeploy` read only the state, so they do not look at skipped sources.

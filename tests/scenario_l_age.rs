@@ -66,12 +66,12 @@ fn enc_migrates_registration_and_template_rule() {
         key.recipient,
         key.identity.display()
     );
-    fx.write(".rustow.toml", &cfg);
+    fx.write("rustow.toml", &cfg);
     fx.write("copied.conf", "c\n");
     fx.write("x.json.tmpl", "{}\n");
     fx.ok(&["enc", "copied.conf"]);
     fx.ok(&["enc", "x.json.tmpl"]);
-    let after = read(&fx.repo.join(".rustow.toml"));
+    let after = read(&fx.repo.join("rustow.toml"));
     assert!(
         after.contains("source = \"copied.conf.age\"") && after.contains("source = \"x.json.tmpl.age\""),
         "{after}"
@@ -87,8 +87,8 @@ fn enc_migrates_registration_and_template_rule() {
 fn enc_moves_state_registrations_to_the_encrypted_name() {
     let (fx, _key) = keyed();
     fx.write(
-        ".rustow.toml",
-        &read(&fx.repo.join(".rustow.toml")).replace("version = 1\n", "version = 1\n[defaults]\nmode = \"copy\"\n"),
+        "rustow.toml",
+        &read(&fx.repo.join("rustow.toml")).replace("version = 1\n", "version = 1\n[defaults]\nmode = \"copy\"\n"),
     );
     fx.write("copied.conf", "c\n");
     fx.write("linked.conf", "l\n");
@@ -118,7 +118,7 @@ fn enc_rejects_bad_inputs_without_changes() {
         ("a.conf", 3, "already exists"),
         ("b.age", 2, "already encrypted"),
         ("link", 2, "symlink"),
-        (".rustow.toml", 2, "reserved"),
+        ("rustow.toml", 2, "reserved"),
         ("missing", 2, "does not exist"),
     ] {
         let out = fx.run(&["enc", path]);
@@ -132,13 +132,13 @@ fn enc_rejects_bad_inputs_without_changes() {
 #[test]
 fn enc_rejects_empty_or_invalid_recipients() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[encryption]\nrecipients = []\n");
+    fx.write("rustow.toml", "version = 1\n[encryption]\nrecipients = []\n");
     fx.write("a", "a");
     let out = fx.run(&["enc", "a"]);
     assert_eq!(out.code, 2, "{out:?}");
     assert!(out.stderr.contains("empty"), "{out:?}");
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[encryption]\nrecipients = [\"age1bogus\"]\n",
     );
     assert_eq!(fx.run(&["enc", "a"]).code, 2);
@@ -218,8 +218,8 @@ fn edit_with_changed_recipients_reencrypts_same_backend() {
     let second = fx.age_key("second");
     fx.age_config(&[&key, &second], &[&key], "[encryption.gpg]\n");
     fx.write(
-        ".rustow.toml",
-        &read(&fx.repo.join(".rustow.toml")).replace("[encryption.gpg]\n", ""),
+        "rustow.toml",
+        &read(&fx.repo.join("rustow.toml")).replace("[encryption.gpg]\n", ""),
     );
     let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "true")]);
     assert_eq!(out.code, 0, "{out:?}");

@@ -55,7 +55,7 @@ fn diff_describes_what_is_in_the_way_of_a_link() {
 #[test]
 fn diff_describes_a_symlink_in_place_of_a_copy() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[[files]]\nsource = \"c\"\n");
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \"c\"\n");
     fx.write("c", "copy\n");
     std::os::unix::fs::symlink("elsewhere", fx.home_path("c")).unwrap();
     let out = fx.run(&["diff"]);
@@ -77,7 +77,7 @@ fn init_json_lists_changes() {
     assert!(
         changes
             .iter()
-            .any(|c| c["path"] == ".rustow.toml" && c["action"] == "create"),
+            .any(|c| c["path"] == "rustow.toml" && c["action"] == "create"),
         "{v}"
     );
     assert_eq!(v["dry_run"], false);
@@ -87,7 +87,7 @@ fn init_json_lists_changes() {
 fn doctor_flags_unusable_gpg_home_and_json() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[encryption.gpg]\nrecipients = [\"70724AA6092233B04A3002C3F3E77E27DD87359D\"]\nhomedir = \"/nonexistent/gnupg\"\n",
     );
     let out = fx.run(&["doctor"]);
@@ -108,7 +108,7 @@ fn doctor_flags_unusable_gpg_home_and_json() {
 fn doctor_flags_relative_identity_path() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[encryption]\nidentity_files = [\"keys/id.txt\"]\n",
     );
     let out = fx.run(&["doctor"]);
@@ -119,7 +119,7 @@ fn doctor_flags_relative_identity_path() {
 #[test]
 fn replaced_folded_link_becomes_the_users_own_directory() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = true\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = true\n");
     fx.write(".config/nvim/init.lua", "x");
     fs::create_dir_all(fx.home_path(".config")).unwrap();
     fx.ok(&["apply"]);
@@ -129,7 +129,7 @@ fn replaced_folded_link_becomes_the_users_own_directory() {
     fs::create_dir(&theirs).unwrap();
     fs::remove_file(fx.home_path(".config/nvim")).unwrap();
     std::os::unix::fs::symlink(&theirs, fx.home_path(".config/nvim")).unwrap();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 0, "{out:?}");
     assert!(
@@ -201,7 +201,7 @@ fn json_separates_dry_run_from_aborted_run() {
 fn doctor_checks_gpg_home_when_only_homedir_is_set() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[encryption.gpg]\nhomedir = \"/nonexistent/gnupg\"\n",
     );
     let out = fx.run(&["doctor"]);
@@ -243,7 +243,7 @@ fn unreadable_cache_entry_fails_only_its_item() {
 #[test]
 fn cache_clean_removes_only_rustow_workspaces() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\ncache_dir = \"~/work\"\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\ncache_dir = \"~/work\"\n");
     fx.write_home("work/edit/my-video-project/cut.txt", "precious");
     let stale = fx.home_path("work/edit/edit-AbC123");
     write_file(&stale.join("secret.conf"), "plaintext");

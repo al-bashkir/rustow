@@ -1,6 +1,6 @@
 # File management (copies)
 
-By default rustow links home files. To deploy a file as a copy instead, register it with `rustow file add`, or list it in `[[files]]` in `.rustow.toml`. With `[defaults] mode = "copy"`, `apply` links no file by itself: you add each file with `file add` or `rustow link <path>`. See [copy mode](configuration.md#copy-mode). A system file under `.rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
+By default rustow links home files. To deploy a file as a copy instead, register it with `rustow file add`, or list it in `[[files]]` in `rustow.toml`. With `[defaults] mode = "copy"`, `apply` links no file by itself: you add each file with `file add` or `rustow link <path>`. See [copy mode](configuration.md#copy-mode). A system file under `rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
 
 ```sh
 rustow file add .config/example/settings.json
@@ -12,21 +12,21 @@ rustow file remove .config/example/settings.json
 
 ## add
 
-`file add` registers a plaintext or an encrypted non-template source in the state file of this machine (`<state_dir>/<repo-id>.json`). It does not change `.rustow.toml`. It never deploys. Run `rustow file apply` or `rustow apply` afterwards.
+`file add` registers a plaintext or an encrypted non-template source in the state file of this machine (`<state_dir>/<repo-id>.json`). It does not change `rustow.toml`. It never deploys. Run `rustow file apply` or `rustow apply` afterwards.
 
 - It is idempotent. A repeat prints "already registered". A path that `[[files]]` lists is also "already registered".
 - It exits with code 2 for a template, a directory, an ignored path, a reserved path or an unknown path. It also exits with code 2 for a file that cannot deploy as a copy, for example a symlink or a name with nested suffixes such as `x.age.gpg`. The message gives the reason. It registers nothing then.
 - `file add x.age` makes a `decrypt+copy` source with mode 0600.
 - It registers a system file also while other system files are not registered yet.
 
-## State or `.rustow.toml`
+## State or `rustow.toml`
 
 There are two lists of copies. rustow deploys a source as a copy when either list has it.
 
-| List                        | Written by        | Scope                                  |
-| --------------------------- | ----------------- | -------------------------------------- |
-| state file                  | `rustow file add` | this machine and this user             |
-| `[[files]]` in .rustow.toml | you, by hand      | every machine that uses the repository |
+| List                       | Written by        | Scope                                  |
+| -------------------------- | ----------------- | -------------------------------------- |
+| state file                 | `rustow file add` | this machine and this user             |
+| `[[files]]` in rustow.toml | you, by hand      | every machine that uses the repository |
 
 Use `[[files]]` for a file that every machine must copy. The state belongs to the user who runs rustow. To move the state registrations to another machine, run `rustow state export FILE` there and `rustow state import FILE` here. See [cli](cli.md#state-export-and-import).
 
@@ -34,7 +34,7 @@ A registration whose file no longer exists gives a warning, for example "warning
 
 ## remove
 
-`file remove` removes the registration from the state and from `[[files]]` in `.rustow.toml`. It keeps comments and CRLF line endings in `.rustow.toml`. The deployed copy stays. If the path is not registered, rustow prints a note and exits with 0.
+`file remove` removes the registration from the state and from `[[files]]` in `rustow.toml`. It keeps comments and CRLF line endings in `rustow.toml`. The deployed copy stays. If the path is not registered, rustow prints a note and exits with 0.
 
 ## list
 

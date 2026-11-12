@@ -12,7 +12,7 @@ rustow picks the repository in this order:
 
 1. `--repo DIR`.
 2. `$RUSTOW_REPO`.
-3. The nearest ancestor of the current directory that has `.rustow.toml` or `.rustowignore`.
+3. The nearest ancestor of the current directory that has `rustow.toml` or `.rustowignore`. The old names `.rustow.toml` and `.rustowroot` also mark a repository, but every command then stops with exit 2 and asks you to rename them.
 4. The current directory, for `init` only. Every other command stops with exit 2 and asks you to run `rustow init`, pass `--repo` or set `RUSTOW_REPO`. This prevents a bare `rustow` from deploying an unrelated directory into your home.
 
 rustow refuses `/` as repository. It refuses a target directory inside the repository.
@@ -21,8 +21,8 @@ Path arguments of commands are always relative to the repository. They are never
 
 ## What init does
 
-- Creates a minimal `.rustow.toml` with `version = 1` and `cache_dir`.
-- If `.rustow.toml` exists, adds only a missing `version = 1` at the top. Comments and CRLF line ends stay. rustow rejects a malformed file and other versions.
+- Creates a minimal `rustow.toml` with `version = 1` and `cache_dir`.
+- If `rustow.toml` exists, adds only a missing `version = 1` at the top. Comments and CRLF line ends stay. rustow rejects a malformed file and other versions.
 - Appends `/.rustowcache/` to `.gitignore` and `.rustowignore`. It also appends in-repository cache and state directories. It does this only when the rules of that file do not already exclude the directory. If a later negation re-includes the directory, init repairs it once.
 - Escapes `\`, `*`, `?` and `[` in these entries with a backslash. For `cache_dir = "c[1]"` the entry is `/c\[1]/`.
 - Handles a missing final newline and CRLF.

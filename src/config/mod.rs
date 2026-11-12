@@ -1,4 +1,4 @@
-//! `.rustow.toml`: typed schema, parsed and validated once at load.
+//! `rustow.toml`: typed schema, parsed and validated once at load.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -12,7 +12,7 @@ use crate::template::{Condition, Fact, Host};
 
 pub mod edit;
 
-pub const CONFIG_FILE: &str = ".rustow.toml";
+pub const CONFIG_FILE: &str = "rustow.toml";
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
@@ -111,14 +111,14 @@ pub struct Encryption {
 /// Validated configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// True when `.rustow.toml` exists.
+    /// True when `rustow.toml` exists.
     pub present: bool,
     pub defaults: Defaults,
     pub template_extension: String,
     pub encryption: Encryption,
     /// User variables. After `apply_host`, with the matching rules merged in.
     pub vars: serde_json::Map<String, serde_json::Value>,
-    /// `[[files]]`: sources registered for copy deployment in `.rustow.toml`.
+    /// `[[files]]`: sources registered for copy deployment in `rustow.toml`.
     pub files: BTreeSet<RelPath>,
     /// Sources that `rustow file add` registered on this machine: the
     /// state's `files`, set by `Context::load_state`. Empty until then.
@@ -180,7 +180,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Loads `<repo>/.rustow.toml`; an absent file gives the defaults.
+    /// Loads `<repo>/rustow.toml`; an absent file gives the defaults.
     pub fn load(repo: &Path) -> Result<Config> {
         let path = repo.join(CONFIG_FILE);
         match std::fs::read_to_string(&path) {
@@ -190,7 +190,7 @@ impl Config {
         }
     }
 
-    /// Parses the text of an existing `.rustow.toml`.
+    /// Parses the text of an existing `rustow.toml`.
     pub fn parse(text: &str) -> Result<Config> {
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| toml_error(text, e.message(), e.span()))?;
         check_header(&raw)?;
@@ -611,7 +611,7 @@ source = ".ssh/config.tmpl"
 mode = "0600"
 
 [[template_rules]]
-source = ".rustowroot/etc/example/config.conf.tmpl"
+source = "rustowroot/etc/example/config.conf.tmpl"
 mode = "0640"
 owner = "root"
 group = "root"
@@ -644,7 +644,7 @@ group = "root"
         assert_eq!(cfg.vars["git"]["user_name"], "Example User");
         assert_eq!(cfg.files.len(), 3);
         assert!(cfg.files.contains(&RelPath::parse(".ssh/private.conf.age").unwrap()));
-        let root = &cfg.template_rules[&RelPath::parse(".rustowroot/etc/example/config.conf.tmpl").unwrap()];
+        let root = &cfg.template_rules[&RelPath::parse("rustowroot/etc/example/config.conf.tmpl").unwrap()];
         assert_eq!(root.mode, Some(0o640));
         assert_eq!(root.owner, Some(Owner::Name("root".into())));
         assert_eq!(cfg.encryption.backend, Backend::Age);
@@ -675,7 +675,7 @@ group = "root"
     #[test]
     fn malformed_toml_rejected() {
         let e = err("version = 1\n[defaults\n");
-        assert!(e.contains(".rustow.toml"), "{e}");
+        assert!(e.contains("rustow.toml"), "{e}");
     }
 
     #[test]
@@ -711,7 +711,7 @@ group = "root"
             ),
         ] {
             let e = err(text);
-            assert!(e.starts_with(&format!(".rustow.toml: {want}")), "{text}\n{e}");
+            assert!(e.starts_with(&format!("rustow.toml: {want}")), "{text}\n{e}");
             assert!(!e.contains("S3CRET") && !e.contains('\n'), "{text}\n{e}");
         }
     }

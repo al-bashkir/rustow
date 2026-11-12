@@ -3,7 +3,7 @@
 # Private cache of rustow.
 /.rustowcache/
 
-# Editor backup files, also under .rustowroot/.
+# Editor backup files, also under rustowroot/.
 *.bak
 *~
 

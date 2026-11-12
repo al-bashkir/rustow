@@ -127,7 +127,7 @@ fn unlink_removes_only_ours() {
 #[test]
 fn unlink_removes_created_empty_dirs_only() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.write(".config/nvim/init.lua", "x");
     fx.write(".config/git/ignore", "y");
     fx.ok(&["apply"]);
@@ -160,7 +160,7 @@ fn unlink_handles_removed_source() {
 #[test]
 fn missing_parent_without_create_directories_conflicts() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\ncreate_directories = false\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\ncreate_directories = false\n");
     fx.write(".config/x", "x");
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");

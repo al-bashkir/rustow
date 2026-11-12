@@ -18,7 +18,7 @@ fn registered() -> Fixture {
 fn scenario_b_full_flow() {
     // 1–3: register and persist, in the state directory.
     let fx = registered();
-    assert!(!fx.repo.join(".rustow.toml").exists());
+    assert!(!fx.repo.join("rustow.toml").exists());
     assert_eq!(fx.state_json()["files"], serde_json::json!([SRC]));
     // Registration deploys nothing.
     assert!(!fx.home_path(SRC).exists());
@@ -60,13 +60,13 @@ fn scenario_b_full_flow() {
 fn file_add_is_idempotent_and_leaves_the_config_alone() {
     let fx = Fixture::new();
     let config = "# my config\nversion = 1\n[vars]\nx = 1 # note\n[[files]]\nsource = \"b.conf\"\n";
-    fx.write(".rustow.toml", config);
+    fx.write("rustow.toml", config);
     fx.write("a.conf", "a");
     fx.write("b.conf", "b");
     fx.ok(&["file", "add", "a.conf"]);
     let out = fx.ok(&["file", "add", "./a.conf", "b.conf"]);
     assert_eq!(out.stdout.matches("already registered").count(), 2, "{out:?}");
-    assert_eq!(read(&fx.repo.join(".rustow.toml")), config);
+    assert_eq!(read(&fx.repo.join("rustow.toml")), config);
     assert_eq!(fx.state_json()["files"], serde_json::json!(["a.conf"]));
     fx.ok(&["apply"]);
     assert!(is_regular(&fx.home_path("a.conf")) && is_regular(&fx.home_path("b.conf")));
@@ -107,13 +107,13 @@ fn file_add_rejects_ineligible_sources() {
         assert_eq!(out.code, 2, "{path}: {out:?}");
         assert!(out.stderr.contains(word), "{path}: {out:?}");
     }
-    assert!(!fx.repo.join(".rustow.toml").exists());
+    assert!(!fx.repo.join("rustow.toml").exists());
 }
 
 #[test]
 fn file_list_shows_registrations() {
     let fx = registered();
-    fx.write(".rustow.toml", "version = 1\n[[files]]\nsource = \"b.conf\"\n");
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \"b.conf\"\n");
     fx.write("b.conf", "b");
     let out = fx.ok(&["file", "list"]);
     assert!(out.stdout.contains(SRC) && out.stdout.contains("copy"), "{out:?}");
@@ -153,7 +153,7 @@ fn copy_to_symlink_after_remove_is_conflict_until_backup() {
 #[test]
 fn symlink_to_copy_transition_is_automatic() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.write(SRC, "x\n");
     fx.ok(&["apply"]);
     assert!(is_symlink(&fx.home_path(SRC)));
@@ -232,7 +232,7 @@ fn diff_json_lists_each_differing_item() {
     use std::os::unix::fs::PermissionsExt;
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[files]]\nsource = \".config/example/settings.json\"\n[[files]]\nsource = \"img.bin\"\n\
          [[template_rules]]\nsource = \"app.conf.tmpl\"\nmode = \"0600\"\n",
     );
@@ -347,18 +347,18 @@ fn file_remove_keeps_comments_above_the_entry() {
     let fx = Fixture::new();
     let config =
         "version = 1\n\n# group: work files\n[[files]]\nsource = \"a\"\n\n# b note\n[[files]]\nsource = \"b\"\n";
-    fx.write(".rustow.toml", config);
+    fx.write("rustow.toml", config);
     fx.write("a", "a");
     fx.write("b", "b");
     fx.ok(&["file", "remove", "a"]);
-    let once = read(&fx.repo.join(".rustow.toml"));
+    let once = read(&fx.repo.join("rustow.toml"));
     assert!(
         once.contains("# group: work files") && once.contains("# b note"),
         "{once}"
     );
     assert!(!once.contains("\"a\""), "{once}");
     fx.ok(&["file", "remove", "b"]);
-    let twice = read(&fx.repo.join(".rustow.toml"));
+    let twice = read(&fx.repo.join("rustow.toml"));
     assert!(
         twice.contains("# group: work files") && twice.contains("# b note"),
         "{twice}"

@@ -100,7 +100,7 @@ impl fmt::Display for RelPath {
     }
 }
 
-/// Where a source deploys: the home target, or the root target for `.rustowroot/`.
+/// Where a source deploys: the home target, or the root target for `rustowroot/`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {

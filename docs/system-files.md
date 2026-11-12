@@ -1,8 +1,8 @@
 # System files
 
-Files under `.rustowroot/` mirror `/`. `.rustowroot/etc/example/example.conf.tmpl` deploys to `/etc/example/example.conf`.
+Files under `rustowroot/` mirror `/`. `rustowroot/etc/example/example.conf.tmpl` deploys to `/etc/example/example.conf`.
 
-The `.rustowroot` directory itself is never deployed.
+The `rustowroot` directory itself is never deployed.
 
 ## Root target
 
@@ -33,8 +33,8 @@ A system file never deploys as a symlink. A symlink into a private cache is unus
 - A template without a `[[template_rules]]` entry deploys as `template+copy`. A new file gets mode 0644, or 0600 when the template is encrypted. An update keeps the mode, owner and group of the existing file.
 - A template with a rule deploys as `template+copy` with the metadata of the rule. Settings in the template's [meta block](templates.md#meta-block), such as `{%- meta.owner = "root" %}`, do the same without a rule.
 - An ordinary or encrypted file must be registered with `rustow file add` or in `[[files]]`. It then deploys as `copy` or `decrypt+copy`. `rustow file add` writes the state of the user who runs it. Run it as the user who runs `apply`, or use `[[files]]`. See [file management](file-management.md#state-or-rustowtoml).
-- An ordinary or encrypted file that is not registered does not deploy. rustow skips it and deploys the other sources. The exit code does not change. The warning tells you what to do: "warning: .rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". `status` shows the file as SKIPPED. You can leave a file unregistered on purpose.
-- A command that names such a file, for example `rustow apply .rustowroot/etc/x`, stops with exit 2: "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". A directory argument, for example `.rustowroot/etc/`, only warns.
+- An ordinary or encrypted file that is not registered does not deploy. rustow skips it and deploys the other sources. The exit code does not change. The warning tells you what to do: "warning: rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`". `status` shows the file as SKIPPED. You can leave a file unregistered on purpose.
+- A command that names such a file, for example `rustow apply rustowroot/etc/x`, stops with exit 2: "source 'rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`". A directory argument, for example `rustowroot/etc/`, only warns.
 - `rustow file add` works also while other system files are not registered yet.
 - An ignored file gets no warning: rustow skips it before this check.
 
@@ -48,17 +48,17 @@ The cache inside the repository belongs to the repository owner. When another us
 
 ## Ignoring
 
-Patterns in `.rustowignore` match repository paths. `/.rustowroot/etc/x` ignores `/etc/x`. An unanchored `*.bak` also matches inside `.rustowroot/`.
+Patterns in `.rustowignore` match repository paths. `/rustowroot/etc/x` ignores `/etc/x`. An unanchored `*.bak` also matches inside `rustowroot/`.
 
 ## Folding
 
-rustow never folds directories in `.rustowroot/`.
+rustow never folds directories in `rustowroot/`.
 
 ## Example
 
 ```toml
 [[template_rules]]
-source = ".rustowroot/etc/example/example.conf.tmpl"
+source = "rustowroot/etc/example/example.conf.tmpl"
 mode = "0644"
 # owner = "root"
 # group = "root"
@@ -66,5 +66,5 @@ mode = "0644"
 
 ```sh
 rustow --root-target /tmp/root apply --dry-run
-rustow apply .rustowroot
+rustow apply rustowroot
 ```

@@ -9,7 +9,7 @@ use std::fs;
 fn mixed() -> Fixture {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[vars]\nv = \"t\"\n[[files]]\nsource = \"copied.conf\"\n",
     );
     fx.write(".bashrc", "b\n");
@@ -74,7 +74,7 @@ fn status_labels_and_exit_codes() {
 
     fx.write("copied.conf", "c2\n");
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[vars]\nv = \"t2\"\n[[files]]\nsource = \"copied.conf\"\n",
     );
     let s = status(&fx);
@@ -109,7 +109,7 @@ fn status_conflict_unmanaged_and_error() {
 #[test]
 fn status_json_has_no_content() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[[files]]\nsource = \"secret.conf\"\n");
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \"secret.conf\"\n");
     fx.write("secret.conf", "s3cret-value\n");
     fx.ok(&["apply"]);
     fx.write("secret.conf", "n3w-s3cret\n");
@@ -132,7 +132,7 @@ fn check_validates_offline() {
         out.stdout.contains(".ssh/x.age") && out.stdout.contains(".profile.tmpl"),
         "{out:?}"
     );
-    fx.write(".rustow.toml", "version = 1\nbad = 1\n");
+    fx.write("rustow.toml", "version = 1\nbad = 1\n");
     assert_eq!(fx.run(&["check"]).code, 2);
 }
 

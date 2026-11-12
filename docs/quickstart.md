@@ -6,16 +6,16 @@ This page uses the example repository in `examples/dotfiles`. It has Bash, Zsh, 
 
 The repository root mirrors your home directory.
 
-| Repository path                             | Destination                 | Mode                            |
-| ------------------------------------------- | --------------------------- | ------------------------------- |
-| `.bashrc`, `.zshrc`                         | `~/.bashrc`, `~/.zshrc`     | link                            |
-| `.config/git/ignore`                        | `~/.config/git/ignore`      | link                            |
-| `.config/nvim/init.lua`                     | `~/.config/nvim/init.lua`   | link                            |
-| `.gitconfig.tmpl`                           | `~/.gitconfig`              | template+link                   |
-| `.ssh/config.tmpl`                          | `~/.ssh/config`             | template+copy (rule: mode 0600) |
-| `.rustowroot/etc/example/example.conf.tmpl` | `/etc/example/example.conf` | template+copy (rule: mode 0644) |
+| Repository path                            | Destination                 | Mode                            |
+| ------------------------------------------ | --------------------------- | ------------------------------- |
+| `.bashrc`, `.zshrc`                        | `~/.bashrc`, `~/.zshrc`     | link                            |
+| `.config/git/ignore`                       | `~/.config/git/ignore`      | link                            |
+| `.config/nvim/init.lua`                    | `~/.config/nvim/init.lua`   | link                            |
+| `.gitconfig.tmpl`                          | `~/.gitconfig`              | template+link                   |
+| `.ssh/config.tmpl`                         | `~/.ssh/config`             | template+copy (rule: mode 0600) |
+| `rustowroot/etc/example/example.conf.tmpl` | `/etc/example/example.conf` | template+copy (rule: mode 0644) |
 
-`.rustow.toml` holds the variables and the template rules. `.rustowignore` and `.gitignore` exclude the private cache.
+`rustow.toml` holds the variables and the template rules. `.rustowignore` and `.gitignore` exclude the private cache.
 
 ## 2. Check the repository
 

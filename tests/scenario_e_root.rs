@@ -1,4 +1,4 @@
-//! Spec §17.2 Scenario E — `.rustowroot/` mapped to a temporary root target.
+//! Spec §17.2 Scenario E — `rustowroot/` mapped to a temporary root target.
 //! System files deploy only as copies, never as symlinks.
 
 mod common;
@@ -25,7 +25,7 @@ fn warning(source: &str) -> String {
 fn unregistered_root_file_is_skipped_until_added() {
     let fx = Fixture::new();
     fx.write(".bashrc", "b\n");
-    let source = ".rustowroot/etc/example/config.conf";
+    let source = "rustowroot/etc/example/config.conf";
     fx.write(source, "plain\n");
     let out = fx.ok(&["apply"]);
     assert!(out.stderr.contains(&warning(source)), "{out:?}");
@@ -42,7 +42,7 @@ fn unregistered_root_file_is_skipped_until_added() {
     let dest = fx.root_path("etc/example/config.conf");
     assert!(is_regular(&dest));
     assert_eq!(read(&dest), "plain\n");
-    assert!(!fx.root_path(".rustowroot").exists());
+    assert!(!fx.root_path("rustowroot").exists());
     assert!(!fx.home_path("etc").exists());
 }
 
@@ -50,14 +50,14 @@ fn unregistered_root_file_is_skipped_until_added() {
 #[test]
 fn file_add_registers_one_root_file_while_others_are_unregistered() {
     let fx = Fixture::new();
-    fx.write(".rustowroot/etc/a.conf", "a\n");
-    fx.write(".rustowroot/etc/b.conf", "b\n");
-    fx.ok(&["file", "add", ".rustowroot/etc/a.conf"]);
+    fx.write("rustowroot/etc/a.conf", "a\n");
+    fx.write("rustowroot/etc/b.conf", "b\n");
+    fx.ok(&["file", "add", "rustowroot/etc/a.conf"]);
     let out = fx.ok(&["apply"]);
-    assert!(out.stderr.contains(&warning(".rustowroot/etc/b.conf")), "{out:?}");
+    assert!(out.stderr.contains(&warning("rustowroot/etc/b.conf")), "{out:?}");
     assert!(is_regular(&fx.root_path("etc/a.conf")), "{out:?}");
     assert!(!fx.root_path("etc/b.conf").exists(), "{out:?}");
-    fx.ok(&["file", "add", ".rustowroot/etc/b.conf"]);
+    fx.ok(&["file", "add", "rustowroot/etc/b.conf"]);
     fx.ok(&["apply"]);
     assert!(is_regular(&fx.root_path("etc/a.conf")) && is_regular(&fx.root_path("etc/b.conf")));
 }
@@ -69,7 +69,7 @@ fn file_add_registers_one_root_file_while_others_are_unregistered() {
 fn skipped_root_file_is_a_warning_in_each_deploy_command() {
     let fx = Fixture::new();
     fx.write(".bashrc", "b\n");
-    let source = ".rustowroot/etc/x";
+    let source = "rustowroot/etc/x";
     fx.write(source, "x\n");
     let commands: [&[&str]; 6] = [
         &[],
@@ -102,13 +102,13 @@ fn skipped_root_file_is_a_warning_in_each_deploy_command() {
 fn status_and_check_report_a_skipped_root_file() {
     let fx = Fixture::new();
     fx.write(".bashrc", "b\n");
-    let source = ".rustowroot/etc/x";
+    let source = "rustowroot/etc/x";
     fx.write(source, "x\n");
     fx.ok(&["apply"]);
     let row = format!("  SKIPPED {source}: {}", reason(source));
     for (args, summary) in [
         (&["status"][..], "1 ok, 1 skipped, 0 need attention"),
-        (&["status", ".rustowroot/"], "0 ok, 1 skipped, 0 need attention"),
+        (&["status", "rustowroot/"], "0 ok, 1 skipped, 0 need attention"),
     ] {
         let out = fx.ok(args);
         assert!(out.stdout.contains(&row), "{args:?}: {out:?}");
@@ -151,14 +151,14 @@ fn status_and_check_report_a_skipped_root_file() {
 fn naming_a_skipped_root_file_is_an_error() {
     let fx = Fixture::new();
     fx.write(".bashrc", "b\n");
-    let source = ".rustowroot/etc/x";
+    let source = "rustowroot/etc/x";
     fx.write(source, "x\n");
     for args in [["apply", source], ["diff", source]] {
         let out = fx.run(&args);
         assert_eq!(out.code, 2, "{args:?}: {out:?}");
         assert!(out.stderr.contains(&hint(source)), "{args:?}: {out:?}");
     }
-    let out = fx.ok(&["apply", ".rustowroot/etc/"]);
+    let out = fx.ok(&["apply", "rustowroot/etc/"]);
     assert!(out.stderr.contains(&warning(source)), "{out:?}");
     assert!(!fx.home_path(".bashrc").exists(), "outside the selection");
     let out = fx.ok(&["apply", ".bashrc"]);
@@ -169,8 +169,8 @@ fn naming_a_skipped_root_file_is_an_error() {
 #[test]
 fn registered_copy_maps_under_root_target() {
     let fx = Fixture::new();
-    fx.write(".rustowroot/etc/example/custom.conf", "copy\n");
-    fx.ok(&["file", "add", ".rustowroot/etc/example/custom.conf"]);
+    fx.write("rustowroot/etc/example/custom.conf", "copy\n");
+    fx.ok(&["file", "add", "rustowroot/etc/example/custom.conf"]);
     fx.ok(&["apply"]);
     let dest = fx.root_path("etc/example/custom.conf");
     assert!(is_regular(&dest));
@@ -181,11 +181,11 @@ fn registered_copy_maps_under_root_target() {
 fn root_templates_deploy_as_copies_with_or_without_a_rule() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
-        "version = 1\n[vars]\nport = 8080\n[[template_rules]]\nsource = \".rustowroot/etc/example/secure.conf.tmpl\"\nmode = \"0640\"\n",
+        "rustow.toml",
+        "version = 1\n[vars]\nport = 8080\n[[template_rules]]\nsource = \"rustowroot/etc/example/secure.conf.tmpl\"\nmode = \"0640\"\n",
     );
-    fx.write(".rustowroot/etc/example/plain.conf.tmpl", "port={{ vars.port }}\n");
-    fx.write(".rustowroot/etc/example/secure.conf.tmpl", "secure={{ vars.port }}\n");
+    fx.write("rustowroot/etc/example/plain.conf.tmpl", "port={{ vars.port }}\n");
+    fx.write("rustowroot/etc/example/secure.conf.tmpl", "secure={{ vars.port }}\n");
     let out = fx.ok(&["apply"]);
     assert!(out.stdout.contains("template+copy"), "{out:?}");
     let plain = fx.root_path("etc/example/plain.conf");
@@ -205,10 +205,10 @@ fn root_templates_deploy_as_copies_with_or_without_a_rule() {
 fn root_and_home_destinations_never_mix() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
-        "version = 1\n[[files]]\nsource = \".rustowroot/.bashrc\"\n",
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/.bashrc\"\n",
     );
-    fx.write(".rustowroot/.bashrc", "root one\n");
+    fx.write("rustowroot/.bashrc", "root one\n");
     fx.write(".bashrc", "home one\n");
     fx.ok(&["apply"]);
     assert_eq!(read(&fx.home_path(".bashrc")), "home one\n");
@@ -221,13 +221,13 @@ fn root_and_home_destinations_never_mix() {
 fn commands_select_root_sources_as_copies() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
-        "version = 1\n[[files]]\nsource = \".rustowroot/etc/a.conf\"\n",
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/a.conf\"\n",
     );
-    fx.write(".rustowroot/etc/a.conf", "a");
-    fx.write(".rustowroot/etc/t.conf.tmpl", "t");
+    fx.write("rustowroot/etc/a.conf", "a");
+    fx.write("rustowroot/etc/t.conf.tmpl", "t");
     fx.write(".bashrc", "b");
-    let out = fx.run(&["link", ".rustowroot/"]);
+    let out = fx.run(&["link", "rustowroot/"]);
     assert_eq!(out.code, 2, "{out:?}");
     assert!(out.stderr.contains("no sources this command deploys"), "{out:?}");
     fx.ok(&["link"]);
@@ -238,12 +238,12 @@ fn commands_select_root_sources_as_copies() {
     assert!(!fx.root_path("etc/t.conf").exists());
     fx.ok(&["template", "apply"]);
     assert!(is_regular(&fx.root_path("etc/t.conf")));
-    let out = fx.run(&["unlink", ".rustowroot/"]);
+    let out = fx.run(&["unlink", "rustowroot/"]);
     assert_eq!(out.code, 2, "{out:?}");
     fx.ok(&["unlink"]);
     assert!(!fx.home_path(".bashrc").exists());
     assert!(is_regular(&fx.root_path("etc/a.conf")) && is_regular(&fx.root_path("etc/t.conf")));
-    fx.ok(&["undeploy", ".rustowroot/"]);
+    fx.ok(&["undeploy", "rustowroot/"]);
     assert!(!fx.root_path("etc/a.conf").exists() && !fx.root_path("etc/t.conf").exists());
 }
 
@@ -255,14 +255,9 @@ fn dry_run_reports_unreadable_destination_and_lists_the_rest() {
         return;
     }
     let fx = Fixture::new();
-    fx.write(".rustowroot/etc/locked.conf", "x");
-    fx.write(".rustowroot/etc/open.conf", "y");
-    fx.ok(&[
-        "file",
-        "add",
-        ".rustowroot/etc/locked.conf",
-        ".rustowroot/etc/open.conf",
-    ]);
+    fx.write("rustowroot/etc/locked.conf", "x");
+    fx.write("rustowroot/etc/open.conf", "y");
+    fx.ok(&["file", "add", "rustowroot/etc/locked.conf", "rustowroot/etc/open.conf"]);
     let locked = common::write_file(&fx.root_path("etc/locked.conf"), "theirs");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     let out = fx.run(&["apply", "--dry-run"]);
@@ -284,10 +279,10 @@ fn encrypted_age_sources_map_under_root_target() {
     fx.age_config(
         &[&key],
         &[&key],
-        "[vars]\nport = 8080\n[[files]]\nsource = \".rustowroot/etc/example/copied.conf.age\"\n\
-         [[template_rules]]\nsource = \".rustowroot/etc/example/secure.conf.tmpl.age\"\nmode = \"0640\"\n",
+        "[vars]\nport = 8080\n[[files]]\nsource = \"rustowroot/etc/example/copied.conf.age\"\n\
+         [[template_rules]]\nsource = \"rustowroot/etc/example/secure.conf.tmpl.age\"\nmode = \"0640\"\n",
     );
-    let dir = ".rustowroot/etc/example";
+    let dir = "rustowroot/etc/example";
     fx.age_encrypt(&format!("{dir}/copied.conf.age"), "copied\n", &[&key]);
     fx.age_encrypt(
         &format!("{dir}/rendered.conf.tmpl.age"),
@@ -319,7 +314,7 @@ fn unregistered_encrypted_root_file_is_skipped_until_added() {
     let fx = Fixture::new();
     let key = fx.age_key("root");
     fx.age_config(&[&key], &[&key], "");
-    let source = ".rustowroot/etc/secret.conf.age";
+    let source = "rustowroot/etc/secret.conf.age";
     fx.age_encrypt(source, "secret\n", &[&key]);
     let out = fx.ok(&["apply"]);
     assert!(out.stderr.contains(&warning(source)), "{out:?}");
@@ -332,7 +327,7 @@ fn unregistered_encrypted_root_file_is_skipped_until_added() {
     assert_eq!(read(&dest), "secret\n");
 }
 
-/// Spec Scenario E step 8 with GPG: copy sources under .rustowroot/,
+/// Spec Scenario E step 8 with GPG: copy sources under rustowroot/,
 /// with a disposable GNUPGHOME.
 #[test]
 fn encrypted_gpg_sources_map_under_root_target() {
@@ -345,18 +340,18 @@ fn encrypted_gpg_sources_map_under_root_target() {
     fx.gpg_config(
         &home,
         &[&fpr],
-        "[[files]]\nsource = \".rustowroot/etc/example/copied.conf.gpg\"\n",
+        "[[files]]\nsource = \"rustowroot/etc/example/copied.conf.gpg\"\n",
     );
-    fx.gpg_encrypt(".rustowroot/etc/example/added.conf.gpg", "gpg added\n", &home);
-    fx.gpg_encrypt(".rustowroot/etc/example/copied.conf.gpg", "gpg copied\n", &home);
+    fx.gpg_encrypt("rustowroot/etc/example/added.conf.gpg", "gpg added\n", &home);
+    fx.gpg_encrypt("rustowroot/etc/example/copied.conf.gpg", "gpg copied\n", &home);
     let out = fx.ok(&["apply"]);
     assert!(
-        out.stderr.contains(&warning(".rustowroot/etc/example/added.conf.gpg")),
+        out.stderr.contains(&warning("rustowroot/etc/example/added.conf.gpg")),
         "{out:?}"
     );
     assert!(is_regular(&fx.root_path("etc/example/copied.conf")), "{out:?}");
     assert!(!fx.root_path("etc/example/added.conf").exists(), "{out:?}");
-    fx.ok(&["file", "add", ".rustowroot/etc/example/added.conf.gpg"]);
+    fx.ok(&["file", "add", "rustowroot/etc/example/added.conf.gpg"]);
     fx.ok(&["apply"]);
     for (name, text) in [("added.conf", "gpg added\n"), ("copied.conf", "gpg copied\n")] {
         let dest = fx.root_path(&format!("etc/example/{name}"));
@@ -367,7 +362,7 @@ fn encrypted_gpg_sources_map_under_root_target() {
     assert!(fx.ok(&["apply"]).stdout.contains("0 changed"), "idempotent");
 }
 
-/// Review M1: a home source and a .rustowroot source that land on the
+/// Review M1: a home source and a rustowroot source that land on the
 /// same file collide, instead of the last one silently winning.
 #[test]
 fn home_and_root_sources_for_one_file_collide() {
@@ -376,11 +371,11 @@ fn home_and_root_sources_for_one_file_collide() {
     let target = fx.root.join("home/me");
     fs::create_dir_all(&target).unwrap();
     fx.write(
-        ".rustow.toml",
-        "version = 1\n[[files]]\nsource = \".rustowroot/home/me/.bashrc\"\n",
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/home/me/.bashrc\"\n",
     );
     fx.write(".bashrc", "home\n");
-    fx.write(".rustowroot/home/me/.bashrc", "root\n");
+    fx.write("rustowroot/home/me/.bashrc", "root\n");
     let out = fx.run(&["--target", target.to_str().unwrap(), "apply"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stdout.contains("same destination"), "{out:?}");
@@ -397,7 +392,7 @@ fn diff_shows_content_for_an_unwritable_system_directory() {
         return;
     }
     let fx = Fixture::new();
-    fx.write(".rustowroot/etc/qa.conf.tmpl", "x={{ 1 + 1 }}\n");
+    fx.write("rustowroot/etc/qa.conf.tmpl", "x={{ 1 + 1 }}\n");
     let etc = fx.root_path("etc");
     fs::create_dir_all(&etc).unwrap();
     fs::set_permissions(&etc, fs::Permissions::from_mode(0o555)).unwrap();

@@ -230,7 +230,7 @@ fn file_rule_problem(repo: &Path, ignore: &Ignore, found: &Discovery, path: &Rel
     const NOT_LINK: &str = "is not a plain symlinked file; fold rules apply only to link sources";
     let p = path.as_str();
     if p == ROOT_DIR || p.strip_prefix(ROOT_DIR).is_some_and(|r| r.starts_with('/')) {
-        return Some("is under .rustowroot/, where rustow never folds");
+        return Some("is under rustowroot/, where rustow never folds");
     }
     if let Some(s) = found.sources.iter().find(|s| &s.path == path) {
         return (s.mode != Mode::Link).then_some(NOT_LINK);
@@ -428,7 +428,7 @@ fn scoped_mode(scope: Scope, default: DefaultMode, mode: Mode, path: &RelPath) -
     }
 }
 
-/// Splits off the `.rustow-root/` prefix: the scope and the path below it.
+/// Splits off the `rustowroot/` prefix: the scope and the path below it.
 fn split_scope(path: &RelPath) -> Result<(Scope, RelPath)> {
     match path.as_str().strip_prefix(ROOT_DIR).and_then(|r| r.strip_prefix('/')) {
         Some(rest) => Ok((Scope::Root, RelPath::parse(rest)?)),
@@ -617,21 +617,21 @@ mod tests {
 
     #[test]
     fn root_sources_never_link() {
-        let c = cfg("[[files]]\nsource = \".rustowroot/etc/c\"\n\
-             [[template_rules]]\nsource = \".rustowroot/etc/r.tmpl\"\nmode = \"0600\"\n");
-        let rule = c.template_rules[&rel(".rustowroot/etc/r.tmpl")].clone();
+        let c = cfg("[[files]]\nsource = \"rustowroot/etc/c\"\n\
+             [[template_rules]]\nsource = \"rustowroot/etc/r.tmpl\"\nmode = \"0600\"\n");
+        let rule = c.template_rules[&rel("rustowroot/etc/r.tmpl")].clone();
         let none = Metadata::default();
         assert_eq!(
-            mode_of(".rustowroot/etc/t.tmpl", &c),
+            mode_of("rustowroot/etc/t.tmpl", &c),
             Mode::TemplateCopy(None, none.clone())
         );
         assert_eq!(
-            mode_of(".rustowroot/etc/t.tmpl.age", &c),
+            mode_of("rustowroot/etc/t.tmpl.age", &c),
             Mode::TemplateCopy(Some(Backend::Age), none)
         );
-        assert_eq!(mode_of(".rustowroot/etc/r.tmpl", &c), Mode::TemplateCopy(None, rule));
-        assert_eq!(mode_of(".rustowroot/etc/c", &c), Mode::FileCopy);
-        for p in [".rustowroot/etc/l", ".rustowroot/etc/l.gpg"] {
+        assert_eq!(mode_of("rustowroot/etc/r.tmpl", &c), Mode::TemplateCopy(None, rule));
+        assert_eq!(mode_of("rustowroot/etc/c", &c), Mode::FileCopy);
+        for p in ["rustowroot/etc/l", "rustowroot/etc/l.gpg"] {
             assert_eq!(
                 classify(&rel(p), &c).unwrap_err(),
                 format!("system files deploy only as copies; register it with `rustow file add {p}`")
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn classify_destinations() {
         let c = cfg("");
-        let s = classify(&rel(".rustowroot/etc/example/config.conf.tmpl"), &c).unwrap();
+        let s = classify(&rel("rustowroot/etc/example/config.conf.tmpl"), &c).unwrap();
         assert_eq!((s.scope, s.dest), (Scope::Root, rel("etc/example/config.conf")));
         let s = classify(&rel(".ssh/private.conf.age"), &c).unwrap();
         assert_eq!((s.scope, s.dest), (Scope::Home, rel(".ssh/private.conf")));
@@ -751,20 +751,20 @@ mod tests {
             ".zshrc",
             ".bashrc",
             ".gitignore",
-            ".rustow.toml",
+            "rustow.toml",
             ".git/HEAD",
             ".rustowcache/rendered/x",
             ".config/nvim/init.lua",
             ".config/nvim/x.swp",
-            ".rustowroot/etc/x.conf",
+            "rustowroot/etc/x.conf",
             "private/key",
         ]);
-        fs::write(dir.path().join(".rustow.toml"), "version = 1\n").unwrap();
+        fs::write(dir.path().join("rustow.toml"), "version = 1\n").unwrap();
         fs::write(dir.path().join(".rustowignore"), "*.swp\nprivate/\n").unwrap();
-        let d = run(&dir, &cfg("[[files]]\nsource = \".rustowroot/etc/x.conf\"\n")).unwrap();
+        let d = run(&dir, &cfg("[[files]]\nsource = \"rustowroot/etc/x.conf\"\n")).unwrap();
         assert_eq!(
             paths(&d),
-            [".bashrc", ".config/nvim/init.lua", ".rustowroot/etc/x.conf", ".zshrc"]
+            [".bashrc", ".config/nvim/init.lua", ".zshrc", "rustowroot/etc/x.conf"]
         );
         let ignored: Vec<&str> = d.ignored.iter().map(RelPath::as_str).collect();
         assert_eq!(ignored, [".config/nvim/x.swp", "private"]);
@@ -781,7 +781,7 @@ mod tests {
         let dir = repo(&[
             ".bashrc",
             "real",
-            ".rustowroot/etc/x",
+            "rustowroot/etc/x",
             "n.age.gpg",
             "a.conf",
             "t.tmpl",
@@ -795,10 +795,10 @@ mod tests {
             skipped(&d),
             [
                 ".age: the destination name is empty after removing suffixes",
-                ".rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`",
                 ".vimrc: is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it",
                 "a.conf: has a [[template_rules]] entry but is not a template (no '.tmpl' suffix)",
                 "n.age.gpg: nested encryption suffixes are not supported",
+                "rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`",
                 "t.tmpl: templates cannot be registered with `rustow file add`; use [[template_rules]] metadata to copy them",
             ]
         );
@@ -823,11 +823,11 @@ mod tests {
         assert_eq!(
             skipped(&d),
             [
-                ".rustowignore: .rustow.toml [[files]] entry is reserved and can never be deployed".to_owned(),
-                "a.bak: .rustow.toml [[files]] entry is ignored by .rustowignore".to_owned(),
-                "d: .rustow.toml [[files]] entry is a directory, not a file".to_owned(),
-                format!("gone.json: .rustow.toml [[files]] entry {gone}"),
-                format!("gone.tmpl: .rustow.toml [[template_rules]] entry {gone}"),
+                ".rustowignore: rustow.toml [[files]] entry is reserved and can never be deployed".to_owned(),
+                "a.bak: rustow.toml [[files]] entry is ignored by .rustowignore".to_owned(),
+                "d: rustow.toml [[files]] entry is a directory, not a file".to_owned(),
+                format!("gone.json: rustow.toml [[files]] entry {gone}"),
+                format!("gone.tmpl: rustow.toml [[template_rules]] entry {gone}"),
                 "n.age.gpg: nested encryption suffixes are not supported".to_owned(),
             ]
         );
@@ -848,7 +848,7 @@ mod tests {
             src(".ssh/x", Scope::Home, ".ssh/x"),
             src(".ssh/x.age", Scope::Home, ".ssh/x"),
             src(".ssh/x.gpg", Scope::Home, ".ssh/x"),
-            src(".rustowroot/.ssh/x", Scope::Root, ".ssh/x"),
+            src("rustowroot/.ssh/x", Scope::Root, ".ssh/x"),
         ];
         let c = check_collisions(&sources, |_| false);
         assert_eq!(c.len(), 1);
@@ -874,7 +874,7 @@ mod tests {
             src("x.tmpl", Scope::Home, "x"),
             src(".Config.tmpl", Scope::Home, ".Config"),
             src(".config/a", Scope::Home, ".config/a"),
-            src(".rustowroot/x", Scope::Root, "x"),
+            src("rustowroot/x", Scope::Root, "x"),
         ];
         assert!(check_collisions(&sources, |_| false).is_empty());
         let c = check_collisions(&sources, |scope| scope == Scope::Home);
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn meta_settings_replace_the_default_metadata_of_a_system_template() {
-        let dir = repo_with(&[(".rustowroot/etc/x.tmpl", "{%- meta.owner = \"root\" %}\nx\n")]);
+        let dir = repo_with(&[("rustowroot/etc/x.tmpl", "{%- meta.owner = \"root\" %}\nx\n")]);
         let d = run(&dir, &cfg("")).unwrap();
         let want = Metadata {
             owner: Some(crate::config::Owner::Name("root".into())),
@@ -1026,20 +1026,20 @@ mod tests {
             ("off.tmpl", "{%- meta.os == \"plan9\" %}\n"),
             ("c.conf", "x"),
             ("x.bak", "x"),
-            (".rustowroot/etc/x.tmpl", "x"),
+            ("rustowroot/etc/x.tmpl", "x"),
         ];
         let config = String::from("[[files]]\nsource = \"c.conf\"\n")
             + &rule("t.tmpl")
             + &rule("off.tmpl")
             + &rule("c.conf")
             + &rule("x.bak")
-            + &rule(".rustowroot/etc")
-            + &rule(".rustowroot")
+            + &rule("rustowroot/etc")
+            + &rule("rustowroot")
             + &rule("gone")
             + &rule(".git/x");
-        let entry = ".rustow.toml [[file_rules]] entry";
+        let entry = "rustow.toml [[file_rules]] entry";
         let not_link = format!("{entry} is not a plain symlinked file; fold rules apply only to link sources");
-        let root = format!("{entry} is under .rustowroot/, where rustow never folds");
+        let root = format!("{entry} is under rustowroot/, where rustow never folds");
         assert_eq!(
             rule_reasons(&files, &config),
             vec![
@@ -1047,11 +1047,11 @@ mod tests {
                     ".git/x".into(),
                     format!("{entry} is reserved and can never be deployed")
                 ),
-                (".rustowroot".into(), root.clone()),
-                (".rustowroot/etc".into(), root),
                 ("c.conf".into(), not_link.clone()),
                 ("gone".into(), format!("{entry} does not exist (remove the entry)")),
                 ("off.tmpl".into(), not_link.clone()),
+                ("rustowroot".into(), root.clone()),
+                ("rustowroot/etc".into(), root),
                 ("t.tmpl".into(), not_link),
                 ("x.bak".into(), format!("{entry} is ignored by .rustowignore")),
             ]

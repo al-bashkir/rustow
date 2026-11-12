@@ -312,7 +312,7 @@ fn collision_details(
             collided.insert((s.scope, &s.dest), detail.clone());
         }
     }
-    // The home and root targets can overlap (`.rustowroot/home/<user>/x`).
+    // The home and root targets can overlap (`rustowroot/home/<user>/x`).
     let mut by_path: BTreeMap<PathBuf, Vec<&Source>> = BTreeMap::new();
     for s in &discovery.sources {
         let path = dest_path(s);
@@ -1391,7 +1391,7 @@ mod tests {
         assert!(!super::Conflict::Special.resolvable());
     }
 
-    /// The root target holds the home target here, so `.rustowroot/home/X`
+    /// The root target holds the home target here, so `rustowroot/home/X`
     /// and the home source `x` meet only where the target ignores case.
     #[test]
     fn overlapping_targets_collide_by_case_only_where_case_is_ignored() {
@@ -1403,7 +1403,7 @@ mod tests {
         };
         let discovery = Discovery {
             sources: vec![
-                source(".rustowroot/home/X", Scope::Root, "home/X"),
+                source("rustowroot/home/X", Scope::Root, "home/X"),
                 source("x", Scope::Home, "x"),
             ],
             ..Default::default()
@@ -1414,7 +1414,7 @@ mod tests {
         };
         assert!(collision_details(&discovery, dest_path, |_| false).is_empty());
         let collided = collision_details(&discovery, dest_path, |_| true);
-        let want = "sources .rustowroot/home/X, x map to the same destination '/t/home/X'";
+        let want = "sources rustowroot/home/X, x map to the same destination '/t/home/X'";
         assert_eq!(collided.len(), 2, "{collided:?}");
         assert!(collided.values().all(|d| d == want), "{collided:?}");
     }

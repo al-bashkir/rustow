@@ -14,7 +14,7 @@ fn config(name: &str) -> String {
 
 fn templated() -> Fixture {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", &config("Example User"));
+    fx.write("rustow.toml", &config("Example User"));
     fx.write(".gitconfig.tmpl", TEMPLATE);
     fx
 }
@@ -42,7 +42,7 @@ fn scenario_c_full_flow() {
     assert_eq!(mode(&cache), 0o600);
     assert_eq!(mode(&fx.repo.join(".rustowcache")), 0o700);
     // A variable change re-renders the cache; the symlink stays valid.
-    fx.write(".rustow.toml", &config("Other Name"));
+    fx.write("rustow.toml", &config("Other Name"));
     let out = fx.ok(&["template", "apply"]);
     assert!(out.stdout.contains("update"), "{out:?}");
     assert_eq!(cache_target(&fx, ".gitconfig"), cache);
@@ -89,7 +89,7 @@ fn missing_var_is_error_naming_template() {
 fn custom_extension() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[templates]\nextension = \".j2\"\n[vars]\nx = \"y\"\n",
     );
     fx.write(".profile.j2", "{{ vars.x }}\n");
@@ -141,7 +141,7 @@ fn broken_managed_symlink_repaired() {
     // A plain source becomes a template: the old link now dangles, but it is
     // rustow's own, so it is replaced without --force.
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[vars]\nv = \"new\"\n");
+    fx.write("rustow.toml", "version = 1\n[vars]\nv = \"new\"\n");
     fx.write(".profile", "old\n");
     fx.ok(&["apply"]);
     fs::remove_file(fx.repo.join(".profile")).unwrap();
@@ -187,7 +187,7 @@ fn force_recreates_a_removed_destination_over_a_tampered_cache_entry() {
 #[test]
 fn symlink_inside_the_cache_is_refused() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write("t.tmpl", "rendered\n");
     let victim = fx.home_path("victim");
     fs::create_dir_all(fx.repo.join(".rustowcache")).unwrap();

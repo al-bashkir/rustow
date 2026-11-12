@@ -13,7 +13,7 @@ use crate::execute::Policy;
     version,
     about = "Flat-repository dotfiles manager: symlinks, copies, templates and encrypted files",
     long_about = "Flat-repository dotfiles manager. The repository root mirrors your home \
-                  directory; .rustowroot/ mirrors /. Without a command, rustow runs `apply`.\n\n\
+                  directory; rustowroot/ mirrors /. Without a command, rustow runs `apply`.\n\n\
                   Exit codes: 0 success, 1 differences found, 2 usage or configuration error, \
                   3 conflicts, 4 runtime or partial failure."
 )]
@@ -26,13 +26,13 @@ pub struct Cli {
 
 #[derive(Debug, Args)]
 pub struct Global {
-    /// Repository root (default: $RUSTOW_REPO, else the nearest directory with .rustow.toml or .rustowignore; `init` uses the current directory)
+    /// Repository root (default: $RUSTOW_REPO, else the nearest directory with rustow.toml or .rustowignore; `init` uses the current directory)
     #[arg(long, global = true, value_name = "DIR")]
     pub repo: Option<PathBuf>,
     /// Target for home sources (default: defaults.target, normally ~)
     #[arg(long, global = true, value_name = "DIR")]
     pub target: Option<PathBuf>,
-    /// Target for .rustowroot/ sources (default: defaults.root_target, normally /)
+    /// Target for rustowroot/ sources (default: defaults.root_target, normally /)
     #[arg(long, global = true, value_name = "DIR")]
     pub root_target: Option<PathBuf>,
     /// Show what would change; change nothing

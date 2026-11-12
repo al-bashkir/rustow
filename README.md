@@ -2,14 +2,14 @@
 
 rustow is a dotfiles manager for Linux and macOS. It is written in Rust.
 
-The repository root mirrors your home directory. The `.rustowroot/` directory mirrors `/`. rustow deploys each file as a symlink, a copy, or a rendered template. It can keep secrets encrypted in the repository with age or GnuPG.
+The repository root mirrors your home directory. The `rustowroot/` directory mirrors `/`. rustow deploys each file as a symlink, a copy, or a rendered template. It can keep secrets encrypted in the repository with age or GnuPG.
 
 ## Features
 
 - Symlinks by default. Copies, templates and encrypted files are opt-in by file name or by configuration.
 - Templates use MiniJinja. Undefined variables are errors.
 - Encrypted sources: age (built in) and GnuPG (installed `gpg`).
-- System files under `.rustowroot/`. They deploy only as copies, never as symlinks. You run rustow as yourself; it asks `sudo` only for the system files that you cannot write.
+- System files under `rustowroot/`. They deploy only as copies, never as symlinks. You run rustow as yourself; it asks `sudo` only for the system files that you cannot write.
 - Safe conflict handling. By default rustow changes nothing when any item conflicts or fails to plan.
 - A problem with one source does not stop the run. rustow skips that source with a warning and deploys the rest.
 - State file per repository. `status`, `diff` and `check` show differences. They exit with code 1 when they find some.
@@ -67,12 +67,12 @@ rustow takes the symlink model of GNU Stow and the templates, copies, encryption
 
 | Topic              | GNU Stow                                  | chezmoi                                                      | rustow                                                                                                                                 |
 | ------------------ | ----------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository layout  | One directory per package                 | Source names with attribute prefixes (`dot_`, `private_`, …) | Flat: the repository mirrors `~`; `.rustowroot/` mirrors `/`                                                                           |
+| Repository layout  | One directory per package                 | Source names with attribute prefixes (`dot_`, `private_`, …) | Flat: the repository mirrors `~`; `rustowroot/` mirrors `/`                                                                            |
 | Default deployment | Symlink                                   | Copy                                                         | Symlink                                                                                                                                |
 | Copies             | No                                        | Default                                                      | Per file, with `rustow file add`                                                                                                       |
 | Templates          | No                                        | Go `text/template`                                           | MiniJinja, rendered into a repository-local cache, then linked; copied when the template has mode, owner or group, or is a system file |
 | Encryption         | No                                        | age, GPG and others                                          | age (built in) and GPG (installed `gpg`), decrypted into a private cache                                                               |
-| System files       | A separate stow directory with target `/` | Not the main use                                             | `.rustowroot/`, copies only; run as yourself, sudo only for files you cannot write                                                     |
+| System files       | A separate stow directory with target `/` | Not the main use                                             | `rustowroot/`, copies only; run as yourself, sudo only for files you cannot write                                                      |
 | Conflicts          | Stop                                      | Prompt by default                                            | Stop and change nothing by default; `skip`, `backup` or `overwrite` on request                                                         |
 | State              | None; the links are the state             | Persistent state                                             | Persistent state, plus a check of the real filesystem before every change                                                              |
 | Directory folding  | On by default                             | No                                                           | On by default, never directly under `~` or `~/.local`; per file or directory with `[[file_rules]]`                                     |

@@ -48,7 +48,7 @@ fn template_link_to_copy_keeps_an_edit_made_through_the_link() {
     fx.ok(&["apply"]);
     assert_edit_survives_switch_to_copy(&fx, ".t", || {
         fx.write(
-            ".rustow.toml",
+            "rustow.toml",
             "version = 1\n[[template_rules]]\nsource = \".t.tmpl\"\nmode = \"0644\"\n",
         );
     });
@@ -61,7 +61,7 @@ fn template_link_to_copy_keeps_an_edit_made_through_the_link() {
 fn copied_template_refreshes_a_changed_cache_entry() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[template_rules]]\nsource = \".t.tmpl\"\nmode = \"0644\"\n",
     );
     fx.write(".t.tmpl", "rendered\n");
@@ -94,7 +94,7 @@ fn unedited_template_link_switches_to_copy_without_conflict() {
     fx.write(".t.tmpl", "rendered\n");
     fx.ok(&["apply"]);
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[template_rules]]\nsource = \".t.tmpl\"\nmode = \"0600\"\n",
     );
     let out = fx.ok(&["apply"]);

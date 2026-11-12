@@ -53,7 +53,7 @@ impl Host {
     }
 }
 
-/// Template context: built-in platform values plus `vars` from `.rustow.toml`.
+/// Template context: built-in platform values plus `vars` from `rustow.toml`.
 pub fn context(vars: &serde_json::Map<String, Value>, home_dir: &Path) -> Value {
     let host = Host::current();
     json!({

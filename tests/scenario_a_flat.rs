@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// Per-file links: folding is off, so each file gets its own symlink.
 fn flat() -> Fixture {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.write(".bashrc", "# bash\n");
     fx.write(".config/nvim/init.lua", "-- nvim\n");
     fx
@@ -130,7 +130,7 @@ fn odd_names_link_and_select() {
 fn subdir_cwd_paths_are_repo_relative() {
     let mut fx = flat();
     fx.env_repo = false;
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.cwd = fx.repo.join(".config");
     fx.ok(&["apply", ".bashrc"]);
     assert!(is_symlink(&fx.home_path(".bashrc")));
@@ -194,7 +194,7 @@ fn unsafe_ancestor_symlink_blocks() {
 #[test]
 fn no_marker_means_no_repository() {
     let mut fx = flat();
-    fs::remove_file(fx.repo.join(".rustow.toml")).unwrap();
+    fs::remove_file(fx.repo.join("rustow.toml")).unwrap();
     fx.env_repo = false;
     fx.cwd = fx.repo.join(".config/nvim");
     for args in [&["apply", "init.lua"][..], &[][..]] {

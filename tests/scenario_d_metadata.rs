@@ -7,7 +7,7 @@ use common::*;
 fn with_rule(rule: &str) -> Fixture {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         &format!(
             "version = 1\n[vars]\nhost = \"github.com\"\n[[template_rules]]\nsource = \".ssh/config.tmpl\"\n{rule}\n"
         ),
@@ -26,7 +26,7 @@ fn scenario_d_full_flow() {
     assert_eq!(mode(&dest), 0o600);
     // A metadata-only change is applied without rewriting content.
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[vars]\nhost = \"github.com\"\n[[template_rules]]\nsource = \".ssh/config.tmpl\"\nmode = \"0640\"\n",
     );
     let diff = fx.run(&["diff"]);
@@ -106,7 +106,7 @@ fn owner_only_change_without_privilege_fails_clearly() {
     let fx = with_rule("mode = \"0600\"");
     fx.ok(&["apply"]);
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[vars]\nhost = \"github.com\"\n[[template_rules]]\nsource = \".ssh/config.tmpl\"\nmode = \"0600\"\nowner = \"0\"\n",
     );
     let out = fx.run(&["apply"]);
@@ -119,7 +119,7 @@ fn owner_only_change_without_privilege_fails_clearly() {
 fn copy_to_link_transition_needs_authorization() {
     let fx = with_rule("mode = \"0600\"");
     fx.ok(&["apply"]);
-    fx.write(".rustow.toml", "version = 1\n[vars]\nhost = \"github.com\"\n");
+    fx.write("rustow.toml", "version = 1\n[vars]\nhost = \"github.com\"\n");
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");
     fx.ok(&["apply", "--force"]);
@@ -147,7 +147,7 @@ fn enc_keeps_comments_of_a_migrated_template_rule() {
     fx.age_config(&[&key], &[&key], rule);
     fx.write(".ssh/config.tmpl", "Host x\n");
     fx.ok(&["enc", ".ssh/config.tmpl"]);
-    let after = read(&fx.repo.join(".rustow.toml"));
+    let after = read(&fx.repo.join("rustow.toml"));
     assert!(
         after.contains("# ssh needs 0600\nsource = \".ssh/config.tmpl.age\" # the main one\n"),
         "{after}"
@@ -160,18 +160,18 @@ fn enc_keeps_comments_of_a_migrated_template_rule() {
 fn file_add_and_remove_keep_crlf_line_endings() {
     let fx = Fixture::new();
     let config = "version = 1\r\n# mine\r\n[vars]\r\na = 1\r\n[[files]]\r\nsource = \"a.conf\"\r\n\r\n[[files]]\r\nsource = \"b.conf\"\r\n";
-    fx.write(".rustow.toml", config);
+    fx.write("rustow.toml", config);
     fx.write("a.conf", "a");
     fx.write("b.conf", "b");
     fx.write("c.conf", "c");
     fx.ok(&["file", "add", "c.conf"]);
     assert_eq!(
-        read(&fx.repo.join(".rustow.toml")),
+        read(&fx.repo.join("rustow.toml")),
         config,
         "file add writes the state only"
     );
     fx.ok(&["file", "remove", "a.conf"]);
-    let removed = read(&fx.repo.join(".rustow.toml"));
+    let removed = read(&fx.repo.join("rustow.toml"));
     assert!(!removed.contains("a.conf") && removed.contains("b.conf"), "{removed:?}");
     assert_eq!(
         removed.matches('\n').count(),
@@ -183,12 +183,12 @@ fn file_add_and_remove_keep_crlf_line_endings() {
 #[test]
 fn link_to_copy_transition_is_automatic() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".ssh/config.tmpl", "Host x\n");
     fx.ok(&["apply"]);
     assert!(is_symlink(&fx.home_path(".ssh/config")));
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[template_rules]]\nsource = \".ssh/config.tmpl\"\nmode = \"0600\"\n",
     );
     fx.ok(&["apply"]);

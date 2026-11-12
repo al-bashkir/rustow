@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 fn machine() -> Fixture {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nmode = \"copy\"\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nmode = \"copy\"\n");
     fx.write("a.conf", "a\n");
     fx.write(".bashrc", "b\n");
     fx.write(".vimrc", "v\n");

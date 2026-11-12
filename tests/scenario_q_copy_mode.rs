@@ -13,7 +13,7 @@ const CONFIG: &str = "version = 1\n[defaults]\nmode = \"copy\"\n[vars]\nv = \"t\
 
 fn copy_mode() -> Fixture {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", CONFIG);
+    fx.write("rustow.toml", CONFIG);
     fx.write(".bashrc", "b\n");
     fx.write(".vimrc", "v\n");
     fx.write("copied.conf", "c\n");
@@ -80,7 +80,7 @@ fn a_dry_run_registers_nothing() {
 #[test]
 fn symlink_mode_registers_no_link() {
     let fx = copy_mode();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.ok(&["link", ".bashrc"]);
     assert_eq!(fx.state_json()["links"], Value::Null);
 }
@@ -88,10 +88,10 @@ fn symlink_mode_registers_no_link() {
 #[test]
 fn links_from_symlink_mode_are_not_registered() {
     let fx = copy_mode();
-    fx.write(".rustow.toml", &CONFIG.replace("mode = \"copy\"", ""));
+    fx.write("rustow.toml", &CONFIG.replace("mode = \"copy\"", ""));
     fx.ok(&["apply"]);
     assert!(is_symlink(&fx.home_path(".bashrc")));
-    fx.write(".rustow.toml", CONFIG);
+    fx.write("rustow.toml", CONFIG);
     fs::remove_file(fx.home_path(".bashrc")).unwrap();
     fx.ok(&["apply"]);
     assert!(
@@ -133,7 +133,7 @@ fn registering_a_linked_file_turns_it_into_a_copy() {
 #[test]
 fn an_unknown_mode_is_a_configuration_error() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\nmode = \"hardlink\"\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\nmode = \"hardlink\"\n");
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 2, "{out:?}");
     assert!(out.stderr.contains("defaults.mode"), "{out:?}");

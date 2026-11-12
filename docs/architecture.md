@@ -6,7 +6,7 @@ rustow has one planner and one executor. Every command that changes files builds
 
 1. `cli` parses arguments. `app` dispatches and prepares the context.
 2. `repo` finds the repository and builds the `Context` (and the internal directories).
-3. `config` loads `.rustow.toml`. `ignore` loads `.rustowignore`.
+3. `config` loads `rustow.toml`. `ignore` loads `.rustowignore`.
 4. `source` discovers files and classifies each into a `Mode`. A file or configuration entry that cannot deploy goes to `Discovery::skipped`, with the reason. It also finds collisions and applies the selector.
 5. `plan` decides an action for each destination, with the decision table. It integrates `fold`. It also plans removals.
 6. `execute` predicts and executes the plan, or removes. `fsops` does the file operations. A system file that the user cannot write (`Deploy::sudo`, `Removal::sudo`) waits until the end of the run. Then `sudo::call` sends all of them to one `sudo rustow __sudo-helper`. The helper runs `execute::write_dest` or `execute::remove_dest`, the same code as a normal run, as root.
@@ -48,7 +48,7 @@ rustow has one planner and one executor. Every command that changes files builds
 
 Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels are link, copy, decrypt+link, decrypt+copy, template+link, template+copy. State and selectors use these labels. Output uses `source::shown_label`, which adds the backend: `decrypt(age)+link`, `decrypt(gpg)+template+link`. Commands choose modes: `link` takes Link only, `file apply` takes FileCopy and DecryptCopy, `template apply` takes templates, `apply` takes all.
 
-`source::classify` applies one scope rule after the mode is selected (`scoped_mode`). Under `.rustowroot/` (`Scope::Root`), no source is a link:
+`source::classify` applies one scope rule after the mode is selected (`scoped_mode`). Under `rustowroot/` (`Scope::Root`), no source is a link:
 
 | Selected mode                       | Home         | Root                                        |
 | ----------------------------------- | ------------ | ------------------------------------------- |

@@ -32,8 +32,8 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
     let mut checks = vec![
         check("ok", "repository", ctx.root.display().to_string()),
         match ctx.config.present {
-            true => check("ok", "config", ".rustow.toml found"),
-            false => check("warn", "config", "no .rustow.toml; defaults apply (run `rustow init`)"),
+            true => check("ok", "config", "rustow.toml found"),
+            false => check("warn", "config", "no rustow.toml; defaults apply (run `rustow init`)"),
         },
         private_dir("cache", &ctx.cache_dir, uid),
         private_dir("state", &ctx.state_dir, uid),

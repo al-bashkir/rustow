@@ -14,7 +14,7 @@ fn unified_plan_apply_and_idempotency() {
     let gpg = fx.gpg_home("gpg", false);
     let config = format!(
         "version = 1\n[vars]\nname = \"Example User\"\n\
-         [[template_rules]]\nsource = \".rustowroot/etc/example/config.conf.tmpl\"\nmode = \"0640\"\n\
+         [[template_rules]]\nsource = \"rustowroot/etc/example/config.conf.tmpl\"\nmode = \"0640\"\n\
          [encryption]\nrecipients = [\"{}\"]\nidentity_files = [\"{}\"]\n\
          [encryption.gpg]\nrecipients = [\"{}\"]\nhomedir = \"{}\"\n",
         age.recipient,
@@ -22,7 +22,7 @@ fn unified_plan_apply_and_idempotency() {
         gpg.fpr,
         gpg.dir.display()
     );
-    fx.write(".rustow.toml", &config);
+    fx.write("rustow.toml", &config);
     fx.write(".bashrc", "bash\n");
     fx.write(".gitconfig.tmpl", "[user]\n    name = {{ vars.name }}\n");
     fx.age_encrypt(".ssh/private.conf.age", "age linked\n", &[&age]);
@@ -35,7 +35,7 @@ fn unified_plan_apply_and_idempotency() {
         "{\"n\": \"{{ vars.name }}\"}\n",
         &gpg,
     );
-    fx.write(".rustowroot/etc/example/config.conf.tmpl", "user={{ vars.name }}\n");
+    fx.write("rustowroot/etc/example/config.conf.tmpl", "user={{ vars.name }}\n");
     for f in [
         ".config/example/settings.json",
         ".ssh/copied-secret.conf.age",
@@ -58,7 +58,7 @@ fn unified_plan_apply_and_idempotency() {
     assert_eq!(mode_of(".bashrc"), "link");
     assert_eq!(mode_of(".gitconfig.tmpl"), "template+link");
     assert_eq!(mode_of(".config/example/settings.json"), "copy");
-    assert_eq!(mode_of(".rustowroot/etc/example/config.conf.tmpl"), "template+copy");
+    assert_eq!(mode_of("rustowroot/etc/example/config.conf.tmpl"), "template+copy");
     // The plan shows the decrypt step and its backend (spec Scenario G).
     assert_eq!(mode_of(".ssh/private.conf.age"), "decrypt(age)+link");
     assert_eq!(mode_of(".ssh/copied-secret.conf.age"), "decrypt(age)+copy");

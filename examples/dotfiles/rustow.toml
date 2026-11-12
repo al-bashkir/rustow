@@ -33,5 +33,5 @@ mode = "0600"
 
 # No owner is set, so the example works for a normal user.
 [[template_rules]]
-source = ".rustowroot/etc/example/example.conf.tmpl"
+source = "rustowroot/etc/example/example.conf.tmpl"
 mode = "0644"

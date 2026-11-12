@@ -7,7 +7,7 @@ use common::*;
 #[test]
 fn meta_settings_copy_with_mode_and_block_is_not_in_output() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(
         ".x.conf.tmpl",
         "{%- meta.mode = \"0600\" %}\n{%- meta.family == \"unix\" %}\nhello\n",
@@ -22,7 +22,7 @@ fn meta_settings_copy_with_mode_and_block_is_not_in_output() {
 #[test]
 fn false_condition_is_skipped_quietly() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".x.tmpl", "{%- meta.os == \"plan9\" %}\nx\n");
     let out = fx.ok(&["apply"]);
     assert!(!out.stderr.contains("warning"), "{out:?}");
@@ -41,7 +41,7 @@ fn false_condition_is_skipped_quietly() {
 #[test]
 fn condition_false_after_deploy_is_orphaned() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".x.tmpl", "x\n");
     fx.ok(&["apply"]);
     fx.write(".x.tmpl", "{%- meta.os == \"plan9\" %}\nx\n");
@@ -63,7 +63,7 @@ fn condition_false_after_deploy_is_orphaned() {
 #[test]
 fn render_error_names_the_original_line() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(
         ".x.tmpl",
         "{%- meta.mode = \"0600\" %}\n{%- meta.family == \"unix\" %}\n{{ missing }}\n",
@@ -90,7 +90,7 @@ fn meta_lines_in_an_encrypted_template_fail_to_render() {
 fn check_fails_on_a_broken_meta_block_but_apply_only_warns() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[template_rules]]\nsource = \"b.tmpl\"\nmode = \"0600\"\n",
     );
     fx.write(".x.tmpl", "{%- meta.user = \"root\" %}\nx\n");

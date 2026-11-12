@@ -93,7 +93,7 @@ rustow enc .ssh/secret.conf               # default backend
 rustow enc --backend gpg .ssh/secret.conf
 ```
 
-`enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies by decrypting when a private key is available. Otherwise it prints "not verified". It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `.rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
+`enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies by decrypting when a private key is available. Otherwise it prints "not verified". It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
 
 `enc` prints a notice: Git history, backups and deployed files keep the old plaintext. rustow does not erase them.
 
@@ -121,7 +121,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 
 ## Deployment
 
-- Default: decrypt into the cache and link to it (`decrypt+link`). A system file under `.rustowroot/` never links: register it with `rustow file add`.
+- Default: decrypt into the cache and link to it (`decrypt+link`). A system file under `rustowroot/` never links: register it with `rustow file add`.
 - `rustow file add x.age`: decrypt and copy (`decrypt+copy`, mode 0600).
 - Encrypted templates: decrypt, then render.
 - Output names the backend in the mode label: `decrypt(age)+link`, `decrypt(gpg)+copy`, `decrypt(gpg)+template+link`. Plans (text and JSON), `status`, `undeploy`, `template list` and `file list` show these labels.

@@ -206,13 +206,13 @@ impl Fixture {
         }
     }
 
-    /// `.rustow.toml` with age recipients, identity files and `extra` TOML.
+    /// `rustow.toml` with age recipients, identity files and `extra` TOML.
     pub fn age_config(&self, recipients: &[&AgeKey], identities: &[&AgeKey], extra: &str) {
         let list = |items: Vec<String>| items.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
         let r = list(recipients.iter().map(|k| k.recipient.clone()).collect());
         let i = list(identities.iter().map(|k| k.identity.display().to_string()).collect());
         self.write(
-            ".rustow.toml",
+            "rustow.toml",
             &format!("version = 1\n{extra}\n[encryption]\nrecipients = [{r}]\nidentity_files = [{i}]\n"),
         );
     }
@@ -376,11 +376,11 @@ impl Fixture {
         home
     }
 
-    /// `.rustow.toml` with GPG recipients and home, plus `extra` TOML.
+    /// `rustow.toml` with GPG recipients and home, plus `extra` TOML.
     pub fn gpg_config(&self, home: &GpgHome, fprs: &[&str], extra: &str) {
         let list = fprs.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
         self.write(
-            ".rustow.toml",
+            "rustow.toml",
             &format!(
                 "version = 1\n{extra}\n[encryption.gpg]\nrecipients = [{list}]\nhomedir = \"{}\"\n",
                 home.dir.display()

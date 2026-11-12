@@ -50,7 +50,7 @@ fn enc_with_a_locked_key_is_not_verified() {
 fn gnupghome_selects_the_keyring_without_a_configured_homedir() {
     let Some((fx, home)) = setup("") else { return };
     let config = format!("version = 1\n[encryption.gpg]\nrecipients = [\"{}\"]\n", home.fpr);
-    fx.write(".rustow.toml", &config);
+    fx.write("rustow.toml", &config);
     fx.write("p", "plain\n");
     let dir = home.dir.display().to_string();
     let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("GNUPGHOME", &dir)]);
@@ -192,7 +192,7 @@ fn source_changed_during_enc_rolls_back_the_registration() {
     let Some((fx, _home)) = setup("") else { return };
     let src = fx.write("p", "plain\n");
     fx.ok(&["file", "add", "p"]);
-    let config = read(&fx.repo.join(".rustow.toml"));
+    let config = read(&fx.repo.join("rustow.toml"));
     let real_gpg = String::from_utf8(
         Command::new("sh")
             .args(["-c", "command -v gpg"])
@@ -215,7 +215,7 @@ fn source_changed_during_enc_rolls_back_the_registration() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stderr.contains("changed while it was being encrypted"), "{out:?}");
     assert_eq!(
-        read(&fx.repo.join(".rustow.toml")),
+        read(&fx.repo.join("rustow.toml")),
         config,
         "registration not rolled back"
     );

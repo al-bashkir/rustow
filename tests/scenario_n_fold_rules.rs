@@ -12,7 +12,7 @@ fn is_dir(path: &std::path::Path) -> bool {
 #[test]
 fn default_folds_below_top_level_but_never_a_direct_child_of_home() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".config/nvim/init.lua", "i\n");
     fx.write(".ssh/config", "c\n");
     fx.ok(&["apply"]);
@@ -26,7 +26,7 @@ fn default_folds_below_top_level_but_never_a_direct_child_of_home() {
 fn file_rule_keeps_its_directories_unfolded_and_a_sibling_subdir_folds() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[file_rules]]\nsource = \".config/a/b.txt\"\nfold_directories = false\n",
     );
     fx.write(".config/a/b.txt", "1\n");
@@ -42,7 +42,7 @@ fn file_rule_keeps_its_directories_unfolded_and_a_sibling_subdir_folds() {
 fn directory_rule_false_with_deeper_rule_true() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[file_rules]]\nsource = \".config/nvim\"\nfold_directories = false\n\
          [[file_rules]]\nsource = \".config/nvim/lua\"\nfold_directories = true\n",
     );
@@ -58,7 +58,7 @@ fn directory_rule_false_with_deeper_rule_true() {
 fn rules_can_fold_a_directory_when_the_default_is_false() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[defaults]\nfold_directories = false\n\
          [[file_rules]]\nsource = \".config/nvim\"\nfold_directories = true\n",
     );
@@ -72,13 +72,13 @@ fn rules_can_fold_a_directory_when_the_default_is_false() {
 #[test]
 fn new_false_rule_unfolds_an_existing_fold() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".config/nvim/init.lua", "i\n");
     fx.write(".config/nvim/lua/x.lua", "x\n");
     fx.ok(&["apply"]);
     assert!(is_symlink(&fx.home_path(".config/nvim")));
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[file_rules]]\nsource = \".config/nvim/init.lua\"\nfold_directories = false\n",
     );
     fx.ok(&["apply"]);
@@ -93,7 +93,7 @@ fn new_false_rule_unfolds_an_existing_fold() {
 #[test]
 fn recorded_top_level_fold_is_unfolded_on_upgrade() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".vim/pack/x", "x\n");
     fs::create_dir_all(fx.home_path(".vim")).unwrap();
     fx.ok(&["apply"]);
@@ -128,11 +128,11 @@ fn recorded_top_level_fold_is_unfolded_on_upgrade() {
 fn file_rule_warning_prints_but_status_has_no_row() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[file_rules]]\nsource = \"gone\"\nfold_directories = false\n",
     );
     fx.write(".bashrc", "b\n");
-    let warning = "warning: gone: .rustow.toml [[file_rules]] entry does not exist";
+    let warning = "warning: gone: rustow.toml [[file_rules]] entry does not exist";
     let out = fx.ok(&["apply"]);
     assert!(out.stderr.contains(warning), "{out:?}");
     let json = fx.ok(&["apply", "--json"]);
@@ -148,7 +148,7 @@ fn file_rule_warning_prints_but_status_has_no_row() {
 #[test]
 fn a_direct_child_of_local_never_folds() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".local/share/fonts/x.ttf", "f\n");
     fx.write(".local/bin/tool", "t\n");
     fx.ok(&["apply"]);
@@ -166,7 +166,7 @@ fn a_direct_child_of_local_never_folds() {
 fn a_rule_cannot_fold_a_direct_child_of_local() {
     let fx = Fixture::new();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[[file_rules]]\nsource = \".local/bin\"\nfold_directories = true\n",
     );
     fx.write(".local/bin/tool", "t\n");

@@ -2,8 +2,8 @@
 //!
 //! Reserved paths are excluded first and cannot be re-included by a
 //! negation pattern. Patterns match repository-relative paths, so
-//! `/.rustowroot/etc/foo` ignores the system file `/etc/foo`, while an
-//! unanchored `*.bak` also matches inside `.rustowroot/`.
+//! `/rustowroot/etc/foo` ignores the system file `/etc/foo`, while an
+//! unanchored `*.bak` also matches inside `rustowroot/`.
 
 use std::path::Path;
 
@@ -16,7 +16,7 @@ use crate::template::Host;
 
 pub const IGNORE_FILE: &str = ".rustowignore";
 pub const DEFAULT_CACHE_DIR: &str = ".rustowcache";
-pub const ROOT_DIR: &str = ".rustowroot";
+pub const ROOT_DIR: &str = "rustowroot";
 
 /// Root-level files that are never sources.
 const RESERVED_ROOT_FILES: [&str; 3] = [".gitignore", crate::config::CONFIG_FILE, IGNORE_FILE];
@@ -78,7 +78,7 @@ impl Ignore {
             .map(|(name, _)| name.as_str())
     }
 
-    /// Built-in exclusion. The `.rustowroot` directory is traversed, but a
+    /// Built-in exclusion. The `rustowroot` directory is traversed, but a
     /// file with that name is reserved.
     pub fn is_reserved(&self, path: &RelPath, is_dir: bool) -> bool {
         let p = path.as_str();
@@ -142,17 +142,17 @@ mod tests {
     #[test]
     fn reserved_always_excluded_even_with_negation() {
         let (_d, ig) = with_rules(
-            "!.git\n!.git/**\n!.gitignore\n!.rustow.toml\n!.rustowignore\n!.rustowcache/\n!.rustowcache/**\n",
+            "!.git\n!.git/**\n!.gitignore\n!rustow.toml\n!.rustowignore\n!.rustowcache/\n!.rustowcache/**\n",
         );
         for (p, dir) in [
             (".git", true),
             (".git/config", false),
             (".gitignore", false),
-            (".rustow.toml", false),
+            ("rustow.toml", false),
             (".rustowignore", false),
             (".rustowcache", true),
             (".rustowcache/rendered/x", false),
-            (".rustowroot", false),
+            ("rustowroot", false),
         ] {
             assert!(ig.is_reserved(&rel(p), dir), "{p}");
             assert!(ig.is_ignored(&rel(p), dir), "{p}");
@@ -185,8 +185,8 @@ mod tests {
         assert!(ig.is_reserved(&rel(".config/nvim/pack/x/.git"), true));
         assert!(ig.is_reserved(&rel(".config/nvim/pack/x/.git/HEAD"), false));
         assert!(!ig.is_reserved(&rel(".config/foo/.gitignore"), false));
-        assert!(!ig.is_reserved(&rel(".rustowroot/etc/x"), false));
-        assert!(!ig.is_reserved(&rel(".rustowroot"), true));
+        assert!(!ig.is_reserved(&rel("rustowroot/etc/x"), false));
+        assert!(!ig.is_reserved(&rel("rustowroot"), true));
     }
 
     #[test]
@@ -218,11 +218,11 @@ mod tests {
 
     #[test]
     fn ignore_applies_under_rustowroot() {
-        let (_d, ig) = with_rules("/.rustowroot/etc/secret.conf\n*.bak\n/etc/\n");
-        assert!(ig.is_ignored(&rel(".rustowroot/etc/secret.conf"), false));
-        assert!(ig.is_ignored(&rel(".rustowroot/etc/x.bak"), false));
+        let (_d, ig) = with_rules("/rustowroot/etc/secret.conf\n*.bak\n/etc/\n");
+        assert!(ig.is_ignored(&rel("rustowroot/etc/secret.conf"), false));
+        assert!(ig.is_ignored(&rel("rustowroot/etc/x.bak"), false));
         // An anchored "/etc/" matches the repository's etc/, not the system one.
-        assert!(!ig.is_ignored(&rel(".rustowroot/etc/other.conf"), false));
+        assert!(!ig.is_ignored(&rel("rustowroot/etc/other.conf"), false));
         assert!(ig.is_ignored(&rel("etc/x"), false));
     }
 

@@ -7,7 +7,7 @@ use common::*;
 
 fn repo() -> Fixture {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("rustow.toml", "version = 1\n");
     fx.write(".rustowignore", "*.bak\n");
     fx.write(".bashrc", "b\n");
     fx.write(".bashrc.bak", "old\n");

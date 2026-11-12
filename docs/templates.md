@@ -7,7 +7,7 @@ A template is a source file whose name ends in the template extension (default `
 - Without a rule, a home template deploys as `template+link`. rustow writes the rendered file to the cache and links to it.
 - With a `[[template_rules]]` entry, a template deploys as `template+copy`. The rule sets `mode`, `owner` and `group`.
 - With settings in its [meta block](#meta-block), a template deploys as `template+copy` with those settings.
-- A system template under `.rustowroot/` always deploys as `template+copy`, also without a rule. See [system files](system-files.md).
+- A system template under `rustowroot/` always deploys as `template+copy`, also without a rule. See [system files](system-files.md).
 
 ```toml
 [[template_rules]]
@@ -21,7 +21,7 @@ If you edited the cache entry through the link and then add a rule, `apply` repo
 
 ## Meta block
 
-A template can hold its own metadata and deploy conditions at the top of the file. Then `.rustow.toml` needs no `[[template_rules]]` entry for it.
+A template can hold its own metadata and deploy conditions at the top of the file. Then `rustow.toml` needs no `[[template_rules]]` entry for it.
 
 ```jinja
 {%- meta.os == "linux" %}

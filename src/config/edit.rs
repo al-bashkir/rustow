@@ -1,4 +1,4 @@
-//! Conservative text edits of `.rustow.toml` and ignore files. Edits keep
+//! Conservative text edits of `rustow.toml` and ignore files. Edits keep
 //! comments, formatting and line endings; `None` means "already right".
 
 use ::ignore::gitignore::GitignoreBuilder;

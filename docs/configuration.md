@@ -1,10 +1,10 @@
 # Configuration
 
-The file is `<repo>/.rustow.toml`. It is optional. Without it, rustow uses the defaults. If the file exists, it must contain `version = 1`.
+The file is `<repo>/rustow.toml`. It is optional. Without it, rustow uses the defaults. If the file exists, it must contain `version = 1`.
 
 rustow rejects unknown keys everywhere, except under `[vars]` and the `vars` of a `[[global_rules]]` entry. A configuration error gives exit code 2. A problem with one source or one `[[files]]` or `[[template_rules]]` entry is a warning instead: rustow skips that source and deploys the rest. See [skipped sources](cli.md#skipped-sources).
 
-A TOML error reads `.rustow.toml: line L, column C, key <path>: <message>`, for example `.rustow.toml: line 7, column 22, key defaults.create_directories: invalid type, expected a boolean`. The key part is missing when rustow cannot find the key. The message never shows the source line or a value. Other validation messages can name values that are not secret, such as a `mode`, an `owner`, the `engine`, the `extension` or a source path. rustow never shows `[vars]` values.
+A TOML error reads `rustow.toml: line L, column C, key <path>: <message>`, for example `rustow.toml: line 7, column 22, key defaults.create_directories: invalid type, expected a boolean`. The key part is missing when rustow cannot find the key. The message never shows the source line or a value. Other validation messages can name values that are not secret, such as a `mode`, an `owner`, the `engine`, the `extension` or a source path. rustow never shows `[vars]` values.
 
 ## Full example
 
@@ -57,7 +57,7 @@ ignore = [".config/foot/"]
 | Key                  | Default          | Meaning                                                                                                                                                                                                       |
 | -------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `target`             | `"~"`            | Target of home sources. `--target` overrides it.                                                                                                                                                              |
-| `root_target`        | `"/"`            | Target of `.rustowroot/` sources. `--root-target` overrides it.                                                                                                                                               |
+| `root_target`        | `"/"`            | Target of `rustowroot/` sources. `--root-target` overrides it.                                                                                                                                                |
 | `cache_dir`          | `".rustowcache"` | Cache directory. A relative path starts at the repository. An in-repository cache belongs to the repository owner: another user (normally root) uses `<state_dir>/cache` instead, and rustow prints a notice. |
 | `state_dir`          | none             | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`.                                                                                                                             |
 | `create_directories` | `true`           | Create missing parent directories.                                                                                                                                                                            |
@@ -83,14 +83,14 @@ With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys
 
 The state file is per machine and per user. On a new machine, run `rustow link <path>` and `rustow file add <path>` again, move the registrations with `rustow state export` and `rustow state import`, or list the copies in `[[files]]`. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before are not registered. `apply` does not change them, and `status` does not show them. Run `rustow link <path>` to register one, or `rustow unlink <path>` to remove it. Templates that rustow linked before become copies on the next `apply`.
 
-`.rustowroot/` sources work the same in both modes.
+`rustowroot/` sources work the same in both modes.
 
 ### Cache and state directories
 
 rustow compares `cache_dir` and `state_dir` with the repository in canonical form. So it also finds a directory inside the repository when the path goes through a symlink, for example a symlinked repository path, or a HOME behind a symlink such as `/home -> /var/home`.
 
 - rustow never deploys a cache or state directory inside the repository.
-- A cache or state directory must not be the repository or one of its parents. Inside the repository, it must not be in `.rustowroot` or `.git`. Otherwise every command stops with exit 2.
+- A cache or state directory must not be the repository or one of its parents. Inside the repository, it must not be in `rustowroot` or `.git`. Otherwise every command stops with exit 2.
 - A configured in-repository `cache_dir` or `state_dir` may hold only rustow's names: `rendered/`, `decrypted/`, `edit/`, `backups/`, `cache/`, `<repo-id>.json`, `<repo-id>.lock` and temporary files that start with `.rustow-tmp-`. Any other name stops every command with exit 2. Thus `cache_dir = ".config"` cannot hide your `.config` sources.
 - The built-in `.rustowcache` is exempt from that content rule. It is reserved by name, so a file such as `.DS_Store` in it does no harm.
 - A symlink or a non-directory above an in-repository cache or state directory stops every command with exit 3.
@@ -106,7 +106,7 @@ rustow uses one symlink for the shallowest home directory when all these conditi
 - The destination directory does not exist.
 - For a new fold, the run selects every source below the directory. A selective run (a path argument, or a command such as `rustow link`) folds a new directory only then. It keeps an existing fold.
 
-rustow never folds in `.rustowroot/`.
+rustow never folds in `rustowroot/`.
 
 Why these never fold: on a new machine, `~/.ssh`, `~/.gnupg`, `~/.config` or `~/.local/share` often does not exist yet. A fold there would make ssh, GnuPG, keyrings, shell history and every program that writes to `~/.config` write private files into the repository. The same risk applies to any folded directory: a program that writes a new file into it writes into the repository. The rule protects only the directories named above. Other directories can still fold on a new machine, for example `~/.config/gh` (`gh auth login` writes its token to `hosts.yml`) or `~/.config/Code`. Use `[[file_rules]]` with `fold_directories = false` for each directory that programs write to.
 
@@ -148,24 +148,24 @@ Free-form values. Templates read them as `vars.<name>`. Tables and lists are all
 source = ".config/example/settings.json"
 ```
 
-Registers a source for copy deployment on every machine. You write this list by hand. `rustow file add` does not write it: it registers the source in the state file of one machine. `rustow file remove` removes an entry from both. See [file management](file-management.md#state-or-rustowtoml). A system file under `.rustowroot/` that is not a template must be registered in one of them. See [system files](system-files.md).
+Registers a source for copy deployment on every machine. You write this list by hand. `rustow file add` does not write it: it registers the source in the state file of one machine. `rustow file remove` removes an entry from both. See [file management](file-management.md#state-or-rustowtoml). A system file under `rustowroot/` that is not a template must be registered in one of them. See [system files](system-files.md).
 
 ## `[[template_rules]]`
 
 ```toml
 [[template_rules]]
-source = ".rustowroot/etc/example/example.conf.tmpl"
+source = "rustowroot/etc/example/example.conf.tmpl"
 mode = "0644"
 owner = "root"
 group = "root"
 ```
 
-A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. A system template under `.rustowroot/` deploys as a copy also without a rule.
+A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. A system template under `rustowroot/` deploys as a copy also without a rule.
 
 - `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. Only the digits 0–7 are allowed, with no sign or space. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits. The mode must include owner read (`0400`), because rustow reads the deployed file to find changes. Any other mode is a configuration error (exit 2).
 - `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem.
 
-A rule on a file that is not a template skips that file with a warning. A registered source or a rule source must exist. It must not be ignored, reserved or a directory. Otherwise rustow skips the entry with a warning, for example "warning: gone.json: .rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)". A template in `[[files]]` is skipped too.
+A rule on a file that is not a template skips that file with a warning. A registered source or a rule source must exist. It must not be ignored, reserved or a directory. Otherwise rustow skips the entry with a warning, for example "warning: gone.json: rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)". A template in `[[files]]` is skipped too.
 
 ## `[[file_rules]]`
 
@@ -193,7 +193,7 @@ With `fold_directories = false`, a rule with `true` lets a directory fold. A dir
 
 A rule that stops an existing fold unfolds it, with the rules above. A directory that an unfold has made real keeps per-file links; it does not fold again.
 
-An entry that cannot apply gives a warning, and rustow ignores the entry. This happens when the source does not exist, is ignored or reserved, is under `.rustowroot/`, or is a file that is not a plain symlinked file (a template, a copy or an encrypted file). Example: "warning: gone: .rustow.toml [[file_rules]] entry does not exist (remove the entry)". The warning shows on stderr, in the JSON `warnings` array and in `rustow check`. `status` shows no row for it. A directory rule that covers templates or copies is valid; the rule has no effect on them.
+An entry that cannot apply gives a warning, and rustow ignores the entry. This happens when the source does not exist, is ignored or reserved, is under `rustowroot/`, or is a file that is not a plain symlinked file (a template, a copy or an encrypted file). Example: "warning: gone: rustow.toml [[file_rules]] entry does not exist (remove the entry)". The warning shows on stderr, in the JSON `warnings` array and in `rustow check`. `status` shows no row for it. A directory rule that covers templates or copies is valid; the rule has no effect on them.
 
 ## `[[global_rules]]`
 
@@ -243,7 +243,7 @@ A rule without conditions, an unknown key or a bad pattern is a configuration er
 | TemplateLink | template+link | Home template without rule               |
 | TemplateCopy | template+copy | Template with a rule, or system template |
 
-A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).
+A system file under `rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).
 
 In [copy mode](#copy-mode), a home template is template+copy. A Link or DecryptLink source deploys only when `rustow link <path>` registered it.
 

@@ -12,7 +12,7 @@ fn new_dir_gets_minimal_config_ignores_and_private_cache() {
     let fx = Fixture::new();
     let out = fx.ok(&["init"]);
     assert!(out.stdout.contains(fx.repo.to_str().unwrap()), "{out:?}");
-    let config = read(&fx.repo.join(".rustow.toml"));
+    let config = read(&fx.repo.join("rustow.toml"));
     assert!(
         config.contains("version = 1") && config.contains("cache_dir = \".rustowcache\""),
         "{config}"
@@ -40,10 +40,10 @@ fn works_in_git_repo_without_touching_index() {
 fn existing_config_and_ignore_rules_preserved() {
     let fx = Fixture::new();
     let config = "# my settings\n[vars]\nname = \"x\" # inline\n";
-    fx.write(".rustow.toml", config);
+    fx.write("rustow.toml", config);
     fx.write(".gitignore", "target/\n# keep\n");
     fx.ok(&["init"]);
-    let after = read(&fx.repo.join(".rustow.toml"));
+    let after = read(&fx.repo.join("rustow.toml"));
     assert!(after.starts_with("version = 1\n") && after.ends_with(config), "{after}");
     assert_eq!(read(&fx.repo.join(".gitignore")), format!("target/\n# keep\n{ENTRY}"));
 }
@@ -73,7 +73,7 @@ fn equivalent_entries_kept_and_negation_repaired_once() {
 fn repeat_init_preserves_contents_and_mtimes() {
     let fx = Fixture::new();
     fx.ok(&["init"]);
-    let files = [".rustow.toml", ".gitignore", ".rustowignore", ".rustowcache"].map(|f| fx.repo.join(f));
+    let files = ["rustow.toml", ".gitignore", ".rustowignore", ".rustowcache"].map(|f| fx.repo.join(f));
     let before: Vec<_> = files.iter().map(|f| (mtime(f), fs::read(f).ok())).collect();
     std::thread::sleep(std::time::Duration::from_millis(20));
     let out = fx.ok(&["init"]);
@@ -98,15 +98,15 @@ fn loose_cache_permissions_are_repaired() {
 #[test]
 fn malformed_config_fails_without_overwriting() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "[defaults\n");
+    fx.write("rustow.toml", "[defaults\n");
     let out = fx.run(&["init"]);
     assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains(".rustow.toml"), "{out:?}");
-    assert_eq!(read(&fx.repo.join(".rustow.toml")), "[defaults\n");
+    assert!(out.stderr.contains("rustow.toml"), "{out:?}");
+    assert_eq!(read(&fx.repo.join("rustow.toml")), "[defaults\n");
     assert!(!fx.repo.join(".gitignore").exists());
-    fx.write(".rustow.toml", "version = 7\n");
+    fx.write("rustow.toml", "version = 7\n");
     assert_eq!(fx.run(&["init"]).code, 2);
-    assert_eq!(read(&fx.repo.join(".rustow.toml")), "version = 7\n");
+    assert_eq!(read(&fx.repo.join("rustow.toml")), "version = 7\n");
 }
 
 #[test]
@@ -127,14 +127,14 @@ fn configuration_errors_never_print_values() {
         ("version = \"TOPSECRET-5\"\n", "line 1, column 11, key version"),
     ] {
         let fx = Fixture::new();
-        fx.write(".rustow.toml", config);
+        fx.write("rustow.toml", config);
         for args in [&["check"][..], &["init"], &["file", "add", "x"]] {
             let out = fx.run(args);
             assert_eq!(out.code, 2, "{args:?} {config}\n{out:?}");
             assert!(!format!("{out:?}").contains("TOPSECRET"), "{args:?} {config}\n{out:?}");
             assert!(out.stderr.contains(place), "{args:?} {config}\n{out:?}");
         }
-        assert_eq!(read(&fx.repo.join(".rustow.toml")), config);
+        assert_eq!(read(&fx.repo.join("rustow.toml")), config);
     }
 }
 
@@ -184,7 +184,7 @@ fn conflicting_objects_fail_without_changes() {
 
     let fx = Fixture::new();
     fx.write("real.toml", "version = 1\n");
-    std::os::unix::fs::symlink("real.toml", fx.repo.join(".rustow.toml")).unwrap();
+    std::os::unix::fs::symlink("real.toml", fx.repo.join("rustow.toml")).unwrap();
     fx.write(".rustowignore", "");
     std::os::unix::fs::symlink("nowhere", fx.repo.join(".gitignore")).unwrap();
     let out = fx.run(&["init"]);
@@ -194,7 +194,7 @@ fn conflicting_objects_fail_without_changes() {
     assert_eq!(read(&fx.repo.join(".rustowignore")), "");
     assert_eq!(
         repo_names(&fx),
-        [".gitignore", ".rustow.toml", ".rustowignore", "real.toml"]
+        [".gitignore", ".rustowignore", "real.toml", "rustow.toml"]
     );
 }
 
@@ -205,13 +205,13 @@ fn cache_dir_through_a_symlink_in_the_repo_is_refused() {
     fs::create_dir(&outside).unwrap();
     std::os::unix::fs::symlink(&outside, fx.repo.join("var")).unwrap();
     let config = "version = 1\n[defaults]\ncache_dir = \"var/cache\"\n";
-    fx.write(".rustow.toml", config);
+    fx.write("rustow.toml", config);
     let out = fx.run(&["init"]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stderr.contains("var"), "{out:?}");
     assert!(!outside.join("cache").exists());
-    assert_eq!(read(&fx.repo.join(".rustow.toml")), config);
-    assert_eq!(repo_names(&fx), [".rustow.toml", "var"]);
+    assert_eq!(read(&fx.repo.join("rustow.toml")), config);
+    assert_eq!(repo_names(&fx), ["rustow.toml", "var"]);
     // Other commands do not create it through the symlink either.
     fx.write(".rustowignore", "/var\n");
     fx.write(".gitconfig.tmpl", "x");
@@ -226,22 +226,22 @@ fn repo_flag_and_subdirectory_resolve_root() {
     let other = fx.base.join("other");
     fs::create_dir(&other).unwrap();
     fx.ok(&["--repo", other.to_str().unwrap(), "init"]);
-    assert!(other.join(".rustow.toml").exists());
-    assert!(!fx.repo.join(".rustow.toml").exists());
+    assert!(other.join("rustow.toml").exists());
+    assert!(!fx.repo.join("rustow.toml").exists());
 
     fx.env_repo = false;
     fx.write(".rustowignore", "");
     fs::create_dir_all(fx.repo.join(".config/sub")).unwrap();
     fx.cwd = fx.repo.join(".config/sub");
     fx.ok(&["init"]);
-    assert!(fx.repo.join(".rustow.toml").exists());
-    assert!(!fx.repo.join(".config/sub/.rustow.toml").exists());
+    assert!(fx.repo.join("rustow.toml").exists());
+    assert!(!fx.repo.join(".config/sub/rustow.toml").exists());
 }
 
 #[test]
 fn custom_cache_dir_is_created_and_ignored() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\ncache_dir = \"var/cache\"\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\ncache_dir = \"var/cache\"\n");
     fx.ok(&["init"]);
     assert_eq!(read(&fx.repo.join(".gitignore")), "/.rustowcache/\n/var/cache/\n");
     assert_eq!(read(&fx.repo.join(".rustowignore")), "/.rustowcache/\n/var/cache/\n");
@@ -251,7 +251,7 @@ fn custom_cache_dir_is_created_and_ignored() {
 #[test]
 fn cache_dir_with_glob_characters_is_escaped_once() {
     let fx = Fixture::new();
-    fx.write(".rustow.toml", "version = 1\n[defaults]\ncache_dir = \"c[1]\"\n");
+    fx.write("rustow.toml", "version = 1\n[defaults]\ncache_dir = \"c[1]\"\n");
     let out = fx.ok(&["init"]);
     assert!(out.stdout.contains("/c\\[1]/"), "{out:?}");
     let want = "/.rustowcache/\n/c\\[1]/\n";
@@ -269,7 +269,7 @@ fn cache_dir_through_symlinked_home_or_repo_is_ignored() {
     let home_link = fx.base.join("home-link");
     std::os::unix::fs::symlink(&fx.home, &home_link).unwrap();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         "version = 1\n[defaults]\ncache_dir = \"~/dotfiles/var/c\"\n",
     );
     let out = fx.run_env(&["init"], &[("HOME", home_link.to_str().unwrap())]);
@@ -281,7 +281,7 @@ fn cache_dir_through_symlinked_home_or_repo_is_ignored() {
     let repo_link = fx.base.join("repo-link");
     std::os::unix::fs::symlink(&fx.repo, &repo_link).unwrap();
     fx.write(
-        ".rustow.toml",
+        "rustow.toml",
         &format!(
             "version = 1\n[defaults]\ncache_dir = \"{}/var/c\"\n",
             repo_link.display()
@@ -306,4 +306,27 @@ fn dry_run_writes_nothing() {
     let out = fx.ok(&["init", "--dry-run"]);
     assert!(out.stdout.contains("create"), "{out:?}");
     assert_eq!(fs::read_dir(&fx.repo).unwrap().count(), 0);
+}
+
+/// rustow 0.1 named these files `.rustow.toml` and `.rustowroot/`. A
+/// repository with an old name stops every command with exit 2: rustow
+/// would ignore the old configuration and link the old system files into HOME.
+#[test]
+fn old_names_stop_every_command() {
+    for (old, file, new) in [
+        (".rustow.toml", ".rustow.toml", "rustow.toml"),
+        (".rustowroot", ".rustowroot/etc/x", "rustowroot"),
+    ] {
+        let mut fx = Fixture::new();
+        fx.write(file, "version = 1\n");
+        fx.write(".bashrc", "x");
+        fx.env_repo = false; // the old name alone marks the repository
+        for args in [&["apply"][..], &["init"]] {
+            let out = fx.run(args);
+            assert_eq!(out.code, 2, "{file} {args:?}\n{out:?}");
+            let want = format!("{old} is the old name of {new}; rename it");
+            assert!(out.stderr.contains(&want), "{file} {args:?}\n{out:?}");
+        }
+        assert!(!fx.home_path(".bashrc").exists() && !fx.repo.join("rustow.toml").exists());
+    }
 }

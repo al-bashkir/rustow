@@ -36,11 +36,11 @@ impl Sudo {
     fn new(script: &str) -> Sudo {
         let fx = Fixture::new();
         fx.write(
-            ".rustow.toml",
-            "version = 1\n[vars]\nv = \"t\"\n[[files]]\nsource = \".rustowroot/etc/app.conf\"\n",
+            "rustow.toml",
+            "version = 1\n[vars]\nv = \"t\"\n[[files]]\nsource = \"rustowroot/etc/app.conf\"\n",
         );
-        fx.write(".rustowroot/etc/app.conf", "a\n");
-        fx.write(".rustowroot/etc/t.conf.tmpl", "{{ vars.v }}\n");
+        fx.write("rustowroot/etc/app.conf", "a\n");
+        fx.write("rustowroot/etc/t.conf.tmpl", "{{ vars.v }}\n");
         let etc = fx.root.join("etc");
         fs::create_dir_all(&etc).unwrap();
         set_mode(&etc, 0o555);
@@ -100,22 +100,22 @@ fn a_system_file_you_cannot_write_goes_through_sudo() {
 #[test]
 fn undeploy_removes_system_files_and_their_new_directories_through_sudo() {
     let s = Sudo::new(FAKE);
-    let config = read(&s.fx.repo.join(".rustow.toml"));
+    let config = read(&s.fx.repo.join("rustow.toml"));
     s.fx.write(
-        ".rustow.toml",
-        &format!("{config}[[files]]\nsource = \".rustowroot/etc/sub/x.conf\"\n"),
+        "rustow.toml",
+        &format!("{config}[[files]]\nsource = \"rustowroot/etc/sub/x.conf\"\n"),
     );
-    s.fx.write(".rustowroot/etc/sub/x.conf", "x\n");
+    s.fx.write("rustowroot/etc/sub/x.conf", "x\n");
     assert_eq!(s.run(&["apply"]).code, 0);
     assert!(s.fx.root_path("etc/sub/x.conf").exists());
     assert_eq!(s.calls(), 1);
 
-    let dry = s.run(&["-n", "undeploy", ".rustowroot"]);
+    let dry = s.run(&["-n", "undeploy", "rustowroot"]);
     assert_eq!(dry.code, 0, "{dry:?}");
     assert_eq!(dry.stdout.matches("via sudo").count(), 3, "{dry:?}");
     assert_eq!(s.calls(), 1, "a dry run never calls sudo");
 
-    let out = s.run(&["undeploy", ".rustowroot"]);
+    let out = s.run(&["undeploy", "rustowroot"]);
     assert_eq!(out.code, 0, "{out:?}");
     assert_eq!(s.calls(), 2, "one sudo call for all removals");
     for f in ["etc/app.conf", "etc/t.conf", "etc/sub"] {

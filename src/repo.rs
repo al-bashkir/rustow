@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{CONFIG_FILE, Config};
 use crate::error::{Error, Result};
 use crate::hash::Hash;
-use crate::ignore::{IGNORE_FILE, Ignore};
+use crate::ignore::{IGNORE_FILE, Ignore, ROOT_DIR};
 use crate::paths::{RelPath, Scope, expand_tilde, normalize};
 use crate::source::{Discovery, Skipped, Source, discover};
 use crate::state::State;
@@ -63,7 +63,7 @@ pub struct Context {
     pub home: PathBuf,
     /// Canonical target for home-scope sources.
     pub home_target: PathBuf,
-    /// Canonical target for `.rustowroot/` sources.
+    /// Canonical target for `rustowroot/` sources.
     pub root_target: PathBuf,
     /// Short hash of `root`.
     pub repo_id: String,
@@ -250,7 +250,7 @@ fn setup_notices(private_cache: Option<&Path>, root_target: &Path) -> Vec<String
     }
     if root_target != Path::new("/") {
         notices.push(format!(
-            "system files (.rustowroot/) deploy under {}",
+            "system files (rustowroot/) deploy under {}",
             root_target.display()
         ));
     }
@@ -267,9 +267,26 @@ fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// `--repo`, then `RUSTOW_REPO`, then the nearest ancestor of the working
-/// directory with `.rustow.toml` or `.rustowignore`; for `init` only, the working directory.
+/// The names that rustow 0.1 used, with the new names.
+const OLD_NAMES: [(&str, &str); 2] = [(".rustow.toml", CONFIG_FILE), (".rustowroot", ROOT_DIR)];
+
+/// The repository root (see `locate_root`). A repository that still has an
+/// old name is a configuration error: rustow would ignore the old
+/// configuration and link the old system files into HOME.
 pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_repo: bool) -> Result<PathBuf> {
+    let root = locate_root(opts, env, notices, new_repo)?;
+    match OLD_NAMES.iter().find(|(old, _)| root.join(old).exists()) {
+        Some((old, new)) => Err(Error::Config(format!(
+            "{old} is the old name of {new}; rename it, e.g. `git mv {old} {new}`"
+        ))),
+        None => Ok(root),
+    }
+}
+
+/// `--repo`, then `RUSTOW_REPO`, then the nearest ancestor of the working
+/// directory with `rustow.toml`, `.rustowignore` or an old name; for `init`
+/// only, the working directory.
+fn locate_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_repo: bool) -> Result<PathBuf> {
     if let Some(p) = &opts.repo {
         return canonical_dir(&env.cwd.join(p), "--repo");
     }
@@ -277,10 +294,10 @@ pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_re
         return canonical_dir(&env.cwd.join(p), "RUSTOW_REPO");
     }
     let cwd = canonical_dir(&env.cwd, "current directory")?;
-    if let Some(dir) = cwd
-        .ancestors()
-        .find(|d| d.join(CONFIG_FILE).exists() || d.join(IGNORE_FILE).exists())
-    {
+    let markers = [CONFIG_FILE, IGNORE_FILE]
+        .into_iter()
+        .chain(OLD_NAMES.map(|(old, _)| old));
+    if let Some(dir) = cwd.ancestors().find(|d| markers.clone().any(|m| d.join(m).exists())) {
         return Ok(dir.to_path_buf());
     }
     // Only `init` may adopt an unmarked directory; anything else could
@@ -361,7 +378,7 @@ fn internal_dirs(root: &Path, dirs: &[(&str, &PathBuf)]) -> Result<Vec<RelPath>>
         let rel = RelPath::parse(&rel.to_string_lossy()).map_err(|e| bad(&e.to_string()))?;
         let first = rel.components().next().unwrap_or_default();
         if first == crate::ignore::ROOT_DIR || first == ".git" {
-            return Err(bad("must not be inside .rustowroot or .git"));
+            return Err(bad("must not be inside rustowroot or .git"));
         }
         check_components(root, &rel, name)?;
         // The built-in cache is reserved by name and hides no source tree.
@@ -463,14 +480,14 @@ mod tests {
         env: Env,
     }
 
-    /// base/home (HOME), base/home/dot (repo with .rustow.toml), base/root.
+    /// base/home (HOME), base/home/dot (repo with rustow.toml), base/root.
     fn fx() -> Fx {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().canonicalize().unwrap();
         for d in ["home/dot/.config/nvim", "root"] {
             fs::create_dir_all(base.join(d)).unwrap();
         }
-        fs::write(base.join("home/dot/.rustow.toml"), "version = 1\n").unwrap();
+        fs::write(base.join("home/dot/rustow.toml"), "version = 1\n").unwrap();
         fs::write(base.join("home/dot/.bashrc"), "x").unwrap();
         fs::write(base.join("home/dot/.config/nvim/init.lua"), "x").unwrap();
         let env = Env {
@@ -586,7 +603,7 @@ mod tests {
     fn relative_cache_dir_resolves_against_repo_not_cwd() {
         let mut f = fx();
         fs::write(
-            f.base.join("home/dot/.rustow.toml"),
+            f.base.join("home/dot/rustow.toml"),
             "version = 1\n[defaults]\ncache_dir = \"var/c\"\n",
         )
         .unwrap();
@@ -607,7 +624,7 @@ mod tests {
         std::os::unix::fs::symlink(f.base.join("home"), f.base.join("home-link")).unwrap();
         let link = f.base.join("home-link/dot");
         fs::write(
-            f.base.join("home/dot/.rustow.toml"),
+            f.base.join("home/dot/rustow.toml"),
             format!(
                 "version = 1\n[defaults]\ncache_dir = \"{}/var/c\"\nstate_dir = \"~/dot/st\"\n",
                 link.display()
@@ -653,7 +670,7 @@ mod tests {
     fn cache_dir_at_repo_root_rejected() {
         let f = fx();
         fs::write(
-            f.base.join("home/dot/.rustow.toml"),
+            f.base.join("home/dot/rustow.toml"),
             "version = 1\n[defaults]\ncache_dir = \".\"\n",
         )
         .unwrap();
@@ -691,7 +708,7 @@ mod tests {
             f.base.join("xdg/rustow")
         );
         fs::write(
-            f.base.join("home/dot/.rustow.toml"),
+            f.base.join("home/dot/rustow.toml"),
             "version = 1\n[defaults]\nstate_dir = \"~/st\"\n",
         )
         .unwrap();
@@ -739,7 +756,7 @@ mod tests {
         for (arg, word) in [
             ("x.bak", "ignored"),
             (".rustowcache/x", "reserved"),
-            (".rustow.toml", "reserved"),
+            ("rustow.toml", "reserved"),
             ("nope", "does not match"),
             ("../etc", "'..'"),
         ] {
@@ -751,15 +768,15 @@ mod tests {
     #[test]
     fn root_scope_dest_uses_root_target() {
         let f = fx();
-        fs::create_dir_all(f.base.join("home/dot/.rustowroot/etc")).unwrap();
-        fs::write(f.base.join("home/dot/.rustowroot/etc/x.conf.tmpl"), "").unwrap();
+        fs::create_dir_all(f.base.join("home/dot/rustowroot/etc")).unwrap();
+        fs::write(f.base.join("home/dot/rustowroot/etc/x.conf.tmpl"), "").unwrap();
         let opts = GlobalOpts {
             root_target: Some(f.base.join("root")),
             ..Default::default()
         };
         let ctx = open(&f, opts).unwrap();
         let d = ctx.discover().unwrap();
-        let s = ctx.select(&d, &[".rustowroot/etc".into()]).unwrap();
+        let s = ctx.select(&d, &["rustowroot/etc".into()]).unwrap();
         assert_eq!(ctx.dest_path(s[0]), f.base.join("root/etc/x.conf"));
         assert_ne!(ctx.scope_id(Scope::Root), ctx.scope_id(Scope::Home));
     }
