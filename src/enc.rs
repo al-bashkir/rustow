@@ -198,7 +198,10 @@ fn publish_new(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         .parent()
         .ok_or_else(|| Error::Failed(format!("{} has no parent", path.display())))?;
     let what = || format!("write {}", path.display());
-    let mut tmp = tempfile::Builder::new().prefix(".rustow-").tempfile_in(dir).ctx(what)?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(fsops::TEMP_PREFIX)
+        .tempfile_in(dir)
+        .ctx(what)?;
     tmp.write_all(bytes).ctx(what)?;
     tmp.as_file()
         .set_permissions(fs::Permissions::from_mode(mode))

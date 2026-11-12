@@ -91,6 +91,22 @@ fn ignore_applies_to_root_relative_files_and_templates() {
 }
 
 #[test]
+fn leftover_rustow_temp_files_are_reserved_at_any_depth() {
+    let fx = Fixture::new();
+    fx.write(".rustowignore", "!.rustow-tmp-*\n!**/.rustow-tmp-*\n");
+    fx.write(".rustow-tmp-Ab12Cd", "half-written .gitignore");
+    fx.write(".config/app/.rustow-tmp-Xy34Zw", "half-written secret");
+    fx.write(".config/app/settings", "s");
+    fx.ok(&["apply"]);
+    assert!(fs::symlink_metadata(fx.home_path(".rustow-tmp-Ab12Cd")).is_err());
+    assert!(fs::symlink_metadata(fx.home_path(".config/app/.rustow-tmp-Xy34Zw")).is_err());
+    assert!(is_symlink(&fx.home_path(".config/app/settings")));
+    let out = fx.run(&["apply", ".config/app/.rustow-tmp-Xy34Zw"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("reserved"), "{out:?}");
+}
+
+#[test]
 fn status_lists_ignored_on_request() {
     let fx = Fixture::new();
     fx.write(".rustowignore", "*.bak\n");

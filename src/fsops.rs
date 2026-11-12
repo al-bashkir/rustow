@@ -14,6 +14,10 @@ use crate::error::{Error, IoContext, Result};
 use crate::hash::Hash;
 use crate::paths::RelPath;
 
+/// Name prefix of every temporary file rustow creates. Names with it are
+/// reserved at any depth, so a file left by a crash is never deployed.
+pub const TEMP_PREFIX: &str = ".rustow-tmp-";
+
 /// Explicit metadata a destination must have. `None` fields are not managed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileMeta {
@@ -121,7 +125,7 @@ pub fn write_new(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Op
 fn write_file(dest: &Path, bytes: &[u8], mode: u32, owner: (Option<u32>, Option<u32>), clobber: bool) -> Result<()> {
     let parent = parent_of(dest)?;
     let mut tmp = tempfile::Builder::new()
-        .prefix(".rustow-")
+        .prefix(TEMP_PREFIX)
         .tempfile_in(parent)
         .ctx(|| format!("write {}", dest.display()))?;
     fill_temp(&mut tmp, dest, bytes, mode, owner)?;
@@ -168,7 +172,7 @@ pub fn symlink_atomic(link: &Path, target: &Path) -> Result<()> {
     let parent = parent_of(link)?;
     let what = || format!("create symlink {}", link.display());
     let tmp = tempfile::Builder::new()
-        .prefix(".rustow-")
+        .prefix(TEMP_PREFIX)
         .make_in(parent, |p| std::os::unix::fs::symlink(target, p))
         .ctx(what)?;
     tmp.persist(link).map_err(|e| e.error).ctx(what)?;

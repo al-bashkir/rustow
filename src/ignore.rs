@@ -46,7 +46,8 @@ impl Ignore {
     /// file with that name is reserved.
     pub fn is_reserved(&self, path: &RelPath, is_dir: bool) -> bool {
         let p = path.as_str();
-        p.split('/').any(|c| c == ".git")
+        p.split('/')
+            .any(|c| c == ".git" || c.starts_with(crate::fsops::TEMP_PREFIX))
             || RESERVED_ROOT_FILES.contains(&p)
             || (p == ROOT_DIR && !is_dir)
             || p == DEFAULT_CACHE_DIR
@@ -147,6 +148,18 @@ mod tests {
         assert!(!ig.is_reserved(&rel(".config/foo/.gitignore"), false));
         assert!(!ig.is_reserved(&rel(".rustowroot/etc/x"), false));
         assert!(!ig.is_reserved(&rel(".rustowroot"), true));
+    }
+
+    #[test]
+    fn rustow_temp_files_reserved_at_any_depth() {
+        let (_d, ig) = with_rules("!.rustow-tmp-*\n!**/.rustow-tmp-*\n");
+        let temp = format!("{}Ab12Cd", crate::fsops::TEMP_PREFIX);
+        for p in [temp.clone(), format!(".config/app/{temp}"), format!("{temp}/x")] {
+            assert!(ig.is_reserved(&rel(&p), false), "{p}");
+            assert!(ig.is_ignored(&rel(&p), false), "{p}");
+        }
+        assert!(!ig.is_reserved(&rel(".config/rustow-tmp-x"), false));
+        assert!(!ig.is_reserved(&rel(".rustow-notes"), false));
     }
 
     #[test]
