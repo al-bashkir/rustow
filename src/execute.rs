@@ -235,14 +235,11 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     if matches!(cache.decision, Decision::UpToDate | Decision::Adopt) {
         return Ok(None);
     }
-    fsops::ensure_private_dir(run.cache_dir)?;
+    fsops::ensure_private_tree(run.cache_dir, cache.path.parent().unwrap_or(run.cache_dir))?;
     recheck(&cache.path, &cache.observed)?;
     let mut detail = None;
     if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
         detail = Some(backup(&cache.path, &backup_path(run, item, true))?);
-    }
-    if let Some(parent) = cache.path.parent() {
-        fsops::ensure_private_dir(parent)?;
     }
     fsops::write_atomic(&cache.path, &cache.bytes, 0o600, None, None)?;
     Ok(detail)

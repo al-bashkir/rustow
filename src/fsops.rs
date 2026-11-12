@@ -246,6 +246,22 @@ pub fn ensure_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `ensure_private_dir` for `root` and for each level from it down to
+/// `dir`, so a symlink at any level below `root` is an error and nothing
+/// written into `dir` can leave the tree.
+pub fn ensure_private_tree(root: &Path, dir: &Path) -> Result<()> {
+    let below = dir
+        .strip_prefix(root)
+        .map_err(|_| Error::Failed(format!("{} is not inside {}", dir.display(), root.display())))?;
+    let mut level = root.to_path_buf();
+    ensure_private_dir(&level)?;
+    for part in below.components() {
+        level.push(part);
+        ensure_private_dir(&level)?;
+    }
+    Ok(())
+}
+
 fn parent_of(path: &Path) -> Result<&Path> {
     path.parent()
         .ok_or_else(|| Error::Failed(format!("{} has no parent directory", path.display())))
@@ -651,6 +667,18 @@ mod tests {
         // Never overwrite an existing backup.
         fs::write(d.join("f"), b"again").unwrap();
         assert!(backup(&d.join("f"), &d.join("bk/a/f")).is_err());
+    }
+
+    #[test]
+    fn ensure_private_tree_refuses_a_symlink_at_any_level() {
+        let (_t, d) = tmp();
+        fs::create_dir(d.join("elsewhere")).unwrap();
+        ensure_private_tree(&d.join("c"), &d.join("c/x/y")).unwrap();
+        assert_eq!(mode_of(&d.join("c/x/y")), 0o700);
+        std::os::unix::fs::symlink(d.join("elsewhere"), d.join("c/l")).unwrap();
+        assert!(ensure_private_tree(&d.join("c"), &d.join("c/l/y")).is_err());
+        assert_eq!(fs::read_dir(d.join("elsewhere")).unwrap().count(), 0);
+        assert!(ensure_private_tree(&d.join("c"), &d.join("other")).is_err());
     }
 
     #[test]

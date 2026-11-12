@@ -182,3 +182,24 @@ fn force_recreates_a_removed_destination_over_a_tampered_cache_entry() {
     assert_eq!(out.code, 0, "{out:?}");
     assert!(read(&fx.home_path(".gitconfig")).contains("Example User"));
 }
+
+/// A symlink inside the cache never sends rendered content out of it.
+#[test]
+fn symlink_inside_the_cache_is_refused() {
+    let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n");
+    fx.write("t.tmpl", "rendered\n");
+    let victim = fx.home_path("victim");
+    fs::create_dir_all(fx.repo.join(".rustowcache")).unwrap();
+    fs::create_dir_all(&victim).unwrap();
+    std::os::unix::fs::symlink(&victim, fx.repo.join(".rustowcache/rendered")).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("symlinks are not followed"), "{out:?}");
+    assert_eq!(
+        fs::read_dir(&victim).unwrap().count(),
+        0,
+        "nothing written outside the cache"
+    );
+    assert!(!fx.home_path("t").exists());
+}

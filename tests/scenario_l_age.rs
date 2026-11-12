@@ -381,3 +381,25 @@ fn enc_and_edit_refuse_a_symlinked_parent_directory() {
         "{out:?}"
     );
 }
+
+/// The edit workspace holds plaintext: a symlink in its place is refused.
+#[test]
+fn edit_refuses_a_symlinked_workspace_root() {
+    let (fx, _key) = keyed();
+    fx.write("s", "secret\n");
+    fx.ok(&["enc", "s"]);
+    let victim = fx.home_path("victim");
+    fs::create_dir_all(&victim).unwrap();
+    let edit = fx.repo.join(".rustowcache/edit");
+    let _ = fs::remove_dir_all(&edit);
+    fs::create_dir_all(fx.repo.join(".rustowcache")).unwrap();
+    std::os::unix::fs::symlink(&victim, &edit).unwrap();
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "true")]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("symlinks are not followed"), "{out:?}");
+    assert_eq!(
+        fs::read_dir(&victim).unwrap().count(),
+        0,
+        "no plaintext outside the cache"
+    );
+}
