@@ -35,7 +35,7 @@ A destination can have a symlinked ancestor directory, for example `~/.config` t
 - rustow does not erase data securely. After `rustow enc`, Git history, backups and deployed files keep the old plaintext.
 - rustow has no transactional rollback. State is updated per successful item.
 - The state file holds content hashes. Treat it as sensitive metadata.
-- The cache holds decrypted and rendered content on disk, with mode 0600. Anyone who can read your account can read it.
+- The cache holds decrypted and rendered content on disk, with mode 0600, until `rustow cache clean` (see [plaintext lifetime](encryption.md#deployment)). Anyone who can read your account can read it.
 - Trust of GnuPG keys is never overridden.
 - `diff` can print secrets. `diff --json` includes the content too.
 

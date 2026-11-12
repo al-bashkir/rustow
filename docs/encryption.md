@@ -27,7 +27,22 @@ identity_files = ["~/.config/rustow/age/identity.txt"]
 
 ## GnuPG
 
-rustow runs the installed `gpg` (GnuPG 2.2 or newer). It finds `gpg` in `PATH`. You cannot configure the path. On macOS, run `brew install gnupg`. rustow needs `gpg` only when it processes a selected, non-ignored `.gpg` source.
+rustow runs the installed `gpg` (GnuPG 2.2 or newer). It finds `gpg` in `PATH`. You cannot configure the path. rustow needs `gpg` only when it processes a selected, non-ignored `.gpg` source.
+
+Install GnuPG:
+
+| System | Command |
+| --- | --- |
+| Debian, Ubuntu | `sudo apt install gnupg` |
+| Fedora | `sudo dnf install gnupg2` |
+| Arch Linux | `sudo pacman -S gnupg` |
+| Alpine | `sudo apk add gnupg` |
+| macOS (Homebrew) | `brew install gnupg` |
+
+Run `rustow doctor` to see which `gpg` rustow finds.
+
+- Scripts, cron and launchd: these often have a short `PATH`. Homebrew installs `gpg` in `/opt/homebrew/bin` (Apple silicon) or `/usr/local/bin` (Intel). Add that directory to `PATH` in the job.
+- Pinentry for `--interactive`: `gpg-agent` starts the pinentry program, not rustow. On Linux, install the pinentry package of your system. In a terminal-only session, set `export GPG_TTY=$(tty)` for the curses pinentry. On macOS, run `brew install pinentry-mac`, add `pinentry-program /opt/homebrew/bin/pinentry-mac` (Intel: `/usr/local/bin/pinentry-mac`) to `~/.gnupg/gpg-agent.conf`, then run `gpgconf --kill gpg-agent`. rustow's `--no-options` applies to `gpg.conf` only, so `gpg-agent.conf` still has effect.
 
 ```toml
 [encryption]
@@ -113,3 +128,4 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - Changing between plain and encrypted retargets rustow's own link automatically.
 - `--dry-run` decrypts in memory only. Missing keys make the plan incomplete (exit 4).
 - Ignored sources are never decrypted.
+- Plaintext lifetime: `apply` writes each decrypted item into the cache as plaintext (mode 0600), under `.rustowcache/decrypted/` or, for an encrypted template, `.rustowcache/rendered/`. This is also true for `decrypt+copy`. The entry stays after `apply` and after `undeploy`. `rustow cache clean` removes each entry that no deployed link uses. An entry behind a deployed link stays as long as the link. The next `apply` writes the entries of copies again. So run `rustow cache clean` after `apply` or `undeploy` to keep plaintext only where a deployed link needs it.

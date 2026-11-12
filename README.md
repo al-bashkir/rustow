@@ -75,4 +75,4 @@ rustow takes the symlink model of GNU Stow and the templates, copies, encryption
 
 ## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).
