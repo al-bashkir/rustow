@@ -39,7 +39,16 @@ impl Folding {
     }
 }
 
-pub fn analyze(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Folding> {
+/// Destinations involved in a collision, with the collision text (see `plan`).
+pub type Collided<'a> = BTreeMap<(Scope, &'a RelPath), String>;
+
+pub fn analyze(
+    ctx: &Context,
+    discovery: &Discovery,
+    selected: &[&Source],
+    state: &State,
+    collided: &Collided,
+) -> Result<Folding> {
     // A recorded fold whose link was replaced is stale: what is there now
     // belongs to the user, and files below it are planned against it.
     let recorded: BTreeMap<RelPath, &Record> = recorded_folds(ctx, state)
@@ -47,7 +56,7 @@ pub fn analyze(ctx: &Context, discovery: &Discovery, selected: &[&Source], state
         .filter(|(dir, r)| still_linked(ctx, dir, r))
         .collect();
     let folds = if ctx.config.defaults.fold_directories {
-        fold_candidates(ctx, discovery, selected, &recorded)?
+        fold_candidates(ctx, discovery, selected, &recorded, collided)?
     } else {
         Vec::new()
     };
@@ -65,6 +74,7 @@ fn fold_candidates(
     discovery: &Discovery,
     selected: &[&Source],
     recorded: &BTreeMap<RelPath, &Record>,
+    collided: &Collided,
 ) -> Result<Vec<RelPath>> {
     let link_sources: BTreeSet<&RelPath> = discovery
         .sources
@@ -85,11 +95,26 @@ fn fold_candidates(
         if folds.iter().any(|f| dir.starts_with(f)) {
             continue;
         }
-        if dest_allows_fold(ctx, &dir, recorded.get(&dir).copied())? && holds_only(ctx, &dir, &link_sources)? {
+        if qualifies(ctx, &dir, recorded.get(&dir).copied(), &link_sources, collided)? {
             folds.push(dir);
         }
     }
     Ok(folds)
+}
+
+/// `dir` can be one symlink: no home destination collides at or below it,
+/// its destination allows a fold, and it holds only `allowed` sources.
+fn qualifies(
+    ctx: &Context,
+    dir: &RelPath,
+    record: Option<&Record>,
+    allowed: &BTreeSet<&RelPath>,
+    collided: &Collided,
+) -> Result<bool> {
+    let collides = collided
+        .keys()
+        .any(|(scope, dest)| *scope == Scope::Home && dest.starts_with(dir));
+    Ok(!collides && dest_allows_fold(ctx, dir, record)? && holds_only(ctx, dir, allowed)?)
 }
 
 /// Recorded folded links that a selected source now lies below and that are no longer folded.

@@ -287,3 +287,19 @@ fn unlink_forgets_a_fold_record_whose_link_the_user_replaced() {
     let again = fx.run(&["unlink", ".config/nvim"]);
     assert_eq!(again.code, 2, "record is gone: {again:?}");
 }
+
+/// Audit F3: a directory with a destination collision on itself or below
+/// it never folds; every colliding source stays blocked, as without folding.
+#[test]
+fn collision_on_or_below_a_directory_blocks_its_fold() {
+    for (file, template) in [("d/a", "d.tmpl"), ("d/e/a", "d/e.tmpl")] {
+        let fx = Fixture::new();
+        fx.write(".rustow.toml", FOLD);
+        fx.write(file, "a\n");
+        fx.write(template, "t\n");
+        let out = fx.run(&["apply", "--on-conflict", "skip"]);
+        assert_eq!(out.code, 3, "{file}: {out:?}");
+        assert!(!is_symlink(&fx.home_path("d")), "{file}: {out:?}");
+        assert!(!fx.home_path(file).exists(), "{file}: {out:?}");
+    }
+}

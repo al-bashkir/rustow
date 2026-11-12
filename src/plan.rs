@@ -281,7 +281,7 @@ fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(S
 /// one is still blocked.
 pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: &State) -> Result<Plan> {
     let collided = collision_details(ctx, discovery);
-    let mut folding = fold::analyze(ctx, discovery, selected, state)?;
+    let mut folding = fold::analyze(ctx, discovery, selected, state, &collided)?;
     let mut items = Vec::with_capacity(selected.len());
     for dir in &folding.folds {
         items.push(plan_fold(ctx, dir, state)?);
