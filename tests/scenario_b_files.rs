@@ -209,6 +209,68 @@ fn binary_diff_message() {
     assert!(out.stdout.contains("Binary files"), "{out:?}");
 }
 
+/// `diff --json` gives one object for each differing item; exit codes stay.
+#[test]
+fn diff_json_lists_each_differing_item() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[[files]]\nsource = \".config/example/settings.json\"\n[[files]]\nsource = \"img.bin\"\n\
+         [[template_rules]]\nsource = \"app.conf.tmpl\"\nmode = \"0600\"\n",
+    );
+    fx.write(SRC, "{\"a\": 1}\n");
+    fx.write("app.conf.tmpl", "x\n");
+    fx.write(".bashrc", "b\n");
+    fs::write(fx.repo.join("img.bin"), [0u8, 1]).unwrap();
+    fx.ok(&["apply"]);
+    let json = |args: &[&str], code: i32| -> serde_json::Value {
+        let out = fx.run(args);
+        assert_eq!(out.code, code, "{out:?}");
+        serde_json::from_str(&out.stdout).unwrap_or_else(|e| panic!("{e}: {out:?}"))
+    };
+    assert_eq!(json(&["diff", "--json"], 0)["items"], serde_json::json!([]));
+
+    fs::write(fx.home_path(SRC), "{\"a\": \"mine\"}\n").unwrap();
+    fs::write(fx.repo.join("img.bin"), [0u8, 2]).unwrap();
+    fs::set_permissions(fx.home_path("app.conf"), fs::Permissions::from_mode(0o644)).unwrap();
+    fx.write(".zshrc", "z\n");
+    let v = json(&["diff", "--json"], 1);
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 4, "the unchanged .bashrc is not listed: {v}");
+    let item = |source: &str| {
+        items
+            .iter()
+            .find(|i| i["source"] == source)
+            .unwrap_or_else(|| panic!("{source}: {v}"))
+    };
+    let modified = item(SRC);
+    assert_eq!(modified["kind"], "modified");
+    assert_eq!(modified["mode"], "copy");
+    assert_eq!(modified["dest"], fx.home_path(SRC).to_str().unwrap());
+    assert_eq!(modified["binary"], false);
+    let text = modified["diff"].as_str().unwrap();
+    assert!(text.contains("-{\"a\": \"mine\"}\n+{\"a\": 1}\n"), "{v}");
+    assert_eq!(item("img.bin")["kind"], "outdated");
+    assert_eq!(item("img.bin")["binary"], true);
+    assert_eq!(item("app.conf.tmpl")["kind"], "metadata");
+    assert_eq!(item(".zshrc")["kind"], "missing");
+    assert_eq!(
+        json(&["file", "diff", "--json"], 1)["items"].as_array().unwrap().len(),
+        2
+    );
+
+    fx.write("bad.tmpl", "{{ vars.nope }}");
+    let v = json(&["diff", "--json"], 4);
+    let bad = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["source"] == "bad.tmpl");
+    assert_eq!(bad.map(|b| &b["kind"]), Some(&serde_json::json!("error")), "{v}");
+    assert!(bad.is_some_and(|b| b["detail"].is_string()), "{v}");
+}
+
 /// Spec §8.5: when the source and the destination both changed, status and
 /// diff show a conflict, not a plain local modification.
 #[test]

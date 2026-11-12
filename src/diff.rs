@@ -20,6 +20,11 @@ pub fn render(label: &str, current: Option<&[u8]>, desired: Option<&[u8]>) -> St
         .to_string()
 }
 
+/// True when the sides differ and `render` summarizes them as binary.
+pub fn is_binary(current: Option<&[u8]>, desired: Option<&[u8]>) -> bool {
+    current != desired && (as_text(current).is_none() || as_text(desired).is_none())
+}
+
 /// Text of a side, `""` when absent, `None` when binary.
 fn as_text(bytes: Option<&[u8]>) -> Option<&str> {
     let bytes = bytes.unwrap_or_default();
@@ -68,6 +73,9 @@ mod tests {
         assert_eq!(d, "Binary files a/~/.x and b/~/.x differ\n");
         let d = render("~/.x", Some(&[0xff, 0xfe]), Some(b"text"));
         assert!(d.starts_with("Binary files"), "{d}");
+        assert!(is_binary(Some(&[0xff, 0xfe]), Some(b"text")));
+        assert!(!is_binary(Some(b"a\0b"), Some(b"a\0b")), "equal sides do not differ");
+        assert!(!is_binary(None, Some(b"text")));
     }
 
     #[test]

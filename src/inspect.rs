@@ -17,43 +17,105 @@ use crate::source::{Discovery, Mode, check_collisions};
 use crate::state::{Record, State};
 use crate::template;
 
-/// Prints differences; exit 0 when none, 1 when some, 4 when desired
-/// content could not be computed for an item.
+/// One differing item, as `diff` shows it.
+struct Shown<'a> {
+    item: &'a PlanItem,
+    /// The status word in lowercase (`missing`, `outdated`, `modified`,
+    /// `conflict`, `error`, ...), or `metadata` when only metadata differs.
+    kind: String,
+    detail: Option<String>,
+    binary: bool,
+    text: String,
+}
+
+/// Prints differences, as text or as JSON; exit 0 when none, 1 when some,
+/// 4 when desired content could not be computed for an item.
 pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
-    let (mut differs, mut failed) = (false, false);
+    let mut shown = Vec::new();
     for item in &plan.items {
-        let label = printer.path(&item.dest);
-        let text = match &item.step {
-            Step::Failed(msg) => {
-                eprintln!("rustow: {}: cannot compute desired content: {msg}", item.source.path);
-                failed = true;
-                continue;
+        shown.extend(show(item, state.entries.get(&item.dest), printer)?);
+    }
+    if printer.json {
+        print_json(&shown);
+    } else {
+        for s in &shown {
+            match (s.kind.as_str(), s.detail.as_deref()) {
+                ("error", Some(msg)) => {
+                    eprintln!("rustow: {}: cannot compute desired content: {msg}", s.item.source.path)
+                }
+                _ => print!("{}", s.text),
             }
-            Step::Blocked { conflict, detail } => {
-                format!("{label}: {}: {detail}\n", conflict.describe())
-            }
-            Step::Unfold { .. } => format!("{label}: folded directory link; would become a real directory\n"),
-            Step::Deploy(d) => deploy_text(&label, d, state.entries.get(&item.dest))?,
-        };
-        if !text.is_empty() {
-            differs = true;
-            print!("{text}");
         }
     }
-    Ok(if failed { 4 } else { i32::from(differs) })
+    let failed = shown.iter().any(|s| s.kind == "error");
+    Ok(if failed { 4 } else { i32::from(!shown.is_empty()) })
 }
 
-/// Diff text of a deploy step; marks a destination whose source changed too.
-fn deploy_text(label: &str, d: &Deploy, old: Option<&Record>) -> Result<String> {
-    let text = describe(label, d)?;
-    if both_changed(d, old) {
-        return Ok(format!("{label}: conflict: {BOTH_CHANGED}\n{text}"));
+/// What `diff` shows for one item; `None` when the item does not differ.
+fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
+    let (text, binary) = step_text(item, &printer.path(&item.dest), old)?;
+    let (status, detail) = classify_item(item, old);
+    if text.is_empty() && status != "ERROR" {
+        return Ok(None);
     }
-    Ok(text)
+    let kind = match &item.step {
+        Step::Deploy(d) if d.decision == Decision::FixMetadata => "metadata".into(),
+        _ => status.to_lowercase(),
+    };
+    Ok(Some(Shown {
+        item,
+        kind,
+        detail,
+        binary,
+        text,
+    }))
 }
 
-fn describe(label: &str, d: &Deploy) -> Result<String> {
+/// Diff text of one item, and whether it is binary. Empty for a failed item.
+fn step_text(item: &PlanItem, label: &str, old: Option<&Record>) -> Result<(String, bool)> {
+    Ok(match &item.step {
+        Step::Failed(_) => (String::new(), false),
+        Step::Blocked { conflict, detail } => (format!("{label}: {}: {detail}\n", conflict.describe()), false),
+        Step::Unfold { .. } => (
+            format!("{label}: folded directory link; would become a real directory\n"),
+            false,
+        ),
+        Step::Deploy(d) => deploy_text(label, d, old)?,
+    })
+}
+
+/// One JSON object for each differing item. Holds content by design.
+fn print_json(shown: &[Shown]) {
+    let items: Vec<_> = shown
+        .iter()
+        .map(|s| {
+            json!({
+                "dest": s.item.dest,
+                "source": s.item.source.path.as_str(),
+                "mode": s.item.source.mode.label(),
+                "kind": s.kind,
+                "detail": s.detail,
+                "binary": s.binary,
+                "diff": s.text,
+            })
+        })
+        .collect();
+    println!("{}", json!({ "items": items }));
+}
+
+/// Diff text of a deploy step, and whether it is binary; marks a
+/// destination whose source changed too.
+fn deploy_text(label: &str, d: &Deploy, old: Option<&Record>) -> Result<(String, bool)> {
+    let (text, binary) = describe(label, d)?;
+    if both_changed(d, old) {
+        return Ok((format!("{label}: conflict: {BOTH_CHANGED}\n{text}"), binary));
+    }
+    Ok((text, binary))
+}
+
+fn describe(label: &str, d: &Deploy) -> Result<(String, bool)> {
     let mut out = String::new();
+    let mut binary = false;
     match &d.desired {
         Desired::Symlink(text) => {
             if !matches!(&d.observed, Observed::Symlink(t) if t == text) {
@@ -65,6 +127,7 @@ fn describe(label: &str, d: &Deploy) -> Result<String> {
             }
             if let Some(cache) = &d.cache {
                 let current = current_bytes(&cache.path, &cache.observed)?;
+                binary |= diff::is_binary(current.as_deref(), Some(&cache.bytes));
                 out.push_str(&diff::render(label, current.as_deref(), Some(&cache.bytes)));
             }
         }
@@ -76,11 +139,9 @@ fn describe(label: &str, d: &Deploy) -> Result<String> {
                 ));
             }
             let current = current_bytes(&d.path, &d.observed)?;
-            out.push_str(&diff::render(
-                label,
-                current.as_deref(),
-                d.content.as_deref().map(Vec::as_slice),
-            ));
+            let desired = d.content.as_deref().map(Vec::as_slice);
+            binary |= diff::is_binary(current.as_deref(), desired);
+            out.push_str(&diff::render(label, current.as_deref(), desired));
             if let Observed::File { mode, uid, gid, .. } = d.observed
                 && !meta.matches(mode, uid, gid)
             {
@@ -92,7 +153,7 @@ fn describe(label: &str, d: &Deploy) -> Result<String> {
             }
         }
     }
-    Ok(out)
+    Ok((out, binary))
 }
 
 fn current_bytes(path: &Path, observed: &Observed) -> Result<Option<Vec<u8>>> {
