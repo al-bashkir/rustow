@@ -113,27 +113,10 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
     if !Config::parse(text)?.files.contains(source) {
         return Ok(None);
     }
-    let names = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| RelPath::parse(s).ok());
     let mut doc = parse_doc(text)?;
     match doc.get_mut("files") {
         Some(Item::ArrayOfTables(tables)) => {
-            let removed = |t: &Table| names(t.get("source").and_then(Item::as_value)).as_ref() == Some(source);
-            // Text above a removed header (comments) moves to the next kept entry.
-            let mut carried = String::new();
-            for table in tables.iter_mut() {
-                let prefix = table
-                    .decor()
-                    .prefix()
-                    .and_then(|p| p.as_str())
-                    .unwrap_or_default()
-                    .to_owned();
-                if removed(table) {
-                    carried.push_str(&prefix);
-                } else if !carried.is_empty() {
-                    table.decor_mut().set_prefix(std::mem::take(&mut carried) + &prefix);
-                }
-            }
-            tables.retain(|t| !removed(t));
+            let carried = drop_tables(tables, source);
             if tables.is_empty() {
                 doc.remove("files");
             }
@@ -143,11 +126,33 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
             }
         }
         Some(Item::Value(Value::Array(array))) => {
-            array.retain(|v| names(v.as_inline_table().and_then(|t| t.get("source"))).as_ref() != Some(source));
+            array.retain(|v| !names_source(v.as_inline_table().and_then(|t| t.get("source")), source));
         }
         _ => {}
     }
     finish(&doc, text)
+}
+
+/// Drops the `[[files]]` tables for `source`. The text above a dropped
+/// header (comments) moves to the next kept table; returns what is left over.
+fn drop_tables(tables: &mut ArrayOfTables, source: &RelPath) -> String {
+    let removed = |t: &Table| names_source(t.get("source").and_then(Item::as_value), source);
+    let mut carried = String::new();
+    for table in tables.iter_mut() {
+        let prefix = table
+            .decor()
+            .prefix()
+            .and_then(|p| p.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        if removed(table) {
+            carried.push_str(&prefix);
+        } else if !carried.is_empty() {
+            table.decor_mut().set_prefix(std::mem::take(&mut carried) + &prefix);
+        }
+    }
+    tables.retain(|t| !removed(t));
+    carried
 }
 
 /// Points every `[[files]]` and `[[template_rules]]` entry for `from` at
