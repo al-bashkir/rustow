@@ -124,6 +124,35 @@ fn edit_refuses_an_untrusted_recipient_before_the_editor_runs() {
     assert!(fx.workspaces().is_empty(), "plaintext left in the cache");
 }
 
+/// The GPG home must be a directory that others cannot write; rustow
+/// refuses it before gpg runs.
+#[test]
+fn gpg_home_that_is_a_file_or_group_writable_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write("p", "plain\n");
+    let file = write_file(&fx.base.join("g-file"), "");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let open = fx.base.join("g-open");
+    fs::create_dir(&open).unwrap();
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o770)).unwrap();
+    for dir in [file, open] {
+        // Stops any agent that a wrongly accepted home would start.
+        let home = GpgHome {
+            dir,
+            fpr: String::new(),
+        };
+        fx.gpg_config(&home, &["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"], "");
+        let out = fx.run(&["enc", "--backend", "gpg", "p"]);
+        assert_eq!(out.code, 4, "{out:?}");
+        assert!(out.stderr.contains("must be your own directory"), "{out:?}");
+        assert_eq!(read(&fx.repo.join("p")), "plain\n");
+    }
+}
+
 #[test]
 fn age_and_gpg_sources_for_one_destination_collide() {
     let Some((fx, home)) = setup("") else { return };
@@ -301,6 +330,11 @@ fn gpg_messages_name_non_openpgp_data_and_subkey_fingerprints() {
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stdout.contains("not OpenPGP data"), "{out:?}");
     assert!(!out.stdout.contains("symmetric"), "{out:?}");
+    assert!(out.stdout.contains("; gpg: gpg: "), "the first gpg diagnostic: {out:?}");
+    assert!(
+        !out.stdout.contains("--interactive"),
+        "no unlock hint without a key problem: {out:?}"
+    );
     fs::remove_file(fx.repo.join("junk.gpg")).unwrap();
     let colons = home
         .gpg()
