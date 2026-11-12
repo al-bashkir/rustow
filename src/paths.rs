@@ -126,6 +126,28 @@ pub fn expand_tilde(input: &str, home: &Path) -> PathBuf {
     }
 }
 
+/// Resolves `.` and `..` without touching the filesystem.
+pub fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// True when the symlink texts `a` and `b`, stored at `link`, name the same
+/// path, resolved without touching the filesystem as `link_text` builds them.
+pub fn same_link_target(link: &Path, a: &Path, b: &Path) -> bool {
+    let dir = link.parent().unwrap_or(link);
+    normalize(&dir.join(a)) == normalize(&dir.join(b))
+}
+
 /// Text to store in a symlink at `link` that points to `target`. Both paths
 /// are absolute and normalized. Relative when they share an ancestor below
 /// `/`, absolute otherwise.
@@ -195,6 +217,16 @@ mod tests {
         assert_eq!(p.strip_prefix(&p), None);
         assert_eq!(p.with_file_name("x.lua"), rel(".config/nvim/x.lua"));
         assert_eq!(rel("a").with_file_name("b"), rel("b"));
+    }
+
+    #[test]
+    fn same_link_target_compares_resolved_paths() {
+        let link = Path::new("/h/.config/a");
+        let rel = Path::new("../dot/.config/a");
+        assert!(same_link_target(link, Path::new("/h/dot/.config/a"), rel));
+        assert!(same_link_target(link, Path::new("./../dot/x/../.config/a"), rel));
+        assert!(!same_link_target(link, Path::new("/h/dot/.config/b"), rel));
+        assert!(!same_link_target(link, Path::new("dot/.config/a"), rel));
     }
 
     #[test]

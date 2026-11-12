@@ -1,12 +1,12 @@
 //! Repository discovery and the resolved context every command runs in.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::config::{CONFIG_FILE, Config};
 use crate::error::{Error, Result};
 use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore};
-use crate::paths::{RelPath, Scope, expand_tilde};
+use crate::paths::{RelPath, Scope, expand_tilde, normalize};
 use crate::source::{Discovery, Skipped, Source, discover};
 
 /// Values from the command line that select the repository and targets.
@@ -420,21 +420,6 @@ fn locate(path: PathBuf, root: &Path) -> PathBuf {
         cur = parent;
     }
     path
-}
-
-/// Resolves `.` and `..` without touching the filesystem.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in path.components() {
-        match c {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

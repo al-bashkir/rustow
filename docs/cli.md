@@ -104,6 +104,7 @@ Problems that are not about one source still stop every command with exit 2. Exa
 | Missing | create |
 | Own recorded symlink with old target | update |
 | Correct but not recorded | adopt (record it; no write). `status` shows UNMANAGED. |
+| Symlink in other text that reaches the same source (for example an absolute path) | update (rewrite it as rustow's link text) |
 | Foreign file or symlink, not recorded (also a broken symlink) | conflict |
 | Managed copy unchanged, desired content changed | update |
 | Destination changed since last apply | MODIFIED conflict |

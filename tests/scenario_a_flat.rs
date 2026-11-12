@@ -233,3 +233,26 @@ fn sources_that_cannot_deploy_are_skipped_with_a_warning() {
     names.sort();
     assert_eq!(names, [".bashrc", ".config", "dotfiles"], "nothing else is deployed");
 }
+
+/// A link the user made by hand with an absolute path to the right source
+/// is rustow's link in another spelling: it is taken over, not a conflict.
+#[test]
+fn absolute_link_to_the_source_is_taken_over() {
+    let fx = Fixture::new();
+    fx.write(".gitc", "g\n");
+    fx.write(".other", "o\n");
+    std::os::unix::fs::symlink(fx.repo.join(".gitc"), fx.home_path(".gitc")).unwrap();
+    std::os::unix::fs::symlink(fx.repo.join(".gitc"), fx.home_path(".other")).unwrap();
+
+    let out = fx.run(&["link", "--on-conflict", "skip"]);
+    assert_eq!(out.code, 3, "only .other conflicts: {out:?}");
+    let gitc = out.stdout.lines().find(|l| l.contains("~/.gitc")).unwrap_or_default();
+    assert!(!gitc.contains("not managed"), "{out:?}");
+    assert_eq!(read(&fx.home_path(".gitc")), "g\n");
+    assert_eq!(link_text(&fx.home_path(".other")), fx.repo.join(".gitc"));
+
+    let again = fx.run(&["status", ".gitc"]);
+    assert_eq!(again.code, 0, "{again:?}");
+    let twice = fx.ok(&["link", ".gitc"]);
+    assert!(twice.stdout.contains("0 changed, 1 unchanged"), "{twice:?}");
+}

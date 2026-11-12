@@ -701,6 +701,14 @@ fn plan_one(
     deploy_step(source, record, path, missing_dirs, want, observed)
 }
 
+/// True when the symlink at `path` reaches the wanted link target in other text.
+fn same_link(path: &Path, observed: &Observed, desired: &Desired) -> bool {
+    match (observed, desired) {
+        (Observed::Symlink(have), Desired::Symlink(want)) => crate::paths::same_link_target(path, have, want),
+        _ => false,
+    }
+}
+
 /// Decides what to do at the destination and assembles the deploy step.
 fn deploy_step(
     source: &Source,
@@ -710,7 +718,14 @@ fn deploy_step(
     want: Want,
     observed: Observed,
 ) -> Result<Step> {
-    let decision = decide(&want.desired, &observed, recorded(record));
+    let decision = match decide(&want.desired, &observed, recorded(record)) {
+        // The same link in another spelling (an absolute path to the source):
+        // rewrite it in rustow's form; it already points where rustow would.
+        Decision::Conflict(Conflict::Unmanaged | Conflict::Modified) if same_link(&path, &observed, &want.desired) => {
+            Decision::Update
+        }
+        decision => decision,
+    };
     if let Some(step) = unwritable(&path, &missing_dirs, decision) {
         return Ok(step);
     }
