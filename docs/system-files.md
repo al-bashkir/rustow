@@ -10,6 +10,8 @@ The `.rustowroot` directory itself is never deployed.
 
 ## Privileges
 
+Do not run rustow with `sudo`. Then HOME and the state directory are root's, so rustow would link your home files into `/root`. When rustow runs as root and `$SUDO_USER` names another user, every command except `completions` stops with exit 2: "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of alice; run rustow as alice (pass --target to deploy into root's home on purpose)". With an explicit `--target`, rustow runs. A real root login has no `$SUDO_USER`, so it is not affected.
+
 rustow never runs `sudo`. To write to `/etc` you must start rustow with the needed rights yourself. The state file belongs to the user that runs rustow, so use the same user each time, or set `--repo` and a state directory on purpose. An unreadable destination is an error for that item, with a privilege hint. A destination in a directory that you cannot write is an error too: "cannot write to directory X: Permission denied …; elevated privileges may be required". rustow finds it in the plan, so the dry run and `status` show it. A dry-run still lists the other items. `apply` exits with 4, and under the default policy it writes nothing. `diff` still shows the desired content without these rights.
 
 `owner` and `group` in a template rule need privilege. Without it, rustow fails with a privilege hint and leaves no partial file.

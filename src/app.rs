@@ -20,6 +20,9 @@ use crate::{files, fsops, inspect};
 pub fn run(cli: Cli) -> Result<i32> {
     let env = Env::from_process()?;
     let g = &cli.global;
+    if !matches!(cli.command, Some(Command::Completions { .. })) {
+        refuse_sudo(env.sudo_user.as_deref(), g.target.is_some())?;
+    }
     let mut printer = Printer::new(g.json, g.quiet, g.verbose, g.no_color);
     let p = &mut printer;
     match cli.command.unwrap_or(Command::Apply(Paths::default())) {
@@ -40,6 +43,18 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Cache(CacheCommand::Clean) => cache_clean(g, &env, p),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
         Command::Completions { shell } => completions(shell),
+    }
+}
+
+/// Under `sudo`, HOME and the state directory are root's: rustow would put
+/// the user's dotfiles into root's home. An explicit `--target` is a real root setup.
+fn refuse_sudo(sudo_user: Option<&str>, explicit_target: bool) -> Result<()> {
+    match sudo_user {
+        Some(user) if !explicit_target => Err(Error::Usage(format!(
+            "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of {user}; \
+             run rustow as {user} (pass --target to deploy into root's home on purpose)"
+        ))),
+        _ => Ok(()),
     }
 }
 
@@ -419,7 +434,21 @@ fn interrupt_flag() -> Result<Arc<AtomicBool>> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_yes;
+    use super::{is_yes, refuse_sudo};
+
+    #[test]
+    fn sudo_without_a_target_is_refused() {
+        let e = refuse_sudo(Some("alice"), false).unwrap_err().to_string();
+        assert!(
+            e.contains("do not run rustow with sudo") && e.contains("as alice"),
+            "{e}"
+        );
+        assert!(
+            refuse_sudo(Some("alice"), true).is_ok(),
+            "an explicit --target is a real root setup"
+        );
+        assert!(refuse_sudo(None, false).is_ok());
+    }
 
     #[test]
     fn only_y_or_yes_confirms() {

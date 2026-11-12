@@ -28,6 +28,8 @@ pub struct Env {
     pub repo: Option<PathBuf>,
     /// `XDG_STATE_HOME`, used only when absolute.
     pub xdg_state_home: Option<PathBuf>,
+    /// `SUDO_USER` when rustow runs as root through sudo for another user.
+    pub sudo_user: Option<String>,
 }
 
 impl Env {
@@ -38,11 +40,15 @@ impl Env {
             .filter(|h| h.is_absolute())
             .ok_or_else(|| Error::Usage("HOME is not set to an absolute path".into()))?;
         let var = |name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let sudo_user = std::env::var("SUDO_USER")
+            .ok()
+            .filter(|u| nix::unistd::geteuid().is_root() && !u.is_empty() && u != "root");
         Ok(Env {
             cwd,
             home,
             repo: var("RUSTOW_REPO"),
             xdg_state_home: var("XDG_STATE_HOME"),
+            sudo_user,
         })
     }
 }
@@ -472,6 +478,7 @@ mod tests {
             home: base.join("home"),
             repo: None,
             xdg_state_home: None,
+            sudo_user: None,
         };
         Fx { _tmp: tmp, base, env }
     }
