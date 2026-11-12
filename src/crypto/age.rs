@@ -232,8 +232,9 @@ mod tests {
         assert!(check_identity_file(&path, &[]).unwrap_err().contains("chmod 600"));
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         assert!(check_identity_file(&path, &[]).is_ok());
+        // The repository root is canonical in real use; on macOS the temp dir is not (/var -> /private/var).
         assert!(
-            check_identity_file(&path, &[dir.path()])
+            check_identity_file(&path, &[&dir.path().canonicalize().unwrap()])
                 .unwrap_err()
                 .contains("inside")
         );

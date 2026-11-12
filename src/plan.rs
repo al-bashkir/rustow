@@ -1273,9 +1273,12 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let dir = t.path().canonicalize().unwrap().join("home");
         fs::create_dir(&dir).unwrap();
-        assert!(!case_insensitive(&dir), "no HOME next to home");
-        // A swapped-case name that reaches the same directory is what a case-insensitive filesystem shows.
-        std::os::unix::fs::symlink(&dir, dir.with_file_name("HOME")).unwrap();
+        // HOME already exists only where the temp filesystem ignores case (macOS by default).
+        if !dir.with_file_name("HOME").exists() {
+            assert!(!case_insensitive(&dir), "no HOME next to home");
+            // A swapped-case name that reaches the same directory is what a case-insensitive filesystem shows.
+            std::os::unix::fs::symlink(&dir, dir.with_file_name("HOME")).unwrap();
+        }
         assert!(case_insensitive(&dir));
         fs::create_dir(dir.join("42")).unwrap();
         assert!(
