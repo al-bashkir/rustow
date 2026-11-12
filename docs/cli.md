@@ -33,9 +33,9 @@ Without a command, rustow runs `apply`.
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `apply [PATH]...`               | Deploy all eligible sources. In [copy mode](configuration.md#copy-mode), it makes no new symlink.                                      |
 | `link [PATH]...`                | Deploy ordinary plaintext symlinks only. System files are never symlinks. In copy mode, only a path argument makes a new link.         |
-| `unlink [PATH]...`              | Remove managed link-mode symlinks (and folded directory links).                                                                        |
+| `unlink [PATH]...`              | Remove managed link-mode symlinks (and folded directory links), and their copy-mode registrations.                                     |
 | `init`                          | Prepare the repository. Deploys nothing.                                                                                               |
-| `file add\|remove [PATH]...`    | Register or unregister copy sources.                                                                                                   |
+| `file add\|remove [PATH]...`    | Register copy sources in the state, or unregister them from the state and `[[files]]`.                                                 |
 | `file list`                     | List registered sources.                                                                                                               |
 | `file apply`                    | Deploy registered copies only.                                                                                                         |
 | `file diff`                     | Diff registered copies.                                                                                                                |
@@ -73,7 +73,7 @@ A problem with one source does not stop the run. rustow skips that source and de
 - a file with a `[[template_rules]]` entry that is not a template;
 - a template in `[[files]]`;
 - a symlink or another file that is not a regular file;
-- a `[[files]]` or `[[template_rules]]` entry whose source does not exist, is ignored, is reserved or is a directory.
+- a `[[files]]` or `[[template_rules]]` entry, or a `rustow file add` registration, whose source does not exist, is ignored, is reserved or is a directory.
 
 `apply`, `rustow` without a command, `link`, `file apply`, `template apply` and `diff` print one line on stderr for each skipped source in the path selection:
 

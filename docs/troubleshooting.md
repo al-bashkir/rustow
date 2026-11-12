@@ -60,7 +60,7 @@ A `warning:` line names a source that rustow skipped. The other sources deploy, 
 - "nested encryption suffixes are not supported" or "the destination name is empty after removing suffixes": rename the file.
 - "has a [[template_rules]] entry but is not a template": remove the rule, or give the file the template extension.
 - "templates cannot be registered with `rustow file add`": remove the `[[files]]` entry. Use a `[[template_rules]]` entry to copy a template.
-- ".rustow.toml [[files]] entry does not exist" (or "is ignored by .rustowignore", "is reserved", "is a directory"): fix the entry, or remove it with `rustow file remove`.
+- ".rustow.toml [[files]] entry does not exist" or "`rustow file add` registration does not exist" (or "is ignored by .rustowignore", "is reserved", "is a directory"): fix the entry, or remove it with `rustow file remove`.
 
 ## Untrusted link target
 

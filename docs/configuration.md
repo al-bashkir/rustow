@@ -68,19 +68,20 @@ ignore = [".config/foot/"]
 
 With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys only:
 
-- the sources in `[[files]]` (add one with `rustow file add <path>`),
+- the registered copies: `rustow file add <path>` or `[[files]]`,
 - the templates, as copies. A `[[template_rules]]` entry can set their metadata,
-- the links that the state records. `rustow link <path>` makes a link and the state records it.
+- the registered links. `rustow link <path>` makes a link and registers it in the state file.
 
 `apply` skips each other plain or encrypted home file. It prints no warning for it, and `status` shows no row for it.
 
-- `rustow link <path>` links each plain file below the path. A directory can [fold](#folding).
-- `rustow link` without a path makes no new link. It deploys only the links that the state records.
-- `rustow unlink <path>` removes the link and its record. Then `apply` does not link the file again.
+- `rustow link <path>` links and registers each plain file below the path. A directory can [fold](#folding). A file that you put in the directory later is not registered: run `rustow link <path>` again. (Through a folded directory link, you see the new file at once.)
+- `rustow link` without a path makes no new link. It deploys only the registered links.
+- `rustow unlink <path>` removes the link and its registration. Then `apply` does not link the file again.
 - `rustow file add <path>` makes a linked file a copy. `apply` replaces rustow's link with the copy.
+- `rustow enc <path>` moves the registration to the encrypted name. A registered link then deploys as decrypt+link.
 - A path argument that names only files that are not linked exits 2, for example `rustow apply .vimrc`.
 
-The state is per machine. On a new machine, run `rustow link <path>` again for each link. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before stay in the state, so `apply` keeps them. Use `rustow unlink <path>` to remove one. Templates that rustow linked before become copies on the next `apply`.
+The state file is per machine and per user. On a new machine, run `rustow link <path>` and `rustow file add <path>` again, or list the copies in `[[files]]`. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before are not registered. `apply` does not change them, and `status` does not show them. Run `rustow link <path>` to register one, or `rustow unlink <path>` to remove it. Templates that rustow linked before become copies on the next `apply`.
 
 `.rustowroot/` sources work the same in both modes.
 
@@ -147,7 +148,7 @@ Free-form values. Templates read them as `vars.<name>`. Tables and lists are all
 source = ".config/example/settings.json"
 ```
 
-Registers a source for copy deployment. Use `rustow file add` to edit this list. See [file management](file-management.md). A system file under `.rustowroot/` that is not a template must be in this list. See [system files](system-files.md).
+Registers a source for copy deployment on every machine. You write this list by hand. `rustow file add` does not write it: it registers the source in the state file of one machine. `rustow file remove` removes an entry from both. See [file management](file-management.md#state-or-rustowtoml). A system file under `.rustowroot/` that is not a template must be registered in one of them. See [system files](system-files.md).
 
 ## `[[template_rules]]`
 
@@ -236,15 +237,15 @@ A rule without conditions, an unknown key or a bad pattern is a configuration er
 | Mode         | Label         | Source                                   |
 | ------------ | ------------- | ---------------------------------------- |
 | Link         | link          | Ordinary home file                       |
-| FileCopy     | copy          | Listed in `[[files]]`                    |
+| FileCopy     | copy          | Registered (`file add` or `[[files]]`)   |
 | DecryptLink  | decrypt+link  | `.age` or `.gpg` home file               |
-| DecryptCopy  | decrypt+copy  | Encrypted file listed in `[[files]]`     |
+| DecryptCopy  | decrypt+copy  | Registered encrypted file                |
 | TemplateLink | template+link | Home template without rule               |
 | TemplateCopy | template+copy | Template with a rule, or system template |
 
 A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).
 
-In [copy mode](#copy-mode), a home template is template+copy. A Link or DecryptLink source deploys only when the state records its link.
+In [copy mode](#copy-mode), a home template is template+copy. A Link or DecryptLink source deploys only when `rustow link <path>` registered it.
 
 Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. rustow skips nested names such as `x.age.gpg` with a warning. The destination name drops the encryption suffix, then the template extension.
 

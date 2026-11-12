@@ -55,9 +55,9 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 | TemplateLink                        | TemplateLink | TemplateCopy with empty metadata            |
 | FileCopy, DecryptCopy, TemplateCopy | unchanged    | unchanged                                   |
 
-With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a TemplateCopy with empty metadata. A home Link or DecryptLink stays a link source. `app::selected` decides if the command deploys it (`may_link`): only `rustow link <path>`, or a state record with a link at its destination or at a folded parent.
+With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a TemplateCopy with empty metadata. A home Link or DecryptLink stays a link source. `app::selected` decides if the command deploys it (`may_link`): only `rustow link <path>`, or a link registration in the state (`State::links`). `app::prepare` adds the registrations for `rustow link <path>`; `unlink` removes them.
 
-`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
+`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). A source is registered for copy deployment when `[[files]]` (`Config::files`) or `file add` (`State::files`) lists it. `Context::load_state` copies `State::files` into `Config::added_files`, and `Config::registers` checks both. `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
 
 ## Cache
 
@@ -65,7 +65,7 @@ Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<sc
 
 ## State
 
-`$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow` (or `defaults.state_dir`). The file `<repo-id>.json` (mode 0600, directory 0700) is keyed by absolute destination. It holds content hashes, not plaintext. The hashes are sensitive metadata. The file `<repo-id>.lock` stops concurrent runs (exit 4, "another rustow process"). rustow refuses corrupt, foreign or newer state. Move such a file away to continue. You must own the state directory.
+`$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow` (or `defaults.state_dir`). The file `<repo-id>.json` (mode 0600, directory 0700) is keyed by absolute destination. It also holds the registrations of this machine: `files` (`file add`) and `links` (`link <path>` in copy mode). It holds content hashes, not plaintext. The hashes are sensitive metadata. The file `<repo-id>.lock` stops concurrent runs (exit 4, "another rustow process"). rustow refuses corrupt, foreign or newer state. Move such a file away to continue. You must own the state directory.
 
 ## Tests
 

@@ -93,7 +93,7 @@ rustow enc .ssh/secret.conf               # default backend
 rustow enc --backend gpg .ssh/secret.conf
 ```
 
-`enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies by decrypting when a private key is available. Otherwise it prints "not verified". It moves `[[files]]` and `[[template_rules]]` entries to the new name. It keeps the comments around `source` and CRLF line endings in `.rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
+`enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies by decrypting when a private key is available. Otherwise it prints "not verified". It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `.rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
 
 `enc` prints a notice: Git history, backups and deployed files keep the old plaintext. rustow does not erase them.
 
