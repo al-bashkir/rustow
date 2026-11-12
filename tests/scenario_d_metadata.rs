@@ -103,6 +103,44 @@ fn mode_without_owner_read_is_a_configuration_error() {
 }
 
 #[test]
+fn enc_keeps_comments_of_a_migrated_template_rule() {
+    let fx = Fixture::new();
+    let key = fx.age_key("me");
+    let rule = "[[template_rules]]\n# ssh needs 0600\nsource = \".ssh/config.tmpl\" # the main one\nmode = \"0600\"\n";
+    fx.age_config(&[&key], &[&key], rule);
+    fx.write(".ssh/config.tmpl", "Host x\n");
+    fx.ok(&["enc", ".ssh/config.tmpl"]);
+    let after = read(&fx.repo.join(".rustow.toml"));
+    assert!(
+        after.contains("# ssh needs 0600\nsource = \".ssh/config.tmpl.age\" # the main one\n"),
+        "{after}"
+    );
+    fx.ok(&["apply"]);
+    assert_eq!(mode(&fx.home_path(".ssh/config")), 0o600);
+}
+
+#[test]
+fn file_add_and_remove_keep_crlf_line_endings() {
+    let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\r\n# mine\r\n[vars]\r\na = 1\r\n");
+    fx.write("a.conf", "a");
+    fx.write("b.conf", "b");
+    fx.ok(&["file", "add", "a.conf"]);
+    fx.ok(&["file", "add", "b.conf"]);
+    let added = read(&fx.repo.join(".rustow.toml"));
+    assert!(added.contains("source = \"b.conf\""), "{added:?}");
+    assert_eq!(added.matches('\n').count(), added.matches("\r\n").count(), "{added:?}");
+    fx.ok(&["file", "remove", "a.conf"]);
+    let removed = read(&fx.repo.join(".rustow.toml"));
+    assert!(!removed.contains("a.conf") && removed.contains("b.conf"), "{removed:?}");
+    assert_eq!(
+        removed.matches('\n').count(),
+        removed.matches("\r\n").count(),
+        "{removed:?}"
+    );
+}
+
+#[test]
 fn link_to_copy_transition_is_automatic() {
     let fx = Fixture::new();
     fx.write(".rustow.toml", "version = 1\n");

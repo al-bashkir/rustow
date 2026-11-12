@@ -82,9 +82,7 @@ pub fn add_file(text: &str, source: &RelPath) -> Result<Option<String>> {
     }
     let mut doc = parse_doc(&base)?;
     append_entry(&mut doc, source)?;
-    let out = doc.to_string();
-    Config::parse(&out)?;
-    Ok(Some(out))
+    finish(&doc, &base)
 }
 
 /// Appends a `[[files]]` entry to the document, in the form its `files` key already has.
@@ -129,9 +127,7 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
         }
         _ => {}
     }
-    let out = doc.to_string();
-    Config::parse(&out)?;
-    Ok(Some(out))
+    finish(&doc, text)
 }
 
 /// Points every `[[files]]` and `[[template_rules]]` entry for `from` at
@@ -146,7 +142,16 @@ pub fn rename_source(text: &str, from: &RelPath, to: &RelPath) -> Result<Option<
     if renamed == 0 {
         return Ok(None);
     }
-    let out = doc.to_string();
+    finish(&doc, text)
+}
+
+/// The edited text with the line endings of `original` (toml_edit writes
+/// LF), validated.
+fn finish(doc: &DocumentMut, original: &str) -> Result<Option<String>> {
+    let mut out = doc.to_string();
+    if newline(original) == "\r\n" {
+        out = out.replace("\r\n", "\n").replace('\n', "\r\n");
+    }
     Config::parse(&out)?;
     Ok(Some(out))
 }
@@ -161,27 +166,25 @@ fn names_source(value: Option<&Value>, source: &RelPath) -> bool {
 }
 
 /// Renames the matching entries of one array key; returns how many changed.
+/// The value is replaced in place: `insert` would drop the comments around it.
 fn rename_in_key(item: Option<&mut Item>, from: &RelPath, to: &RelPath) -> usize {
+    let sources: Vec<&mut Value> = match item {
+        Some(Item::ArrayOfTables(tables)) => tables
+            .iter_mut()
+            .filter_map(|t| t.get_mut("source")?.as_value_mut())
+            .collect(),
+        Some(Item::Value(Value::Array(array))) => array
+            .iter_mut()
+            .filter_map(|v| v.as_inline_table_mut()?.get_mut("source"))
+            .collect(),
+        _ => Vec::new(),
+    };
     let mut renamed = 0;
-    match item {
-        Some(Item::ArrayOfTables(tables)) => {
-            for t in tables
-                .iter_mut()
-                .filter(|t| names_source(t.get("source").and_then(Item::as_value), from))
-            {
-                t.insert("source", toml_edit::value(to.as_str()));
-                renamed += 1;
-            }
-        }
-        Some(Item::Value(Value::Array(array))) => {
-            for t in array.iter_mut().filter_map(Value::as_inline_table_mut) {
-                if names_source(t.get("source"), from) {
-                    t.insert("source", to.as_str().into());
-                    renamed += 1;
-                }
-            }
-        }
-        _ => {}
+    for value in sources.into_iter().filter(|v| names_source(Some(v), from)) {
+        let decor = value.decor().clone();
+        *value = to.as_str().into();
+        *value.decor_mut() = decor;
+        renamed += 1;
     }
     renamed
 }
@@ -408,6 +411,36 @@ mod tests {
         let inline = "version = 1\nfiles = [{ source = \"a\" }]\n";
         let out = rename_source(inline, &rel("a"), &rel("a.gpg")).unwrap().unwrap();
         assert!(Config::parse(&out).unwrap().files.contains(&rel("a.gpg")), "{out}");
+    }
+
+    #[test]
+    fn rename_source_keeps_the_comments_of_the_entry() {
+        let text = "version = 1\n[[template_rules]]\n# above\nsource = \"t.tmpl\" # after\nmode = \"0600\"\n\n\
+                    [[files]]\n# above f\nsource = \"a\" # after f\n";
+        let out = rename_source(text, &rel("t.tmpl"), &rel("t.tmpl.age"))
+            .unwrap()
+            .unwrap();
+        let out = rename_source(&out, &rel("a"), &rel("a.age")).unwrap().unwrap();
+        assert_eq!(
+            out,
+            text.replace("t.tmpl\"", "t.tmpl.age\"").replace("\"a\"", "\"a.age\"")
+        );
+        let inline = "version = 1\nfiles = [{source=\"a\"}] # f\n";
+        let out = rename_source(inline, &rel("a"), &rel("a.age")).unwrap().unwrap();
+        assert_eq!(out, inline.replace("\"a\"", "\"a.age\""));
+    }
+
+    #[test]
+    fn add_and_remove_keep_crlf() {
+        let text = "version = 1\r\n# mine\r\n[vars]\r\na = 1\r\n";
+        let out = add_file(text, &rel("x")).unwrap().unwrap();
+        assert!(out.starts_with(text) && out.contains("source = \"x\""), "{out:?}");
+        assert_eq!(out.matches('\n').count(), out.matches("\r\n").count(), "{out:?}");
+        let out = add_file(&out, &rel("y")).unwrap().unwrap();
+        let out = remove_file(&out, &rel("x")).unwrap().unwrap();
+        assert!(!out.contains("\"x\"") && out.contains("\"y\""), "{out:?}");
+        assert_eq!(out.matches('\n').count(), out.matches("\r\n").count(), "{out:?}");
+        assert_eq!(remove_file(&out, &rel("y")).unwrap().unwrap(), text);
     }
 
     #[test]
