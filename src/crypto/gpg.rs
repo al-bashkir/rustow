@@ -77,14 +77,30 @@ pub fn check_decrypt_status(lines: &[String], exit_ok: bool) -> Result<(), Strin
 
 /// Public-key data, a usable secret key, and no failure record.
 fn check_decrypt_keys(recs: &[Record]) -> Result<(), String> {
-    if has(recs, "NEED_PASSPHRASE_SYM") || !has(recs, "ENC_TO") {
-        return Err("not public-key encrypted OpenPGP data (symmetric-only ciphertext is not supported)".into());
-    }
+    check_public_key_data(recs)?;
     if has(recs, "NO_SECKEY") && !has(recs, "DECRYPTION_OKAY") {
         return Err("no usable secret key for any recipient in the keyring".into());
     }
     if has(recs, "DECRYPTION_FAILED") || has(recs, "FAILURE") || has(recs, "ERROR") {
         return Err("decryption failed".into());
+    }
+    Ok(())
+}
+
+/// The status must show public-key encrypted OpenPGP data. Each refusal
+/// names what gpg actually reported.
+fn check_public_key_data(recs: &[Record]) -> Result<(), String> {
+    if recs.is_empty() {
+        return Err("gpg gave no status output; the gpg run failed".into());
+    }
+    if has(recs, "NODATA") {
+        return Err("not OpenPGP data (empty, damaged or another format)".into());
+    }
+    if has(recs, "NEED_PASSPHRASE_SYM") {
+        return Err("not public-key encrypted OpenPGP data (symmetric-only ciphertext is not supported)".into());
+    }
+    if !has(recs, "ENC_TO") {
+        return Err("not public-key encrypted OpenPGP data (no recipient key ids)".into());
     }
     Ok(())
 }
@@ -240,10 +256,7 @@ impl Gpg {
         let keys = primary_keys(&text);
         let found: Vec<_> = keys.iter().filter(|k| k.2 == fingerprint).collect();
         let [(validity, caps, _)] = found.as_slice() else {
-            let where_ = self.homedir.display();
-            return Err(format!(
-                "key {fingerprint} is not in the keyring {where_} (rustow never fetches keys)"
-            ));
+            return Err(self.unmatched(fingerprint, &keys));
         };
         match validity.as_str() {
             "r" => return Err(format!("key {fingerprint} is revoked")),
@@ -255,6 +268,21 @@ impl Gpg {
             return Err(format!("key {fingerprint} has no usable encryption subkey"));
         }
         Ok(encryption_ids(&text))
+    }
+
+    /// Why `fingerprint` names no primary key. gpg lists a key by its
+    /// primary or subkey fingerprint, so one listed key with another
+    /// primary fingerprint means a subkey fingerprint.
+    fn unmatched(&self, fingerprint: &str, keys: &[(String, String, String)]) -> String {
+        match keys {
+            [(_, _, primary)] if primary != fingerprint => {
+                format!("{fingerprint} is a subkey fingerprint; configure the primary key fingerprint {primary}")
+            }
+            _ => format!(
+                "key {fingerprint} is not in the keyring {} (rustow never fetches keys)",
+                self.homedir.display()
+            ),
+        }
     }
 
     /// Key ids of the recipients (ENC_TO records), read without decrypting.
@@ -406,6 +434,18 @@ mod tests {
             check_decrypt_status(&lines(nokey), false)
                 .unwrap_err()
                 .contains("secret key")
+        );
+    }
+
+    #[test]
+    fn decrypt_status_names_missing_status_and_non_openpgp_data() {
+        let none = check_decrypt_status(&[], false).unwrap_err();
+        assert!(none.contains("no status") && !none.contains("symmetric"), "{none}");
+        let junk = "[GNUPG:] NODATA 1\n[GNUPG:] NODATA 2\n[GNUPG:] FAILURE decrypt 4294967295";
+        let junk = check_decrypt_status(&lines(junk), false).unwrap_err();
+        assert!(
+            junk.contains("not OpenPGP data") && !junk.contains("symmetric"),
+            "{junk}"
         );
     }
 

@@ -271,6 +271,45 @@ fn enc_edit_with_locked_key_prompts_only_when_interactive() {
     assert_eq!(home.decrypt(&ct), "v2\n");
 }
 
+/// Audit E6: messages say what happened: data that is not OpenPGP is not
+/// called symmetric, and a subkey fingerprint is not called missing.
+#[test]
+fn gpg_messages_name_non_openpgp_data_and_subkey_fingerprints() {
+    let Some((fx, home)) = setup("") else { return };
+    fx.write("junk.gpg", "this is not OpenPGP\n");
+    let out = fx.run(&["apply", "junk.gpg"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("not OpenPGP data"), "{out:?}");
+    assert!(!out.stdout.contains("symmetric"), "{out:?}");
+    fs::remove_file(fx.repo.join("junk.gpg")).unwrap();
+    let colons = home
+        .gpg()
+        .args(["--with-colons", "--list-keys", &home.fpr])
+        .output()
+        .unwrap()
+        .stdout;
+    let colons = String::from_utf8(colons).unwrap();
+    let subkey = colons
+        .lines()
+        .skip_while(|l| !l.starts_with("sub:"))
+        .find(|l| l.starts_with("fpr:"))
+        .unwrap()
+        .split(':')
+        .nth(9)
+        .unwrap()
+        .to_owned();
+    fx.gpg_config(&home, &[&subkey], "");
+    fx.write("p", "plain\n");
+    let out = fx.run(&["enc", "--backend", "gpg", "p"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(
+        out.stderr.contains("subkey") && out.stderr.contains(&home.fpr),
+        "{out:?}"
+    );
+    assert!(!out.stderr.contains("not in the keyring"), "{out:?}");
+    assert_eq!(read(&fx.repo.join("p")), "plain\n");
+}
+
 /// Audit E5: without state, a swapped GPG recipient with the same count
 /// is found from the ENC_TO key ids, and the edit encrypts to the new key.
 #[test]
