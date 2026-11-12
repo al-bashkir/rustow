@@ -5,6 +5,7 @@ mod common;
 
 use common::*;
 use std::fs;
+use std::process::Command;
 
 fn setup(extra: &str) -> Option<(Fixture, GpgHome)> {
     if !require_gpg() {
@@ -181,6 +182,44 @@ fn bad_recipients_are_rejected_without_changes() {
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stderr.contains("not trusted"), "{out:?}");
     assert_eq!(read(&fx.repo.join("p")), "plain\n");
+    assert!(!fx.repo.join("p.gpg").exists());
+}
+
+/// A source that changes while it is encrypted keeps its plaintext, and
+/// the moved registration is put back: nothing changes at all.
+#[test]
+fn source_changed_during_enc_rolls_back_the_registration() {
+    let Some((fx, _home)) = setup("") else { return };
+    let src = fx.write("p", "plain\n");
+    fx.ok(&["file", "add", "p"]);
+    let config = read(&fx.repo.join(".rustow.toml"));
+    let real_gpg = String::from_utf8(
+        Command::new("sh")
+            .args(["-c", "command -v gpg"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let wrapper = fx.editor(
+        "gpg",
+        &format!(
+            "case \" $* \" in *\" --encrypt \"*) printf 'late\\n' >> '{}';; esac\nexec {} \"$@\"",
+            src.display(),
+            real_gpg.trim()
+        ),
+    );
+    let bin = std::path::Path::new(&wrapper).parent().unwrap().display().to_string();
+    let path = format!("{bin}:{}", std::env::var("PATH").unwrap());
+    let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("PATH", &path)]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stderr.contains("changed while it was being encrypted"), "{out:?}");
+    assert_eq!(
+        read(&fx.repo.join(".rustow.toml")),
+        config,
+        "registration not rolled back"
+    );
+    assert_eq!(read(&src), "plain\nlate\n");
     assert!(!fx.repo.join("p.gpg").exists());
 }
 
