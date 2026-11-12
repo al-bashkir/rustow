@@ -42,7 +42,7 @@ homedir = "~/.gnupg"
 - `homedir` is the config value, else `$GNUPGHOME`, else `~/.gnupg`. You must own it. Others must not write to it. It must be outside the repository and the cache.
 - Each fingerprint must match one valid primary key with encryption capability in the local keyring. gpg picks the encryption subkey. A subkey fingerprint is refused: "<fpr> is a subkey fingerprint; configure the primary key fingerprint <primary>".
 - rustow never fetches keys. It runs `gpg` with `--no-options`, so `gpg.conf` has no effect.
-- rustow does not change trust. An untrusted key gives "not trusted".
+- rustow does not change trust. The key validity must be marginal, full or ultimate. rustow checks this before it encrypts or opens the editor. An untrusted key gives "not trusted" (exit 4).
 - rustow checks the gpg status records. Symmetric-only, unprotected, truncated or mismatched ciphertext is refused.
 - A locked key fails fast unless you use `--interactive`. See [Interactive and unattended runs](#interactive-and-unattended-runs).
 
@@ -94,11 +94,11 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 
 - The backend comes from the suffix. `enc edit` never converts.
 - It refuses nested suffixes such as `x.age.gpg` (exit 2, "nested encryption suffixes are not supported"). It also refuses a name that is empty after rustow removes the suffixes, such as `.age` or `.tmpl.age` (exit 2).
-- It checks the recipients of the backend before it decrypts. Empty or invalid recipients give exit 2. A GPG fingerprint that is not in the keyring, or a key that is revoked, expired or cannot encrypt, gives exit 4. Then the editor does not start and rustow leaves no workspace.
+- It checks the recipients of the backend before it decrypts. Empty or invalid recipients give exit 2. A GPG fingerprint that is not in the keyring, or a key that is not trusted (validity unknown), revoked, expired or cannot encrypt, gives exit 4. Then the editor does not start and rustow leaves no workspace.
 - rustow decrypts into `<cache>/edit/edit-XXXX/` (mode 0700) as a 0600 file with the logical name.
 - The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell.
 - If the editor fails, the ciphertext stays unchanged and rustow removes the workspace.
-- If the encryption fails after the edit (for example, gpg finds a recipient key that is not trusted), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
+- If the encryption fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.
 - If content and recipients are unchanged, rustow does not rewrite the file.
 - rustow finds a recipient change from the last encryption that the state file records for this ciphertext. Without such a record, GnuPG compares the key ids in the ciphertext with the configured keys, so rustow encrypts again also when you replace one key with another. age shows only the number of recipients, so rustow finds only a changed count. After you replace an age recipient, use `--reencrypt`. `--reencrypt` always forces a rewrite.

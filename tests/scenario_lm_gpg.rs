@@ -104,6 +104,26 @@ fn bad_recipients_are_rejected_without_changes() {
     assert!(!fx.repo.join("p.gpg").exists());
 }
 
+/// An untrusted recipient must stop `enc edit` before the editor runs;
+/// otherwise encryption fails after the edit and plaintext stays in the cache.
+#[test]
+fn edit_refuses_an_untrusted_recipient_before_the_editor_runs() {
+    let Some((fx, home)) = setup("") else { return };
+    let ct = fx.gpg_encrypt("s.gpg", "v1\n", &home);
+    let before = fs::read(&ct).unwrap();
+    let stranger = fx.gpg_home("stranger", false);
+    home.import_public(&stranger);
+    fx.gpg_config(&home, &[&home.fpr, &stranger.fpr], "");
+    let marker = fx.base.join("editor-ran");
+    let editor = fx.editor("ed", &format!("touch '{}'\nprintf 'v2\\n' > \"$1\"", marker.display()));
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("not trusted"), "{out:?}");
+    assert!(!marker.exists(), "the editor ran");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert!(fx.workspaces().is_empty(), "plaintext left in the cache");
+}
+
 #[test]
 fn age_and_gpg_sources_for_one_destination_collide() {
     let Some((fx, home)) = setup("") else { return };

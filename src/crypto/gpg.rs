@@ -262,6 +262,13 @@ impl Gpg {
             "r" => return Err(format!("key {fingerprint} is revoked")),
             "e" => return Err(format!("key {fingerprint} is expired")),
             "i" | "n" => return Err(format!("key {fingerprint} is invalid")),
+            // gpg's batch encryption accepts only marginal, full or ultimate validity.
+            "" | "-" | "o" | "q" => {
+                return Err(format!(
+                    "key {fingerprint} is not trusted (validity unknown); rustow never changes trust: \
+                     certify the key or set its owner trust in GPG"
+                ));
+            }
             _ => {}
         }
         if !caps.contains('E') || caps.contains('D') {
