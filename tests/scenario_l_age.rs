@@ -232,9 +232,18 @@ fn wrong_identity_or_corrupt_ciphertext_preserves_everything() {
 
 #[test]
 fn enc_edit_rejects_plaintext_and_nested_suffix() {
-    let (fx, _key) = keyed();
+    let (fx, key) = keyed();
     fx.write("plain", "p");
     assert_eq!(fx.run_env(&["enc", "edit", "plain"], &[("VISUAL", "true")]).code, 2);
+    // Audit E3: apply rejects nested suffixes, so enc edit must too.
+    fx.age_encrypt("wrap.gpg.age", "w\n", &[&key]);
+    fx.write("wrap.age.gpg", "x");
+    for path in ["wrap.gpg.age", "wrap.age.gpg"] {
+        let out = fx.run_env(&["enc", "edit", path], &[("VISUAL", "true")]);
+        assert_eq!(out.code, 2, "{path}: {out:?}");
+        assert!(out.stderr.contains("nested"), "{path}: {out:?}");
+    }
+    assert!(fx.workspaces().is_empty());
 }
 
 #[test]

@@ -252,7 +252,7 @@ fn split_scope(path: &RelPath) -> Result<(Scope, RelPath)> {
 
 /// Strips the encryption and template suffixes from a file name: the
 /// backend, whether it is a template, and the logical destination name.
-fn split_suffixes<'a>(
+pub fn split_suffixes<'a>(
     file_name: &'a str,
     template_extension: &str,
 ) -> std::result::Result<(Option<Backend>, bool, &'a str), &'static str> {

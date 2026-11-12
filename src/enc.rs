@@ -247,8 +247,10 @@ pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool,
 /// Checks that `arg` is an encrypted source file and decrypts it.
 fn open_encrypted(ctx: &Context, arg: &str) -> Result<Opened> {
     let rel = RelPath::parse(arg)?;
-    let backend = suffix_backend(&rel)
-        .ok_or_else(|| Error::Usage(format!("'{rel}' is not an encrypted source (*.age or *.gpg)")))?;
+    let (backend, _, _) = source::split_suffixes(rel.file_name(), &ctx.config.template_extension)
+        .map_err(|why| Error::Usage(format!("'{rel}': {why}")))?;
+    let backend =
+        backend.ok_or_else(|| Error::Usage(format!("'{rel}' is not an encrypted source (*.age or *.gpg)")))?;
     let abs = ctx.root.join(rel.as_path());
     check_parents(ctx, &rel)?;
     if !fs::symlink_metadata(&abs).is_ok_and(|m| m.is_file()) {
