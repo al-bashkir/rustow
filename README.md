@@ -1,4 +1,4 @@
-<h1 align="center"><img src="docs/logo.svg" alt="rustow" width="360"></h1>
+<h1 align="center"><img src="assets/logo.svg" alt="rustow" width="360"></h1>
 
 rustow is a dotfiles manager for Linux and macOS. It is written in Rust.
 
