@@ -883,5 +883,7 @@ mod tests {
         assert_eq!(format_utc(0), "19700101T000000Z");
         assert_eq!(format_utc(1_762_905_600), "20251112T000000Z");
         assert_eq!(format_utc(951_782_400 + 3_661), "20000229T010101Z");
+        // The first day of a year in the previous 400-year era, after its first century.
+        assert_eq!(format_utc(920_246_400), "19990301T000000Z");
     }
 }
