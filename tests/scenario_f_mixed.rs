@@ -346,6 +346,30 @@ fn unlink_forgets_a_fold_record_whose_link_the_user_replaced() {
     assert_eq!(again.code, 2, "record is gone: {again:?}");
 }
 
+/// The folded link is still in place, but its parent now resolves through
+/// an unsafe symlink: the unfold is a conflict and nothing changes there.
+#[test]
+fn unfold_below_an_unsafe_parent_symlink_is_a_conflict() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = nvim(&format!("{FOLD}[vars]\nx = \"y\"\n"));
+    fx.ok(&["apply"]);
+    let open = fx.base.join("open");
+    fs::rename(fx.home_path(".config"), &open).unwrap();
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
+    std::os::unix::fs::symlink(&open, fx.home_path(".config")).unwrap();
+    let link_before = fs::read_link(open.join("nvim")).unwrap();
+    fx.write(".config/nvim/local.lua.tmpl", "{{ vars.x }}\n");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let fold_line = out.stdout.lines().find(|l| l.contains("<- .config/nvim (link)"));
+    assert!(
+        fold_line.is_some_and(|l| l.contains("parent directory is blocked")),
+        "{out:?}"
+    );
+    assert_eq!(fs::read_link(open.join("nvim")).unwrap(), link_before);
+    assert!(!open.join("nvim/local.lua").exists());
+}
+
 /// Audit F3: a directory with a destination collision on itself or below
 /// it never folds; every colliding source stays blocked, as without folding.
 #[test]
