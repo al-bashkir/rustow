@@ -225,6 +225,26 @@ fn unfold_waits_until_every_source_below_it_is_deployed() {
     }
 }
 
+/// The fold check does not follow a symlink below the directory: an
+/// ignored symlink to an empty directory still blocks the fold, which
+/// would expose it.
+#[test]
+fn ignored_symlink_to_a_directory_blocks_the_fold() {
+    let fx = nvim(FOLD);
+    fx.write(".rustowignore", ".config/nvim/shared\n");
+    let empty = fx.base.join("empty");
+    fs::create_dir(&empty).unwrap();
+    std::os::unix::fs::symlink(&empty, fx.repo.join(".config/nvim/shared")).unwrap();
+    fx.ok(&["apply"]);
+    let dir = fx.home_path(".config/nvim");
+    assert!(fs::symlink_metadata(&dir).unwrap().is_dir(), "not folded");
+    assert!(is_symlink(&dir.join("init.lua")));
+    assert!(
+        fs::symlink_metadata(dir.join("shared")).is_err(),
+        "the ignored link stays out"
+    );
+}
+
 /// A held unfold stops only the sources below the folded link; the other
 /// sources of the same run still deploy.
 #[test]
