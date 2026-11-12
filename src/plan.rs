@@ -55,8 +55,9 @@ pub enum Conflict {
     ParentBlocked,
     /// Parent directories are missing and `create_directories = false`.
     NoParent,
-    /// A system symlink would point into a cache that other users control.
-    UntrustedCache,
+    /// A symlink would point at a file that someone other than root or the
+    /// destination directory's owner can change.
+    Untrusted,
     /// A folded directory holds files that are not sources.
     FoldedStrays,
 }
@@ -72,7 +73,7 @@ impl Conflict {
             Conflict::Collision => "several sources map to this destination",
             Conflict::ParentBlocked => "a parent directory is blocked",
             Conflict::NoParent => "parent directory is missing and create_directories = false",
-            Conflict::UntrustedCache => "cache entry is not safe to link from a system path",
+            Conflict::Untrusted => "untrusted link target",
             Conflict::FoldedStrays => "cannot unfold the folded directory",
         }
     }
@@ -520,10 +521,9 @@ fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&R
     Ok(Located::At(path, missing_dirs))
 }
 
-/// Root-scope symlinks into the cache need a cache entry that the destination's owner can trust.
-/// A system symlink must point only at a file that nobody but root or the
-/// destination directory's owner can change: the cache entry of a
-/// cache-backed link, or the repository source of an ordinary link.
+/// A symlink, in any scope, must point only at a file that nobody but
+/// root or the destination directory's owner can change: the cache entry
+/// of a cache-backed link, or the repository source of an ordinary link.
 fn check_link_trust(
     ctx: &Context,
     source: &Source,
@@ -531,19 +531,27 @@ fn check_link_trust(
     missing_dirs: &MissingDirs,
     want: &Want,
 ) -> Result<Option<Step>> {
-    if source.scope != Scope::Root || source.mode.is_copy() {
+    if source.mode.is_copy() {
         return Ok(None);
     }
-    let target = match &want.cache {
-        Some((cache_path, _)) => cache_path.clone(),
-        None => ctx.root.join(source.path.as_path()),
+    let (target, what, fix) = match &want.cache {
+        Some((cache_path, _)) => (
+            cache_path.clone(),
+            "cache entry",
+            "[[template_rules]] metadata or `rustow file add`",
+        ),
+        None => (
+            ctx.root.join(source.path.as_path()),
+            "repository source",
+            "`rustow file add`",
+        ),
     };
     let dir = missing_dirs
         .as_ref()
         .map_or_else(|| path.parent().unwrap_or(path), |(existing, _)| existing);
     Ok(fsops::trust_cache(&target, fsops::owner_of(dir)?).err().map(|why| {
-        let detail = format!("{why}; copy it instead with [[template_rules]] metadata or `rustow file add`");
-        blocked(Conflict::UntrustedCache, detail)
+        let detail = format!("{what}: {why}; copy it instead with {fix}");
+        blocked(Conflict::Untrusted, detail)
     }))
 }
 

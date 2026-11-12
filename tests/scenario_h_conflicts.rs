@@ -179,3 +179,38 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     out
 }
+
+/// Spec §14.6: a home link is trust-checked like a system link. With a
+/// root-owned target (as under `sudo -H`), a link into the user's
+/// repository is refused. A dry run never writes, so /usr is safe here.
+#[test]
+fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP: root owns the repository too");
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".bashrc", "x");
+    fx.write(".t.tmpl", "y");
+    let out = fx.run(&["--target", "/usr", "apply", "--dry-run"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let line = |src: &str| {
+        out.stdout
+            .lines()
+            .find(|l| l.contains(src))
+            .unwrap_or_else(|| panic!("no line for {src}: {out:?}"))
+            .to_owned()
+    };
+    let plain = line("<- .bashrc");
+    assert!(plain.contains("conflict") && plain.contains("untrusted"), "{plain}");
+    assert!(
+        plain.contains("repository source") && plain.contains("rustow file add"),
+        "{plain}"
+    );
+    assert!(!plain.contains("cache") && !plain.contains("template_rules"), "{plain}");
+    let cached = line("<- .t.tmpl");
+    assert!(
+        cached.contains("untrusted") && cached.contains("cache entry"),
+        "{cached}"
+    );
+}
