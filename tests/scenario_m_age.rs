@@ -90,7 +90,7 @@ fn custom_template_extension_with_encryption() {
 }
 
 #[test]
-fn plaintext_and_ciphertext_collide_and_nested_suffix_is_rejected() {
+fn plaintext_and_ciphertext_collide_and_nested_suffix_is_skipped() {
     let (fx, key) = keyed("");
     fx.write(".ssh/x", "plain");
     fx.age_encrypt(".ssh/x.age", "secret", &[&key]);
@@ -99,9 +99,13 @@ fn plaintext_and_ciphertext_collide_and_nested_suffix_is_rejected() {
     assert!(out.stdout.contains("same destination"), "{out:?}");
     fs::remove_file(fx.repo.join(".ssh/x")).unwrap();
     fx.write("n.age.gpg", "x");
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains("nested"), "{out:?}");
+    let out = fx.ok(&["apply"]);
+    assert!(
+        out.stderr
+            .contains("warning: n.age.gpg: nested encryption suffixes are not supported"),
+        "{out:?}"
+    );
+    assert_eq!(read(&fx.home_path(".ssh/x")), "secret", "the rest deploys");
 }
 
 #[test]

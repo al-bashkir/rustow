@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore};
 use crate::paths::{RelPath, Scope, expand_tilde};
-use crate::source::{Discovery, Source, classify, discover};
+use crate::source::{Discovery, Skipped, Source, classify, discover};
 
 /// Values from the command line that select the repository and targets.
 #[derive(Debug, Clone, Default)]
@@ -111,12 +111,7 @@ impl Context {
     }
 
     pub fn discover(&self) -> Result<Discovery> {
-        let found = discover(&self.root, &self.ignore, &self.config, classify)?;
-        // Until the commands report skipped sources, they refuse them as before.
-        match found.skipped.first() {
-            Some(s) => Err(Error::Config(format!("source '{}': {}", s.path, s.reason))),
-            None => Ok(found),
-        }
+        discover(&self.root, &self.ignore, &self.config, classify)
     }
 
     pub fn target_root(&self, scope: Scope) -> &Path {
@@ -139,32 +134,53 @@ impl Context {
 
     /// Sources selected by repository-relative `args`; all when empty. A
     /// directory selects its subtree. Reserved, ignored and unknown paths
-    /// are errors.
+    /// are errors, and so is a path that names a skipped file.
     pub fn select<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Source>> {
-        let mut wanted = Vec::new();
-        for arg in args.iter().filter(|a| !matches!(a.as_str(), "." | "./")) {
-            let rel = RelPath::parse(arg)?;
-            let is_dir = self.root.join(rel.as_path()).is_dir();
-            if self.ignore.is_reserved(&rel, is_dir) {
-                return Err(Error::Usage(format!(
-                    "'{rel}' is reserved by rustow and is never deployed"
-                )));
-            }
-            if self.ignore.is_ignored(&rel, is_dir) {
-                return Err(Error::Usage(format!("'{rel}' is ignored by {IGNORE_FILE}")));
-            }
-            if !discovery.sources.iter().any(|s| s.path.starts_with(&rel)) {
-                return Err(Error::Usage(format!("'{rel}' does not match any deployable source")));
-            }
-            wanted.push(rel);
-        }
-        let all = wanted.is_empty();
-        Ok(discovery
-            .sources
-            .iter()
-            .filter(|s| all || wanted.iter().any(|w| s.path.starts_with(w)))
-            .collect())
+        let wanted = self.wanted(discovery, args)?;
+        Ok(discovery.sources.iter().filter(|s| covers(&wanted, &s.path)).collect())
     }
+
+    /// Skipped files and entries that `args` select, as for `select`.
+    pub fn skipped<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
+        let wanted = self.wanted(discovery, args)?;
+        Ok(discovery.skipped.iter().filter(|s| covers(&wanted, &s.path)).collect())
+    }
+
+    /// The checked path prefixes of `args`; none selects everything.
+    fn wanted(&self, discovery: &Discovery, args: &[String]) -> Result<Vec<RelPath>> {
+        args.iter()
+            .filter(|a| !matches!(a.as_str(), "." | "./"))
+            .map(|arg| self.check_arg(discovery, RelPath::parse(arg)?))
+            .collect()
+    }
+
+    /// One path argument must select a source, or only skipped files below a directory.
+    fn check_arg(&self, discovery: &Discovery, rel: RelPath) -> Result<RelPath> {
+        let is_dir = self.root.join(rel.as_path()).is_dir();
+        if self.ignore.is_reserved(&rel, is_dir) {
+            return Err(Error::Usage(format!(
+                "'{rel}' is reserved by rustow and is never deployed"
+            )));
+        }
+        if self.ignore.is_ignored(&rel, is_dir) {
+            return Err(Error::Usage(format!("'{rel}' is ignored by {IGNORE_FILE}")));
+        }
+        if discovery.sources.iter().any(|s| s.path.starts_with(&rel)) {
+            return Ok(rel);
+        }
+        if let Some(s) = discovery.skipped.iter().find(|s| s.path == rel) {
+            return Err(Error::Usage(format!("source '{rel}': {}", s.reason)));
+        }
+        if !discovery.skipped.iter().any(|s| s.path.starts_with(&rel)) {
+            return Err(Error::Usage(format!("'{rel}' does not match any deployable source")));
+        }
+        Ok(rel)
+    }
+}
+
+/// `path` lies at or below one of `wanted`, or `wanted` is empty.
+fn covers(wanted: &[RelPath], path: &RelPath) -> bool {
+    wanted.is_empty() || wanted.iter().any(|w| path.starts_with(w))
 }
 
 /// Canonical home and root targets (flag, else configuration); neither may lie inside the repository.

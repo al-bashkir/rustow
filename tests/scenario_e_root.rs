@@ -7,25 +7,35 @@ use common::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The `file add` hint of an unregistered system file.
+/// The reason an unregistered system file is skipped: the `file add` hint.
+fn reason(source: &str) -> String {
+    format!("system files deploy only as copies; register it with `rustow file add {source}`")
+}
+
+/// The error when a command names an unregistered system file.
 fn hint(source: &str) -> String {
-    format!("source '{source}': system files deploy only as copies; register it with `rustow file add {source}`")
+    format!("source '{source}': {}", reason(source))
+}
+
+/// The warning of a deploy command for an unregistered system file.
+fn warning(source: &str) -> String {
+    format!("warning: {source}: {}", reason(source))
 }
 
 #[test]
-fn unregistered_root_file_is_an_error_until_added() {
+fn unregistered_root_file_is_skipped_until_added() {
     let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
     let source = ".rustowroot/etc/example/config.conf";
     fx.write(source, "plain\n");
-    for cmd in ["apply", "check", "status"] {
-        let out = fx.run(&[cmd]);
-        assert_eq!(out.code, 2, "{cmd}: {out:?}");
-        assert!(out.stderr.contains(&hint(source)), "{cmd}: {out:?}");
-    }
+    let out = fx.ok(&["apply"]);
+    assert!(out.stderr.contains(&warning(source)), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")), "the rest deploys");
     assert_eq!(fs::read_dir(&fx.root).unwrap().count(), 0, "nothing is written");
     assert!(!fx.repo.join(".rustowcache").exists());
     fx.ok(&["file", "add", source]);
     let out = fx.ok(&["apply"]);
+    assert!(!out.stderr.contains("warning"), "{out:?}");
     assert!(
         out.stderr.contains(fx.root.to_str().unwrap()),
         "root target is reported: {out:?}"
@@ -44,12 +54,68 @@ fn file_add_registers_one_root_file_while_others_are_unregistered() {
     fx.write(".rustowroot/etc/a.conf", "a\n");
     fx.write(".rustowroot/etc/b.conf", "b\n");
     fx.ok(&["file", "add", ".rustowroot/etc/a.conf"]);
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains(&hint(".rustowroot/etc/b.conf")), "{out:?}");
+    let out = fx.ok(&["apply"]);
+    assert!(out.stderr.contains(&warning(".rustowroot/etc/b.conf")), "{out:?}");
+    assert!(is_regular(&fx.root_path("etc/a.conf")), "{out:?}");
+    assert!(!fx.root_path("etc/b.conf").exists(), "{out:?}");
     fx.ok(&["file", "add", ".rustowroot/etc/b.conf"]);
     fx.ok(&["apply"]);
     assert!(is_regular(&fx.root_path("etc/a.conf")) && is_regular(&fx.root_path("etc/b.conf")));
+}
+
+/// Each deploy command and diff warn about a skipped source in their
+/// selection and keep their exit code. JSON output lists the warnings;
+/// -q hides them.
+#[test]
+fn skipped_root_file_is_a_warning_in_each_deploy_command() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    let source = ".rustowroot/etc/x";
+    fx.write(source, "x\n");
+    let commands: [&[&str]; 6] = [
+        &[],
+        &["apply"],
+        &["link"],
+        &["file", "apply"],
+        &["template", "apply"],
+        &["diff"],
+    ];
+    for args in commands {
+        let out = fx.ok(args);
+        assert!(out.stderr.contains(&warning(source)), "{args:?}: {out:?}");
+    }
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+    assert!(!fx.root_path("etc/x").exists());
+    for args in [["apply", "--json"], ["diff", "--json"]] {
+        let out = fx.ok(&args);
+        let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+        let want = serde_json::json!([{ "source": source, "reason": reason(source) }]);
+        assert_eq!(v["warnings"], want, "{args:?}: {out:?}");
+        assert!(!out.stderr.contains("warning"), "{args:?}: {out:?}");
+    }
+    let out = fx.ok(&["apply", "-q"]);
+    assert!(!out.stderr.contains("warning"), "{out:?}");
+}
+
+/// A path argument that names a skipped file is an error, as for an
+/// ignored file. A directory that holds one only warns.
+#[test]
+fn naming_a_skipped_root_file_is_an_error() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    let source = ".rustowroot/etc/x";
+    fx.write(source, "x\n");
+    for args in [["apply", source], ["diff", source]] {
+        let out = fx.run(&args);
+        assert_eq!(out.code, 2, "{args:?}: {out:?}");
+        assert!(out.stderr.contains(&hint(source)), "{args:?}: {out:?}");
+    }
+    let out = fx.ok(&["apply", ".rustowroot/etc/"]);
+    assert!(out.stderr.contains(&warning(source)), "{out:?}");
+    assert!(!fx.home_path(".bashrc").exists(), "outside the selection");
+    let out = fx.ok(&["apply", ".bashrc"]);
+    assert!(!out.stderr.contains("warning"), "outside the selection: {out:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")));
 }
 
 #[test]
@@ -201,15 +267,14 @@ fn encrypted_age_sources_map_under_root_target() {
 }
 
 #[test]
-fn unregistered_encrypted_root_file_is_an_error_until_added() {
+fn unregistered_encrypted_root_file_is_skipped_until_added() {
     let fx = Fixture::new();
     let key = fx.age_key("root");
     fx.age_config(&[&key], &[&key], "");
     let source = ".rustowroot/etc/secret.conf.age";
     fx.age_encrypt(source, "secret\n", &[&key]);
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains(&hint(source)), "{out:?}");
+    let out = fx.ok(&["apply"]);
+    assert!(out.stderr.contains(&warning(source)), "{out:?}");
     assert_eq!(fs::read_dir(&fx.root).unwrap().count(), 0, "nothing is written");
     fx.ok(&["file", "add", source]);
     fx.ok(&["apply"]);
@@ -236,12 +301,13 @@ fn encrypted_gpg_sources_map_under_root_target() {
     );
     fx.gpg_encrypt(".rustowroot/etc/example/added.conf.gpg", "gpg added\n", &home);
     fx.gpg_encrypt(".rustowroot/etc/example/copied.conf.gpg", "gpg copied\n", &home);
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 2, "{out:?}");
+    let out = fx.ok(&["apply"]);
     assert!(
-        out.stderr.contains(&hint(".rustowroot/etc/example/added.conf.gpg")),
+        out.stderr.contains(&warning(".rustowroot/etc/example/added.conf.gpg")),
         "{out:?}"
     );
+    assert!(is_regular(&fx.root_path("etc/example/copied.conf")), "{out:?}");
+    assert!(!fx.root_path("etc/example/added.conf").exists(), "{out:?}");
     fx.ok(&["file", "add", ".rustowroot/etc/example/added.conf.gpg"]);
     fx.ok(&["apply"]);
     for (name, text) in [("added.conf", "gpg added\n"), ("copied.conf", "gpg copied\n")] {
@@ -380,9 +446,9 @@ fn old_root_plain_link_becomes_a_copy_after_file_add() {
     let dest = fx.root_path("etc/p.conf");
     fx.write(".rustow.toml", "version = 1\n");
     simulate_old_link(&fx, &dest, &abs, "link");
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 2, "{out:?}");
-    assert!(out.stderr.contains(&hint(source)), "{out:?}");
+    let out = fx.ok(&["apply"]);
+    assert!(out.stderr.contains(&warning(source)), "{out:?}");
+    assert!(!out.stdout.contains("orphaned"), "the source still exists: {out:?}");
     assert!(is_symlink(&dest));
     fx.ok(&["file", "add", source]);
     let out = fx.ok(&["apply"]);

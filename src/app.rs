@@ -88,11 +88,16 @@ fn template_list(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 
 fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
     let prepared = prepare(g, env, p, paths, selector, false)?;
+    p.warn(prepared.ctx.skipped(&prepared.discovery, paths)?);
     inspect::diff(&prepared.plan, &prepared.state, p)
 }
 
 fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<i32> {
     let s = prepare(g, env, p, &a.paths.paths, Selector::All, false)?;
+    if let Some(skip) = s.discovery.skipped.first() {
+        // shortcut: status refuses a skipped source until it shows SKIPPED rows (next commit).
+        return Err(Error::Config(format!("source '{}': {}", skip.path, skip.reason)));
+    }
     inspect::status(&s.ctx, &s.plan, &s.discovery, &s.state, &a.paths.paths, a.ignored, p)
 }
 
@@ -195,7 +200,8 @@ fn prepare(
 }
 
 /// Selected sources the command deploys. A path argument that matches
-/// only sources of other modes is a usage error.
+/// only sources of other modes is a usage error; one that matches only
+/// skipped files selects nothing.
 fn selected<'a>(
     ctx: &Context,
     discovery: &'a Discovery,
@@ -205,7 +211,7 @@ fn selected<'a>(
     let all = ctx.select(discovery, paths)?;
     for arg in paths {
         let one = ctx.select(discovery, std::slice::from_ref(arg))?;
-        if !one.iter().any(|s| selector.includes(&s.mode)) {
+        if !one.is_empty() && !one.iter().any(|s| selector.includes(&s.mode)) {
             let modes: Vec<&str> = one.iter().map(|s| s.mode.label()).collect();
             return Err(Error::Usage(format!(
                 "'{arg}' has no sources this command deploys (found: {}); use `rustow apply`",
@@ -224,6 +230,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         plan,
         _lock,
     } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
+    printer.warn(ctx.skipped(&discovery, paths)?);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
     let policy = g.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {

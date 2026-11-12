@@ -40,6 +40,24 @@ fn mixed_directory_deploys_each_mode_and_never_folds() {
     assert!(!dir.join(".plain.conf.swp").exists(), "ignored files stay out");
 }
 
+/// A skipped source is not a link source: a directory that holds one
+/// never folds, so the fold cannot expose it.
+#[test]
+fn directory_with_a_skipped_source_never_folds() {
+    let fx = nvim(FOLD);
+    fx.write(".config/nvim/n.age.gpg", "x");
+    let out = fx.ok(&["apply"]);
+    assert!(
+        out.stderr
+            .contains("warning: .config/nvim/n.age.gpg: nested encryption suffixes"),
+        "{out:?}"
+    );
+    let dir = fx.home_path(".config/nvim");
+    assert!(fs::symlink_metadata(&dir).unwrap().is_dir(), "never folded: {out:?}");
+    assert!(is_symlink(&dir.join("init.lua")));
+    assert!(!dir.join("n.age.gpg").exists());
+}
+
 #[test]
 fn fold_off_by_default() {
     let fx = nvim("version = 1\n");

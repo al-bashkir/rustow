@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::execute::{Action, ItemReport};
+use crate::source::Skipped;
 
 /// Whether the reported items were applied or only planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub struct Printer {
     color: bool,
     /// Shown as `~` in paths.
     home: Option<PathBuf>,
+    /// The skipped sources of this run, as JSON `{source, reason}` objects.
+    pub warnings: Vec<serde_json::Value>,
 }
 
 impl Printer {
@@ -34,6 +37,7 @@ impl Printer {
             verbose,
             color,
             home: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -45,6 +49,18 @@ impl Printer {
     pub fn notice(&self, msg: &str) {
         if !self.quiet && !self.json {
             eprintln!("note: {msg}");
+        }
+    }
+
+    /// Prints one warning on stderr for each skipped source and keeps
+    /// them for the JSON output. Warnings never change the exit code.
+    pub fn warn<'a>(&mut self, skipped: impl IntoIterator<Item = &'a Skipped>) {
+        for s in skipped {
+            if !self.quiet && !self.json {
+                eprintln!("warning: {}: {}", s.path, s.reason);
+            }
+            self.warnings
+                .push(json!({ "source": s.path.as_str(), "reason": s.reason }));
         }
     }
 
@@ -76,6 +92,7 @@ impl Printer {
                 "aborted": run == RunKind::Blocked,
                 "items": list,
                 "summary": summary_counts(items),
+                "warnings": self.warnings,
             });
             println!("{out}");
             return;
@@ -267,6 +284,7 @@ mod tests {
             verbose: false,
             color,
             home: None,
+            warnings: Vec::new(),
         }
     }
 

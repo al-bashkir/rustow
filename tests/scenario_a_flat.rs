@@ -208,3 +208,28 @@ fn no_marker_means_no_repository() {
     fx.ok(&["--repo", &repo, "apply", ".config/nvim/init.lua"]);
     assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")));
 }
+
+/// A problem with one source does not stop the run: a nested suffix
+/// and a source symlink are skipped with a warning each, every other
+/// source deploys and the exit code stays 0.
+#[test]
+fn sources_that_cannot_deploy_are_skipped_with_a_warning() {
+    let fx = flat();
+    fx.write("n.age.gpg", "x");
+    std::os::unix::fs::symlink("/nonexistent", fx.repo.join(".vimrc")).unwrap();
+    let out = fx.ok(&["apply"]);
+    for line in [
+        "warning: .vimrc: is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it",
+        "warning: n.age.gpg: nested encryption suffixes are not supported",
+    ] {
+        assert!(out.stderr.contains(line), "{out:?}");
+    }
+    assert!(is_symlink(&fx.home_path(".bashrc")), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")), "{out:?}");
+    let mut names: Vec<String> = fs::read_dir(&fx.home)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, [".bashrc", ".config", "dotfiles"], "nothing else is deployed");
+}

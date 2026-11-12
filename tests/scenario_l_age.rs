@@ -372,12 +372,11 @@ fn enc_and_edit_refuse_a_symlinked_parent_directory() {
     assert!(!out.stderr.contains(".rustowignore"), "{out:?}");
     assert_eq!(fs::read(&ct).unwrap(), before);
     assert!(fx.workspaces().is_empty());
-    // apply discovery keeps its own hint.
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 2, "{out:?}");
+    // apply skips the symlink with its own hint.
+    let out = fx.ok(&["apply"]);
     assert!(
         out.stderr.contains(
-            "source 'ld': is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it"
+            "warning: ld: is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it"
         ),
         "{out:?}"
     );

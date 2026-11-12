@@ -38,7 +38,7 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
         shown.extend(show(item, state.entries.get(&item.dest), printer)?);
     }
     if printer.json {
-        print_json(&shown);
+        print_json(&shown, &printer.warnings);
     } else {
         for s in &shown {
             match (s.kind.as_str(), s.detail.as_deref()) {
@@ -86,8 +86,8 @@ fn step_text(item: &PlanItem, label: &str, old: Option<&Record>) -> Result<(Stri
     })
 }
 
-/// One JSON object for each differing item. Holds content by design.
-fn print_json(shown: &[Shown]) {
+/// One JSON object for each differing item, and the warnings. Holds content by design.
+fn print_json(shown: &[Shown], warnings: &[serde_json::Value]) {
     let items: Vec<_> = shown
         .iter()
         .map(|s| {
@@ -102,7 +102,7 @@ fn print_json(shown: &[Shown]) {
             })
         })
         .collect();
-    println!("{}", json!({ "items": items }));
+    println!("{}", json!({ "items": items, "warnings": warnings }));
 }
 
 /// Diff text of a deploy step, and whether it is binary; marks a
@@ -328,6 +328,14 @@ fn deployed_status(mode: &Mode) -> &'static str {
     }
 }
 
+/// The recorded source is still in the repository: a source, a skipped
+/// file or a folded directory.
+fn source_exists(ctx: &Context, discovery: &Discovery, record: &Record) -> bool {
+    discovery.sources.iter().any(|s| s.path == record.source)
+        || discovery.skipped.iter().any(|s| s.path == record.source)
+        || (record.folded_dir && ctx.root.join(record.source.as_path()).is_dir())
+}
+
 /// Recorded destinations in the current targets whose source no longer exists.
 fn orphans<'a>(
     ctx: &Context,
@@ -342,8 +350,7 @@ fn orphans<'a>(
         .collect::<Result<_>>()?;
     let mut found = Vec::new();
     for (dest, record) in &state.entries {
-        let known = discovery.sources.iter().any(|s| s.path == record.source)
-            || (record.folded_dir && ctx.root.join(record.source.as_path()).is_dir());
+        let known = source_exists(ctx, discovery, record);
         let selected = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
         if known || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;
@@ -387,6 +394,13 @@ pub fn orphan_reports(
 /// plaintext template rendering. Never decrypts. Exit 0 clean, 1 findings.
 pub fn check(ctx: &Context, printer: &Printer) -> Result<i32> {
     let discovery = ctx.discover()?;
+    if let Some(skip) = discovery.skipped.first() {
+        // shortcut: check refuses a skipped source until it lists warnings (next commit).
+        return Err(crate::error::Error::Config(format!(
+            "source '{}': {}",
+            skip.path, skip.reason
+        )));
+    }
     let mut findings: Vec<String> = check_collisions(&discovery.sources, crate::plan::case_folding(ctx))
         .iter()
         .map(ToString::to_string)
