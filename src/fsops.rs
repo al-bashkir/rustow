@@ -839,10 +839,11 @@ mod tests {
     #[test]
     fn backup_moves_across_filesystems() {
         let shm = Path::new("/dev/shm");
-        let local = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        // Not the build directory: it may be elsewhere (CARGO_TARGET_DIR) or missing.
+        let local = std::env::temp_dir();
         let device = |p: &Path| fs::metadata(p).map(|m| m.dev()).ok();
         if !shm.is_dir() || device(shm) == device(&local) {
-            return; // needs two filesystems (Linux /dev/shm and the build dir)
+            return; // needs two filesystems (Linux /dev/shm and the temporary directory)
         }
         let src = tempfile::tempdir_in(shm).unwrap();
         let dst = tempfile::tempdir_in(&local).unwrap();
