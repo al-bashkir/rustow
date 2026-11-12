@@ -55,6 +55,26 @@ fn template_link_to_copy_keeps_an_edit_made_through_the_link() {
     assert_eq!(read(&fx.home_path(".t")), "rendered\n");
 }
 
+/// A cache entry that only feeds a copy is not guarded: a change made to
+/// it outside rustow is refreshed, not reported as a user edit.
+#[test]
+fn copied_template_refreshes_a_changed_cache_entry() {
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[[template_rules]]\nsource = \".t.tmpl\"\nmode = \"0644\"\n",
+    );
+    fx.write(".t.tmpl", "rendered\n");
+    fx.ok(&["apply"]);
+    let cache = files_below(&fx.repo.join(".rustowcache/rendered"));
+    assert_eq!(cache.len(), 1, "{cache:?}");
+    fs::write(&cache[0], "stale\n").unwrap();
+    let out = fx.ok(&["apply"]);
+    assert!(out.stdout.contains("1 changed"), "{out:?}");
+    assert_eq!(read(&cache[0]), "rendered\n");
+    assert_eq!(read(&fx.home_path(".t")), "rendered\n");
+}
+
 #[test]
 fn decrypt_link_to_copy_keeps_an_edit_made_through_the_link() {
     let fx = Fixture::new();

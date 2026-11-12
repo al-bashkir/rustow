@@ -309,6 +309,42 @@ fn apply_reports_orphaned_destinations_and_keeps_them() {
     );
 }
 
+/// Only a foreign symlink that points nowhere is called broken.
+#[test]
+fn only_a_dangling_foreign_symlink_is_called_broken() {
+    let fx = two();
+    fx.write_home("other", "x\n");
+    std::os::unix::fs::symlink("other", fx.home_path(".bashrc")).unwrap();
+    std::os::unix::fs::symlink("gone", fx.home_path(".zshrc")).unwrap();
+    let out = fx.run(&["apply", "--on-conflict", "skip"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let line = |dest| out.stdout.lines().find(|l| l.contains(dest)).unwrap_or_default();
+    assert!(line("~/.zshrc").contains("broken symlink to gone"), "{out:?}");
+    assert!(line("~/.bashrc").contains("not managed by rustow"), "{out:?}");
+    assert!(!line("~/.bashrc").contains("broken"), "{out:?}");
+}
+
+/// Only a decision that writes needs a writable directory: a link that is
+/// already deployed stays clean after its directory becomes read-only.
+#[test]
+fn deployed_link_in_a_read_only_directory_stays_clean() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP: root can write everywhere");
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".ro/x", "x");
+    fx.ok(&["apply"]);
+    let ro = fx.home_path(".ro");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o555)).unwrap();
+    let out = fx.run(&["apply"]);
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("0 changed"), "{out:?}");
+    assert_eq!(read(&fx.home_path(".ro/x")), "x");
+}
+
 /// Orphans follow the path arguments. A file source replaced by a
 /// directory is still an orphan: only a fold record is known by its directory.
 #[test]

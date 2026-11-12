@@ -225,6 +225,21 @@ fn unfold_waits_until_every_source_below_it_is_deployed() {
     }
 }
 
+/// A held unfold stops only the sources below the folded link; the other
+/// sources of the same run still deploy.
+#[test]
+fn held_unfold_leaves_other_sources_deployable() {
+    let fx = nvim(&format!("{FOLD}[vars]\nx = \"y\"\n"));
+    fx.ok(&["apply"]);
+    fx.write(".config/nvim/local.lua.tmpl", "{{ vars.x }}\n");
+    fx.write(".gitconfig.tmpl", "{{ vars.x }}\n");
+    let out = fx.run(&["template", "apply", "--on-conflict", "skip"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("rustow apply .config/nvim"), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/nvim")), "{out:?}");
+    assert_eq!(read(&fx.home_path(".gitconfig")), "y\n", "{out:?}");
+}
+
 #[test]
 fn link_does_not_unfold_around_a_newly_registered_copy() {
     let fx = nvim(FOLD);
