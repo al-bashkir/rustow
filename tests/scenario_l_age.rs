@@ -18,6 +18,8 @@ fn enc_defaults_to_age_and_retires_plaintext() {
     fx.write(".ssh/private.conf", "Host secret\n");
     let out = fx.ok(&["enc", ".ssh/private.conf"]);
     assert!(out.stdout.contains(".ssh/private.conf.age"), "{out:?}");
+    assert!(!out.stdout.contains("not verified"), "the identity verifies: {out:?}");
+    assert!(out.stdout.lines().any(|l| l == "1 changed, 0 unchanged"), "{out:?}");
     assert!(out.stderr.contains("Git history"), "history warning: {out:?}");
     let ct = fx.repo.join(".ssh/private.conf.age");
     assert!(fs::read(&ct).unwrap().starts_with(b"age-encryption.org/v1"));
@@ -38,6 +40,17 @@ fn enc_with_public_recipients_only_and_decrypt_needs_identity() {
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stdout.contains("no age identities configured"), "{out:?}");
     assert!(!out.stdout.contains("t0k3n"));
+}
+
+#[test]
+fn enc_with_only_a_non_matching_identity_is_not_verified() {
+    let fx = Fixture::new();
+    let (key, other) = (fx.age_key("main"), fx.age_key("other"));
+    fx.age_config(&[&key], &[&other], "");
+    fx.write("token", "t0k3n\n");
+    let out = fx.ok(&["enc", "token"]);
+    assert!(out.stdout.contains("not verified"), "{out:?}");
+    assert_eq!(fx.age_decrypt(&fx.repo.join("token.age"), &key), "t0k3n\n");
 }
 
 #[test]
@@ -149,8 +162,23 @@ fn edit_unchanged_does_not_rewrite() {
     let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "true")]);
     assert_eq!(out.code, 0, "{out:?}");
     assert!(out.stdout.contains("unchanged"), "{out:?}");
+    assert!(out.stdout.lines().any(|l| l == "0 changed, 1 unchanged"), "{out:?}");
     assert_eq!(fs::read(fx.repo.join("s.age")).unwrap(), before);
     let _ = key;
+}
+
+/// The state record of the ciphertext shows a swapped recipient that the
+/// age format hides (the recipient count stays one).
+#[test]
+fn edit_with_state_reencrypts_to_a_swapped_recipient() {
+    let (fx, key) = keyed();
+    fx.write("s", "x\n");
+    fx.ok(&["enc", "s"]);
+    let second = fx.age_key("second");
+    fx.age_config(&[&second], &[&key, &second], "");
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "true")]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(fx.age_decrypt(&fx.repo.join("s.age"), &second), "x\n");
 }
 
 #[test]
@@ -178,6 +206,7 @@ fn reencrypt_flag_forces_rewrite() {
     let before = fs::read(fx.repo.join("s.age")).unwrap();
     let out = fx.run_env(&["enc", "edit", "--reencrypt", "s.age"], &[("VISUAL", "true")]);
     assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.lines().any(|l| l == "1 changed, 0 unchanged"), "{out:?}");
     assert_ne!(fs::read(fx.repo.join("s.age")).unwrap(), before);
     assert_eq!(fx.age_decrypt(&fx.repo.join("s.age"), &key), "x\n");
 }

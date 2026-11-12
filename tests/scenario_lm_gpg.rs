@@ -21,11 +21,40 @@ fn setup(extra: &str) -> Option<(Fixture, GpgHome)> {
 fn enc_backend_flag_creates_gpg_that_plain_gpg_decrypts() {
     let Some((fx, home)) = setup("") else { return };
     fx.write("secret.conf", "gpg secret\n");
-    fx.ok(&["enc", "--backend", "gpg", "secret.conf"]);
+    let out = fx.ok(&["enc", "--backend", "gpg", "secret.conf"]);
+    assert!(!out.stdout.contains("not verified"), "the secret key verifies: {out:?}");
     let ct = fx.repo.join("secret.conf.gpg");
     assert!(!fx.repo.join("secret.conf").exists());
     assert!(!fx.repo.join("secret.conf.age").exists());
     assert_eq!(home.decrypt(&ct), "gpg secret\n");
+}
+
+/// A locked key encrypts, but unattended it cannot verify: the output says so.
+#[test]
+fn enc_with_a_locked_key_is_not_verified() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    fx.gpg_config(&home, &[&home.fpr], "");
+    fx.write("p", "plain\n");
+    let out = fx.ok(&["enc", "--backend", "gpg", "p"]);
+    assert!(out.stdout.contains("not verified"), "{out:?}");
+    assert_eq!(home.decrypt(&fx.repo.join("p.gpg")), "plain\n");
+}
+
+/// Without encryption.gpg.homedir, $GNUPGHOME selects the keyring.
+#[test]
+fn gnupghome_selects_the_keyring_without_a_configured_homedir() {
+    let Some((fx, home)) = setup("") else { return };
+    let config = format!("version = 1\n[encryption.gpg]\nrecipients = [\"{}\"]\n", home.fpr);
+    fx.write(".rustow.toml", &config);
+    fx.write("p", "plain\n");
+    let dir = home.dir.display().to_string();
+    let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("GNUPGHOME", &dir)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(home.decrypt(&fx.repo.join("p.gpg")), "plain\n");
 }
 
 #[test]
