@@ -42,8 +42,8 @@ pub enum Owner {
     Id(u32),
 }
 
-/// Explicit file metadata of a template rule; a rule sets at least one
-/// field. The empty value is only for a system template without a rule.
+/// Explicit file metadata of a copy, from its `[[files]]` or
+/// `[[template_rules]]` entry. A template rule sets at least one field.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Metadata {
     pub mode: Option<u32>,
@@ -118,8 +118,9 @@ pub struct Config {
     pub encryption: Encryption,
     /// User variables. After `apply_host`, with the matching rules merged in.
     pub vars: serde_json::Map<String, serde_json::Value>,
-    /// `[[files]]`: sources registered for copy deployment in `rustow.toml`.
-    pub files: BTreeSet<RelPath>,
+    /// `[[files]]`: sources registered for copy deployment in `rustow.toml`,
+    /// with their metadata (empty when the entry sets none).
+    pub files: BTreeMap<RelPath, Metadata>,
     /// Sources that `rustow file add` registered on this machine: the
     /// state's `files`, set by `Context::load_state`. Empty until then.
     pub added_files: BTreeSet<RelPath>,
@@ -170,7 +171,7 @@ impl Default for Config {
             template_extension: ".tmpl".into(),
             encryption: Encryption::default(),
             vars: Default::default(),
-            files: BTreeSet::new(),
+            files: BTreeMap::new(),
             added_files: BTreeSet::new(),
             template_rules: BTreeMap::new(),
             file_rules: BTreeMap::new(),
@@ -194,8 +195,8 @@ impl Config {
     pub fn parse(text: &str) -> Result<Config> {
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| toml_error(text, e.message(), e.span()))?;
         check_header(&raw)?;
-        let files = parse_files(&raw.files)?;
-        let template_rules = parse_template_rules(raw.template_rules)?;
+        let files = parse_entries(raw.files, "files", false)?;
+        let template_rules = parse_entries(raw.template_rules, "template_rules", true)?;
         let file_rules = parse_file_rules(&raw.file_rules)?;
         let global_rules = parse_global_rules(raw.global_rules)?;
         Ok(Config {
@@ -212,9 +213,13 @@ impl Config {
         })
     }
 
-    /// True when `[[files]]` or `rustow file add` registers `path` for copy deployment.
-    pub fn registers(&self, path: &RelPath) -> bool {
-        self.files.contains(path) || self.added_files.contains(path)
+    /// The metadata of `path` when `[[files]]` or `rustow file add` registers
+    /// it for copy deployment. A `rustow file add` registration has none.
+    pub fn registration(&self, path: &RelPath) -> Option<Metadata> {
+        self.files
+            .get(path)
+            .cloned()
+            .or_else(|| self.added_files.contains(path).then(Metadata::default))
     }
 
     /// Merges the `vars` of each `[[global_rules]]` entry that matches
@@ -288,15 +293,21 @@ fn check_header(raw: &Raw) -> Result<()> {
     validate_extension(&raw.templates.extension)
 }
 
-fn parse_files(raw: &[RawFile]) -> Result<BTreeSet<RelPath>> {
-    let mut files = BTreeSet::new();
-    for (i, f) in raw.iter().enumerate() {
-        let path = RelPath::parse(&f.source).map_err(|e| invalid(&format!("files[{i}].source: {e}")))?;
-        if !files.insert(path) {
-            return Err(invalid(&format!("duplicate [[files]] entry for '{}'", f.source)));
+/// The `[[files]]` or `[[template_rules]]` entries (`table`) by source.
+/// With `need_meta`, each entry must set at least one of mode, owner, group.
+fn parse_entries(raw: Vec<RawEntry>, table: &str, need_meta: bool) -> Result<BTreeMap<RelPath, Metadata>> {
+    let mut entries = BTreeMap::new();
+    for (i, r) in raw.into_iter().enumerate() {
+        let bad = |e: String| invalid(&format!("{table}[{i}]: {e}"));
+        let (path, meta) = r.validate().map_err(bad)?;
+        if need_meta && meta == Metadata::default() {
+            return Err(bad(format!("'{path}' sets none of mode, owner or group")));
+        }
+        if entries.insert(path.clone(), meta).is_some() {
+            return Err(invalid(&format!("duplicate [[{table}]] entry for '{path}'")));
         }
     }
-    Ok(files)
+    Ok(entries)
 }
 
 fn parse_file_rules(raw: &[RawFileRule]) -> Result<BTreeMap<RelPath, bool>> {
@@ -308,19 +319,6 @@ fn parse_file_rules(raw: &[RawFileRule]) -> Result<BTreeMap<RelPath, bool>> {
         }
     }
     Ok(rules)
-}
-
-fn parse_template_rules(raw: Vec<RawRule>) -> Result<BTreeMap<RelPath, Metadata>> {
-    let mut template_rules = BTreeMap::new();
-    for (i, r) in raw.into_iter().enumerate() {
-        let (path, meta) = r
-            .validate()
-            .map_err(|e| invalid(&format!("template_rules[{i}]: {e}")))?;
-        if template_rules.insert(path.clone(), meta).is_some() {
-            return Err(invalid(&format!("duplicate [[template_rules]] entry for '{path}'")));
-        }
-    }
-    Ok(template_rules)
 }
 
 fn invalid(msg: &str) -> Error {
@@ -442,9 +440,9 @@ struct Raw {
     #[serde(default)]
     vars: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
-    files: Vec<RawFile>,
+    files: Vec<RawEntry>,
     #[serde(default)]
-    template_rules: Vec<RawRule>,
+    template_rules: Vec<RawEntry>,
     #[serde(default)]
     file_rules: Vec<RawFileRule>,
     #[serde(default)]
@@ -488,22 +486,17 @@ impl Default for RawTemplates {
     }
 }
 
+/// One `[[files]]` or `[[template_rules]]` entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawFile {
-    source: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRule {
+struct RawEntry {
     source: String,
     mode: Option<String>,
     owner: Option<String>,
     group: Option<String>,
 }
 
-impl RawRule {
+impl RawEntry {
     fn validate(self) -> std::result::Result<(RelPath, Metadata), String> {
         let path = RelPath::parse(&self.source).map_err(|e| format!("source: {e}"))?;
         let meta = Metadata {
@@ -511,9 +504,6 @@ impl RawRule {
             owner: self.owner.as_deref().map(|o| parse_owner("owner", o)).transpose()?,
             group: self.group.as_deref().map(|g| parse_owner("group", g)).transpose()?,
         };
-        if meta.mode.is_none() && meta.owner.is_none() && meta.group.is_none() {
-            return Err(format!("'{path}' sets none of mode, owner or group"));
-        }
         Ok((path, meta))
     }
 }
@@ -643,7 +633,10 @@ group = "root"
         assert!(cfg.present);
         assert_eq!(cfg.vars["git"]["user_name"], "Example User");
         assert_eq!(cfg.files.len(), 3);
-        assert!(cfg.files.contains(&RelPath::parse(".ssh/private.conf.age").unwrap()));
+        assert!(
+            cfg.files
+                .contains_key(&RelPath::parse(".ssh/private.conf.age").unwrap())
+        );
         let root = &cfg.template_rules[&RelPath::parse("rustowroot/etc/example/config.conf.tmpl").unwrap()];
         assert_eq!(root.mode, Some(0o640));
         assert_eq!(root.owner, Some(Owner::Name("root".into())));
@@ -763,6 +756,25 @@ group = "root"
                 "{e}"
             );
         }
+    }
+
+    /// A `[[files]]` entry takes the keys of a template rule, but needs none of them.
+    #[test]
+    fn files_entries_take_optional_metadata() {
+        let c = Config::parse(
+            "version = 1\n[[files]]\nsource = \"a\"\n\
+             [[files]]\nsource = \"b\"\nmode = \"0600\"\nowner = \"0\"\ngroup = \"wheel\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.files[&RelPath::parse("a").unwrap()], Metadata::default());
+        let want = Metadata {
+            mode: Some(0o600),
+            owner: Some(Owner::Id(0)),
+            group: Some(Owner::Name("wheel".into())),
+        };
+        assert_eq!(c.files[&RelPath::parse("b").unwrap()], want);
+        let e = err("version = 1\n[[files]]\nsource = \"a\"\nmode = \"0200\"\n");
+        assert!(e.contains("files[0]: mode \"0200\" lacks owner read"), "{e}");
     }
 
     #[test]

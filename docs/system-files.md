@@ -12,7 +12,7 @@ The `rustowroot` directory itself is never deployed.
 
 Run rustow as yourself. Your HOME, your state, your keys and your cache stay in use. When a system file needs root, rustow asks `sudo` for it:
 
-- rustow plans as you. A system file needs sudo when it must change and you cannot write its directory, or when it must belong to another user or group (for example a root-owned file in `/etc`, or `owner`/`group` in a template rule).
+- rustow plans as you. A system file needs sudo when it must change and you cannot write its directory, or when it must belong to another user or group (for example a root-owned file in `/etc`, or `owner`/`group` in a template rule or a `[[files]]` entry).
 - `apply`, `file apply` and `template apply` write the other items first. Then they run `sudo rustow __sudo-helper` once for all system files that need it. sudo asks for your password on the terminal. rustow renders and decrypts as you, writes the cache entry as you, and sends the planned content to the helper on a pipe. The helper checks each destination again, writes it with the same code as a normal run, and verifies it. Your state records the result.
 - `undeploy` removes such a system file, and the empty directories that rustow created for it, through the helper in the same way.
 - The plan and the dry run show these items with "via sudo". A dry run, `status` and `diff` never run sudo.
@@ -32,7 +32,7 @@ A system file never deploys as a symlink. A symlink into a private cache is unus
 
 - A template without a `[[template_rules]]` entry deploys as `template+copy`. A new file gets mode 0644, or 0600 when the template is encrypted. An update keeps the mode, owner and group of the existing file.
 - A template with a rule deploys as `template+copy` with the metadata of the rule. Settings in the template's [meta block](templates.md#meta-block), such as `{%- meta.owner = "root" %}`, do the same without a rule.
-- An ordinary or encrypted file must be registered with `rustow file add` or in `[[files]]`. It then deploys as `copy` or `decrypt+copy`. `rustow file add` writes the state of the user who runs it. Run it as the user who runs `apply`, or use `[[files]]`. See [file management](file-management.md#state-or-rustowtoml).
+- An ordinary or encrypted file must be registered with `rustow file add` or in `[[files]]`. It then deploys as `copy` or `decrypt+copy`. A `[[files]]` entry can set `mode`, `owner` and `group`, as a template rule does. `rustow file add` writes the state of the user who runs it. Run it as the user who runs `apply`, or use `[[files]]`. See [file management](file-management.md#state-or-rustowtoml).
 - An ordinary or encrypted file that is not registered does not deploy. rustow skips it and deploys the other sources. The exit code does not change. The warning tells you what to do: "warning: rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`". `status` shows the file as SKIPPED. You can leave a file unregistered on purpose.
 - A command that names such a file, for example `rustow apply rustowroot/etc/x`, stops with exit 2: "source 'rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`". A directory argument, for example `rustowroot/etc/`, only warns.
 - `rustow file add` works also while other system files are not registered yet.
@@ -60,6 +60,12 @@ rustow never folds directories in `rustowroot/`.
 [[template_rules]]
 source = "rustowroot/etc/example/example.conf.tmpl"
 mode = "0644"
+# owner = "root"
+# group = "root"
+
+[[files]]
+source = "rustowroot/etc/example/app.conf"
+mode = "0640"
 # owner = "root"
 # group = "root"
 ```

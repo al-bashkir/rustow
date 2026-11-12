@@ -77,7 +77,7 @@ pub fn add_file(text: &str, source: &RelPath) -> Result<Option<String>> {
         text.to_owned()
     };
     let config = Config::parse(&base)?;
-    if config.files.contains(source) {
+    if config.files.contains_key(source) {
         return Ok(None);
     }
     let mut doc = parse_doc(&base)?;
@@ -110,7 +110,7 @@ fn append_entry(doc: &mut DocumentMut, source: &RelPath) -> Result<()> {
 
 /// Removes every `[[files]]` entry for `source`. `None` when not registered.
 pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
-    if !Config::parse(text)?.files.contains(source) {
+    if !Config::parse(text)?.files.contains_key(source) {
         return Ok(None);
     }
     let mut doc = parse_doc(text)?;
@@ -368,7 +368,7 @@ mod tests {
         assert!(out.starts_with(text), "{out}");
         assert!(out.contains("[[files]]\nsource = \".config/x.json\"\n"), "{out}");
         let cfg = Config::parse(&out).unwrap();
-        assert!(cfg.files.contains(&rel(".config/x.json")));
+        assert!(cfg.files.contains_key(&rel(".config/x.json")));
     }
 
     #[test]
@@ -381,7 +381,7 @@ mod tests {
     fn add_file_to_absent_config_creates_minimal() {
         let out = add_file("", &rel("x")).unwrap().unwrap();
         let cfg = Config::parse(&out).unwrap();
-        assert!(cfg.files.contains(&rel("x")));
+        assert!(cfg.files.contains_key(&rel("x")));
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
         .unwrap();
         let cfg = Config::parse(&out).unwrap();
         assert_eq!(
-            cfg.files.iter().map(RelPath::as_str).collect::<Vec<_>>(),
+            cfg.files.keys().map(RelPath::as_str).collect::<Vec<_>>(),
             ["b"],
             "{out}"
         );
@@ -414,7 +414,7 @@ mod tests {
         let text = "# keep\nversion = 1\n[[files]]\nsource = \"a\"\n\n[[files]]\nsource = \"b\"\n";
         let out = remove_file(text, &rel("a")).unwrap().unwrap();
         let cfg = Config::parse(&out).unwrap();
-        assert_eq!(cfg.files.iter().map(RelPath::as_str).collect::<Vec<_>>(), ["b"]);
+        assert_eq!(cfg.files.keys().map(RelPath::as_str).collect::<Vec<_>>(), ["b"]);
         assert!(out.contains("# keep"), "{out}");
         assert_eq!(remove_file(&out, &rel("a")).unwrap(), None);
         let out = remove_file(&out, &rel("b")).unwrap().unwrap();
@@ -430,12 +430,12 @@ mod tests {
             .unwrap()
             .unwrap();
         let cfg = Config::parse(&out).unwrap();
-        assert!(cfg.files.contains(&rel("a.age")));
+        assert!(cfg.files.contains_key(&rel("a.age")));
         assert_eq!(cfg.template_rules[&rel("t.tmpl.age")].mode, Some(0o600));
         assert_eq!(rename_source(&out, &rel("zzz"), &rel("zzz.age")).unwrap(), None);
         let inline = "version = 1\nfiles = [{ source = \"a\" }]\n";
         let out = rename_source(inline, &rel("a"), &rel("a.gpg")).unwrap().unwrap();
-        assert!(Config::parse(&out).unwrap().files.contains(&rel("a.gpg")), "{out}");
+        assert!(Config::parse(&out).unwrap().files.contains_key(&rel("a.gpg")), "{out}");
     }
 
     #[test]

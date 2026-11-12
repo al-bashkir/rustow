@@ -18,9 +18,9 @@ use crate::state::State;
 /// Cache entry for a source, or `None` for modes that use no cache.
 pub fn entry(ctx: &Context, source: &Source) -> Option<PathBuf> {
     let kind = match source.mode {
-        Mode::Link | Mode::FileCopy => return None,
+        Mode::Link | Mode::FileCopy(_) => return None,
         Mode::TemplateLink(_) | Mode::TemplateCopy(..) => "rendered",
-        Mode::DecryptLink(_) | Mode::DecryptCopy(_) => "decrypted",
+        Mode::DecryptLink(_) | Mode::DecryptCopy(..) => "decrypted",
     };
     let dir = ctx
         .cache_dir

@@ -867,8 +867,8 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
     let record = base_record(source, &bytes);
     match &source.mode {
         Mode::Link => Ok(want_link(path, &source_abs, record)),
-        Mode::FileCopy => Ok(want_file_copy(&source_abs, bytes, record)),
-        Mode::DecryptLink(backend) | Mode::DecryptCopy(backend) => {
+        Mode::FileCopy(meta) => Ok(want_file_copy(&source_abs, bytes, resolve_meta(meta)?, record)),
+        Mode::DecryptLink(backend) | Mode::DecryptCopy(backend, _) => {
             let plaintext = crypto::decrypt(*backend, &source.path, &bytes, ctx)?;
             transformed(ctx, source, path, plaintext, record)
         }
@@ -911,18 +911,16 @@ fn want_link(path: &Path, source_abs: &Path, record: Record) -> Want {
     }
 }
 
-/// A plain copy of the repository source.
-fn want_file_copy(source_abs: &Path, bytes: Vec<u8>, record: Record) -> Want {
+/// A plain copy of the repository source. Without an explicit mode, it
+/// gets the mode of the source.
+fn want_file_copy(source_abs: &Path, bytes: Vec<u8>, meta: FileMeta, record: Record) -> Want {
     let mode = fs::symlink_metadata(source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
     let hash = Hash::of(&bytes);
     let record = Record {
         applied_hash: Some(hash.clone()),
         ..record
     };
-    let desired = Desired::File {
-        hash,
-        meta: FileMeta::default(),
-    };
+    let desired = Desired::File { hash, meta };
     Want {
         desired,
         content: Some(Zeroizing::new(bytes)),
@@ -976,11 +974,8 @@ fn transformed(
         cache_path: Some(cache_path.clone()),
         ..record
     };
-    if source.mode.is_copy() {
-        let meta = match &source.mode {
-            Mode::TemplateCopy(_, m) => resolve_meta(m)?,
-            _ => FileMeta::default(),
-        };
+    if let Some(meta) = source.mode.metadata() {
+        let meta = resolve_meta(meta)?;
         let file_mode = if source.mode.backend().is_some() { 0o600 } else { 0o644 };
         let record = Record {
             meta: Some(meta),

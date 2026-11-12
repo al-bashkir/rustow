@@ -146,9 +146,17 @@ Free-form values. Templates read them as `vars.<name>`. Tables and lists are all
 ```toml
 [[files]]
 source = ".config/example/settings.json"
+
+[[files]]
+source = "rustowroot/etc/example/app.conf"
+mode = "0640"
+owner = "root"
+group = "root"
 ```
 
 Registers a source for copy deployment on every machine. You write this list by hand. `rustow file add` does not write it: it registers the source in the state file of one machine. `rustow file remove` removes an entry from both. See [file management](file-management.md#state-or-rustowtoml). A system file under `rustowroot/` that is not a template must be registered in one of them. See [system files](system-files.md).
+
+An entry can set `mode`, `owner` and `group`, with the same values and checks as a [`[[template_rules]]`](#template_rules) entry. All three are optional. Without `mode`, a new copy gets the mode of the source (0600 for an encrypted source), and an update keeps the mode of the destination. Without `owner` or `group`, the copy belongs to the user who writes it, and an update keeps the owner and group. A `rustow file add` registration sets no metadata. When `[[files]]` lists the source too, the entry wins.
 
 ## `[[template_rules]]`
 

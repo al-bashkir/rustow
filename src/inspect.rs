@@ -362,7 +362,7 @@ fn classify_deploy(d: &Deploy, mode: &Mode, old: Option<&Record>) -> (&'static s
 fn deployed_status(mode: &Mode) -> &'static str {
     match mode {
         Mode::Link | Mode::DecryptLink(_) => "LINKED",
-        Mode::FileCopy | Mode::DecryptCopy(_) => "COPIED",
+        Mode::FileCopy(_) | Mode::DecryptCopy(..) => "COPIED",
         Mode::TemplateLink(_) | Mode::TemplateCopy(..) => "TEMPLATED",
     }
 }
@@ -485,13 +485,18 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
     Ok(i32::from(!findings.is_empty()))
 }
 
-/// Each `[[template_rules]]` owner or group that this system does not know.
+/// Each `[[files]]` or `[[template_rules]]` owner or group that this system does not know.
 fn unknown_ids(ctx: &Context) -> Vec<String> {
     let mut out = Vec::new();
-    for (path, meta) in &ctx.config.template_rules {
-        for (id, group) in [(&meta.owner, false), (&meta.group, true)] {
-            if let Some(Err(why)) = id.as_ref().map(|o| resolve_id(o, group)) {
-                out.push(format!("{CONFIG_FILE}: [[template_rules]] source '{path}': {why}"));
+    for (table, entries) in [
+        ("files", &ctx.config.files),
+        ("template_rules", &ctx.config.template_rules),
+    ] {
+        for (path, meta) in entries {
+            for (id, group) in [(&meta.owner, false), (&meta.group, true)] {
+                if let Some(Err(why)) = id.as_ref().map(|o| resolve_id(o, group)) {
+                    out.push(format!("{CONFIG_FILE}: [[{table}]] source '{path}': {why}"));
+                }
             }
         }
     }

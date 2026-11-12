@@ -229,3 +229,14 @@ fn mixed_directory_with_encrypted_member_never_folds() {
     assert_eq!(read(&fx.home_path(".config/app/secret.conf")), "s\n");
     assert!(!fx.home_path(".config/app/secret.conf.age").exists());
 }
+
+#[test]
+fn registered_ciphertext_takes_the_mode_of_its_entry() {
+    let (fx, key) = keyed("[[files]]\nsource = \".ssh/copied.conf.age\"\nmode = \"0640\"\n");
+    fx.age_encrypt(".ssh/copied.conf.age", "copied secret\n", &[&key]);
+    fx.ok(&["file", "apply"]);
+    let dest = fx.home_path(".ssh/copied.conf");
+    assert!(is_regular(&dest));
+    assert_eq!(read(&dest), "copied secret\n");
+    assert_eq!(mode(&dest), 0o640);
+}

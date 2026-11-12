@@ -59,7 +59,7 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 
 With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a TemplateCopy with empty metadata. A home Link or DecryptLink stays a link source. `app::selected` decides if the command deploys it (`may_link`): only `rustow link <path>`, or a link registration in the state (`State::links`). `app::prepare` adds the registrations for `rustow link <path>`; `unlink` removes them.
 
-`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). A source is registered for copy deployment when `[[files]]` (`Config::files`) or `file add` (`State::files`) lists it. `Context::load_state` copies `State::files` into `Config::added_files`, and `Config::registers` checks both. `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
+`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). A source is registered for copy deployment when `[[files]]` (`Config::files`) or `file add` (`State::files`) lists it. `Context::load_state` copies `State::files` into `Config::added_files`, and `Config::registration` checks both. A copy mode carries the metadata of its `[[files]]` or `[[template_rules]]` entry (`Mode::metadata`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
 
 ## Cache
 

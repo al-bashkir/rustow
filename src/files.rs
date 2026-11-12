@@ -44,7 +44,7 @@ fn discover_registered(ctx: &Context, paths: &[String]) -> Result<Discovery> {
         let rel = RelPath::parse(arg)?;
         let abs = ctx.root.join(rel.as_path());
         if abs.is_file() && abs.canonicalize().is_ok_and(|real| real == abs) {
-            config.files.insert(rel);
+            config.files.entry(rel).or_default();
         }
     }
     discover(&ctx.root, &ctx.ignore, &config, &crate::template::Host::current())
@@ -60,7 +60,7 @@ fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) 
             "'{rel}' is a directory; `rustow file add` takes files"
         )));
     }
-    if ctx.config.files.contains(&rel) || !state.files.insert(rel.clone()) {
+    if ctx.config.files.contains_key(&rel) || !state.files.insert(rel.clone()) {
         return Ok(Change::new(rel.as_str(), "ok", Some("already registered".into())));
     }
     Ok(Change::new(rel.as_str(), "register", None))
@@ -107,10 +107,9 @@ fn unregister(text: &mut String, state: &mut State, arg: &str) -> Result<Change>
 
 pub fn list(ctx: &mut Context, printer: &Printer) -> Result<i32> {
     ctx.load_state()?;
-    let rows: Vec<(String, String, String)> = ctx
-        .config
-        .files
-        .union(&ctx.config.added_files)
+    let paths: std::collections::BTreeSet<&RelPath> = ctx.config.files.keys().chain(&ctx.config.added_files).collect();
+    let rows: Vec<(String, String, String)> = paths
+        .into_iter()
         .map(|path| match classify(path, &ctx.config) {
             Ok(s) => (path.to_string(), printer.path(&ctx.dest_path(&s)), s.mode.shown_label()),
             Err(e) => (path.to_string(), String::new(), format!("invalid: {e}")),

@@ -11,12 +11,13 @@ use crate::template::{Host, TemplateMeta, split_meta};
 
 /// The one final deployment mode of a source. Encrypted templates are
 /// `Template*` with a backend; ordinary links and copies never carry one.
+/// Each copy carries the explicit metadata of its configuration entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     Link,
-    FileCopy,
+    FileCopy(Metadata),
     DecryptLink(Backend),
-    DecryptCopy(Backend),
+    DecryptCopy(Backend, Metadata),
     TemplateLink(Option<Backend>),
     TemplateCopy(Option<Backend>, Metadata),
 }
@@ -24,15 +25,23 @@ pub enum Mode {
 impl Mode {
     pub fn backend(&self) -> Option<Backend> {
         match self {
-            Mode::Link | Mode::FileCopy => None,
-            Mode::DecryptLink(b) | Mode::DecryptCopy(b) => Some(*b),
+            Mode::Link | Mode::FileCopy(_) => None,
+            Mode::DecryptLink(b) | Mode::DecryptCopy(b, _) => Some(*b),
             Mode::TemplateLink(b) | Mode::TemplateCopy(b, _) => *b,
+        }
+    }
+
+    /// The explicit metadata of a copy; None for a symlink.
+    pub fn metadata(&self) -> Option<&Metadata> {
+        match self {
+            Mode::FileCopy(m) | Mode::DecryptCopy(_, m) | Mode::TemplateCopy(_, m) => Some(m),
+            Mode::Link | Mode::DecryptLink(_) | Mode::TemplateLink(_) => None,
         }
     }
 
     /// True when the destination is a regular file rather than a symlink.
     pub fn is_copy(&self) -> bool {
-        matches!(self, Mode::FileCopy | Mode::DecryptCopy(_) | Mode::TemplateCopy(..))
+        self.metadata().is_some()
     }
 
     pub fn is_template(&self) -> bool {
@@ -43,9 +52,9 @@ impl Mode {
     pub fn label(&self) -> &'static str {
         match self {
             Mode::Link => "link",
-            Mode::FileCopy => "copy",
+            Mode::FileCopy(_) => "copy",
             Mode::DecryptLink(_) => "decrypt+link",
-            Mode::DecryptCopy(_) => "decrypt+copy",
+            Mode::DecryptCopy(..) => "decrypt+copy",
             Mode::TemplateLink(_) => "template+link",
             Mode::TemplateCopy(..) => "template+copy",
         }
@@ -105,7 +114,7 @@ impl Selector {
         match self {
             Selector::All => true,
             Selector::Link => *mode == Mode::Link,
-            Selector::File => matches!(mode, Mode::FileCopy | Mode::DecryptCopy(_)),
+            Selector::File => matches!(mode, Mode::FileCopy(_) | Mode::DecryptCopy(..)),
             Selector::Template => mode.is_template(),
         }
     }
@@ -362,7 +371,7 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
         .chain(found.skipped.iter().chain(&found.inactive).map(|s| &s.path))
         .collect();
     let config = crate::config::CONFIG_FILE;
-    let entries = cfg.files.iter().map(|p| (format!("{config} [[files]] entry"), p));
+    let entries = cfg.files.keys().map(|p| (format!("{config} [[files]] entry"), p));
     let entries = entries.chain(
         cfg.template_rules
             .keys()
@@ -469,10 +478,10 @@ fn select_mode(
     backend: Option<Backend>,
     template: bool,
 ) -> std::result::Result<Mode, String> {
-    let registered = cfg.registers(path);
+    let registered = cfg.registration(path);
     let rule = cfg.template_rules.get(path);
     if template {
-        template_mode(backend, registered, rule)
+        template_mode(backend, registered.is_some(), rule)
     } else {
         plain_mode(cfg, backend, registered, rule.is_some())
     }
@@ -498,7 +507,7 @@ fn template_mode(
 fn plain_mode(
     cfg: &Config,
     backend: Option<Backend>,
-    registered: bool,
+    registered: Option<Metadata>,
     has_rule: bool,
 ) -> std::result::Result<Mode, String> {
     if has_rule {
@@ -508,10 +517,10 @@ fn plain_mode(
         ));
     }
     Ok(match (backend, registered) {
-        (None, false) => Mode::Link,
-        (None, true) => Mode::FileCopy,
-        (Some(b), false) => Mode::DecryptLink(b),
-        (Some(b), true) => Mode::DecryptCopy(b),
+        (None, None) => Mode::Link,
+        (None, Some(meta)) => Mode::FileCopy(meta),
+        (Some(b), None) => Mode::DecryptLink(b),
+        (Some(b), Some(meta)) => Mode::DecryptCopy(b, meta),
     })
 }
 
@@ -592,20 +601,35 @@ mod tests {
 
     #[test]
     fn classify_table() {
-        let c = cfg("[[files]]\nsource = \".config/example/settings.json\"\n\
-             [[files]]\nsource = \".ssh/copied.conf.age\"\n\
+        let c = cfg(
+            "[[files]]\nsource = \".config/example/settings.json\"\nmode = \"0600\"\n\
+             [[files]]\nsource = \".ssh/copied.conf.age\"\ngroup = \"wheel\"\n\
              [[files]]\nsource = \".ssh/g.conf.gpg\"\n\
              [[template_rules]]\nsource = \".ssh/config.tmpl\"\nmode = \"0600\"\n\
-             [[template_rules]]\nsource = \".x.json.tmpl.gpg\"\nowner = \"0\"\n");
+             [[template_rules]]\nsource = \".x.json.tmpl.gpg\"\nowner = \"0\"\n",
+        );
         let meta600 = c.template_rules[&rel(".ssh/config.tmpl")].clone();
         let meta_owner = c.template_rules[&rel(".x.json.tmpl.gpg")].clone();
+        let wheel = Metadata {
+            group: Some(crate::config::Owner::Name("wheel".into())),
+            ..Metadata::default()
+        };
         assert_eq!(mode_of(".bashrc", &c), Mode::Link);
-        assert_eq!(mode_of(".config/example/settings.json", &c), Mode::FileCopy);
+        assert_eq!(
+            mode_of(".config/example/settings.json", &c),
+            Mode::FileCopy(meta600.clone())
+        );
         assert_eq!(mode_of(".gitconfig.tmpl", &c), Mode::TemplateLink(None));
         assert_eq!(mode_of(".ssh/config.tmpl", &c), Mode::TemplateCopy(None, meta600));
         assert_eq!(mode_of(".ssh/private.conf.age", &c), Mode::DecryptLink(Backend::Age));
-        assert_eq!(mode_of(".ssh/copied.conf.age", &c), Mode::DecryptCopy(Backend::Age));
-        assert_eq!(mode_of(".ssh/g.conf.gpg", &c), Mode::DecryptCopy(Backend::Gpg));
+        assert_eq!(
+            mode_of(".ssh/copied.conf.age", &c),
+            Mode::DecryptCopy(Backend::Age, wheel)
+        );
+        assert_eq!(
+            mode_of(".ssh/g.conf.gpg", &c),
+            Mode::DecryptCopy(Backend::Gpg, Metadata::default())
+        );
         assert_eq!(mode_of(".s.json.tmpl.age", &c), Mode::TemplateLink(Some(Backend::Age)));
         assert_eq!(
             mode_of(".x.json.tmpl.gpg", &c),
@@ -630,7 +654,7 @@ mod tests {
             Mode::TemplateCopy(Some(Backend::Age), none)
         );
         assert_eq!(mode_of("rustowroot/etc/r.tmpl", &c), Mode::TemplateCopy(None, rule));
-        assert_eq!(mode_of("rustowroot/etc/c", &c), Mode::FileCopy);
+        assert_eq!(mode_of("rustowroot/etc/c", &c), Mode::FileCopy(Metadata::default()));
         for p in ["rustowroot/etc/l", "rustowroot/etc/l.gpg"] {
             assert_eq!(
                 classify(&rel(p), &c).unwrap_err(),
@@ -700,9 +724,12 @@ mod tests {
             cfg("[[template_rules]]\nsource = \"a.tmpl\"\nmode = \"0600\"\n").template_rules[&rel("a.tmpl")].clone();
         let cases = [
             (Mode::Link, "link"),
-            (Mode::FileCopy, "copy"),
+            (Mode::FileCopy(Metadata::default()), "copy"),
             (Mode::DecryptLink(Backend::Age), "decrypt(age)+link"),
-            (Mode::DecryptCopy(Backend::Gpg), "decrypt(gpg)+copy"),
+            (
+                Mode::DecryptCopy(Backend::Gpg, Metadata::default()),
+                "decrypt(gpg)+copy",
+            ),
             (Mode::TemplateLink(None), "template+link"),
             (Mode::TemplateLink(Some(Backend::Gpg)), "decrypt(gpg)+template+link"),
             (
@@ -735,12 +762,17 @@ mod tests {
         assert!(Selector::Link.includes(&Mode::Link));
         assert!(!Selector::Link.includes(&Mode::DecryptLink(Backend::Age)));
         assert!(!Selector::Link.includes(&tl));
-        assert!(Selector::File.includes(&Mode::FileCopy));
-        assert!(Selector::File.includes(&Mode::DecryptCopy(Backend::Age)));
+        assert!(Selector::File.includes(&Mode::FileCopy(Metadata::default())));
+        assert!(Selector::File.includes(&Mode::DecryptCopy(Backend::Age, Metadata::default())));
         assert!(!Selector::File.includes(&Mode::DecryptLink(Backend::Age)));
         assert!(Selector::Template.includes(&tl));
-        assert!(!Selector::Template.includes(&Mode::FileCopy));
-        for m in [Mode::Link, Mode::FileCopy, Mode::DecryptLink(Backend::Gpg), tl] {
+        assert!(!Selector::Template.includes(&Mode::FileCopy(Metadata::default())));
+        for m in [
+            Mode::Link,
+            Mode::FileCopy(Metadata::default()),
+            Mode::DecryptLink(Backend::Gpg),
+            tl,
+        ] {
             assert!(Selector::All.includes(&m));
         }
     }

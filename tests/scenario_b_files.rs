@@ -366,3 +366,57 @@ fn file_remove_keeps_comments_above_the_entry() {
     assert!(!twice.contains("[[files]]"), "{twice}");
     fx.ok(&["check"]);
 }
+
+/// A `[[files]]` entry sets mode, owner and group, as a `[[template_rules]]`
+/// entry does, for home and system files. Without them, the copy keeps the
+/// source mode (see above).
+#[test]
+fn files_entry_sets_mode_owner_and_group() {
+    use std::os::unix::fs::MetadataExt;
+    let uid = nix::unistd::geteuid().as_raw();
+    let gid = nix::unistd::getegid().as_raw();
+    let group = nix::unistd::Group::from_gid(nix::unistd::getegid())
+        .unwrap()
+        .unwrap()
+        .name;
+    let config = |mode: &str| {
+        format!(
+            "version = 1\n[[files]]\nsource = \"{SRC}\"\nmode = \"{mode}\"\nowner = \"{uid}\"\ngroup = \"{group}\"\n\
+             [[files]]\nsource = \"rustowroot/etc/app.conf\"\nmode = \"0640\"\n"
+        )
+    };
+    let fx = Fixture::new();
+    fx.write(SRC, "{}\n");
+    fx.write("rustowroot/etc/app.conf", "a\n");
+    fx.write("rustow.toml", &config("0600"));
+    fx.ok(&["file", "apply"]);
+    let dest = fx.home_path(SRC);
+    assert!(is_regular(&dest));
+    assert_eq!(mode(&dest), 0o600);
+    let meta = fs::metadata(&dest).unwrap();
+    assert_eq!((meta.uid(), meta.gid()), (uid, gid));
+    assert_eq!(mode(&fx.root_path("etc/app.conf")), 0o640);
+    // A metadata-only change rewrites no content.
+    fx.write("rustow.toml", &config("0644"));
+    let out = fx.ok(&["apply"]);
+    assert!(out.stdout.contains("metadata"), "{out:?}");
+    assert_eq!(mode(&dest), 0o644);
+    assert!(fx.ok(&["apply"]).stdout.contains("0 changed"));
+}
+
+/// `check` finds an unknown name in a `[[files]]` entry before `apply` fails on it.
+#[test]
+fn check_reports_unknown_owner_in_files_entry() {
+    let fx = Fixture::new();
+    fx.write(SRC, "{}\n");
+    fx.write(
+        "rustow.toml",
+        &format!("version = 1\n[[files]]\nsource = \"{SRC}\"\nowner = \"nosuchuser\"\n"),
+    );
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    let want = format!("rustow.toml: [[files]] source '{SRC}': unknown user 'nosuchuser'");
+    assert!(out.stdout.lines().any(|l| l == format!("problem: {want}")), "{out:?}");
+    assert_eq!(fx.run(&["apply"]).code, 4);
+    assert!(!fx.home_path(SRC).exists());
+}
