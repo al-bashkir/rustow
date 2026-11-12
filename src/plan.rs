@@ -566,9 +566,10 @@ fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&R
     Ok(Located::At(path, missing_dirs))
 }
 
-/// A symlink, in any scope, must point only at a file that nobody but
-/// root or the destination directory's owner can change: the cache entry
-/// of a cache-backed link, or the repository source of an ordinary link.
+/// A symlink must point only at a file that nobody but root or the
+/// destination directory's owner can change: the cache entry of a
+/// cache-backed link, or the repository source of an ordinary link. Only
+/// home links reach this check; the root scope never yields a link mode.
 fn check_link_trust(
     ctx: &Context,
     source: &Source,
