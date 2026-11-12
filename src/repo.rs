@@ -312,9 +312,40 @@ fn internal_dirs(root: &Path, dirs: &[(&str, &PathBuf)]) -> Result<Vec<RelPath>>
         if first == crate::ignore::ROOT_DIR || first == ".git" {
             return Err(bad("must not be inside .rustowroot or .git"));
         }
+        check_own_contents(dir).map_err(|why| bad(&why))?;
         out.push(rel);
     }
     Ok(out)
+}
+
+/// An in-repository internal directory may hold only rustow's entries:
+/// anything else would be a source that the built-in exclusion hides.
+fn check_own_contents(dir: &Path) -> std::result::Result<(), String> {
+    // Absent (or unreadable) directories hold nothing to hide; writes report the rest.
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !is_own_entry(&name) {
+            return Err(format!(
+                "holds '{name}', which is not rustow's; an in-repository cache or state directory \
+                 may hold only rustow's own files"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Top-level names rustow writes in a cache or state directory.
+fn is_own_entry(name: &str) -> bool {
+    let repo_id = |stem: &str| stem.len() == 16 && stem.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    matches!(name, "rendered" | "decrypted" | "edit" | "backups" | "cache")
+        || name.starts_with(crate::fsops::TEMP_PREFIX)
+        || [".json", ".lock"]
+            .iter()
+            .any(|ext| name.strip_suffix(ext).is_some_and(repo_id))
 }
 
 /// The form of `path` that compares with the canonical `root`. A path
@@ -521,6 +552,32 @@ mod tests {
         assert_eq!(dirs.state_dir, root.join("st"));
         let inside: Vec<&str> = dirs.inside.iter().map(RelPath::as_str).collect();
         assert_eq!(inside, ["var/c", "st"]);
+    }
+
+    #[test]
+    fn own_entries_are_cache_state_and_temp_names() {
+        for name in [
+            "rendered",
+            "decrypted",
+            "edit",
+            "backups",
+            "cache",
+            "0123456789abcdef.json",
+            "0123456789abcdef.lock",
+            ".rustow-tmp-Ab12Cd",
+        ] {
+            assert!(is_own_entry(name), "{name}");
+        }
+        for name in [
+            "nvim",
+            "old.json",
+            "0123456789ABCDEF.json",
+            "0123456789abcdef",
+            "x.lock",
+            ".rustow-x",
+        ] {
+            assert!(!is_own_entry(name), "{name}");
+        }
     }
 
     #[test]

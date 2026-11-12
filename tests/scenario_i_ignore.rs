@@ -48,8 +48,8 @@ fn configured_in_repo_cache_and_state_excluded() {
         ".rustow.toml",
         "version = 1\n[defaults]\ncache_dir = \"var/cache\"\nstate_dir = \"var/state\"\n",
     );
-    fx.write("var/cache/old", "c");
-    fx.write("var/state/old.json", "s");
+    fx.write("var/cache/rendered/old", "c");
+    fx.write("var/state/0123456789abcdef.json", "s");
     fx.write("var/other", "deployable");
     fx.ok(&["apply"]);
     assert!(!fx.home_path("var/cache").exists());
@@ -88,6 +88,63 @@ fn ignore_applies_to_root_relative_files_and_templates() {
     assert!(!fx.root_path("etc/secret.conf").exists());
     assert!(is_symlink(&fx.root_path("etc/public.conf")));
     assert!(!fx.home_path(".gitconfig").exists());
+}
+
+#[test]
+fn internal_dir_that_overlaps_sources_is_a_configuration_error() {
+    for key in ["cache_dir", "state_dir"] {
+        let fx = Fixture::new();
+        fx.write(
+            ".rustow.toml",
+            &format!("version = 1\n[defaults]\n{key} = \".config\"\n"),
+        );
+        fx.write(".config/nvim/init.lua", "x");
+        for cmd in ["check", "status", "apply", "init"] {
+            let out = fx.run(&[cmd]);
+            assert_eq!(out.code, 2, "{key} {cmd}: {out:?}");
+            assert!(
+                out.stderr.contains(key) && out.stderr.contains("nvim"),
+                "{key} {cmd}: {out:?}"
+            );
+        }
+        assert!(!fx.home_path(".config").exists());
+    }
+    for dir in [".", "./", "~/dotfiles", ".rustowroot", ".rustowroot/c", ".git/c"] {
+        let fx = Fixture::new();
+        fx.write(
+            ".rustow.toml",
+            &format!("version = 1\n[defaults]\ncache_dir = \"{dir}\"\n"),
+        );
+        let out = fx.run(&["check"]);
+        assert_eq!(out.code, 2, "{dir}: {out:?}");
+        assert!(out.stderr.contains("cache_dir"), "{dir}: {out:?}");
+    }
+}
+
+#[test]
+fn internal_dir_may_hold_rustow_entries() {
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[defaults]\ncache_dir = \"var\"\nstate_dir = \"var\"\n",
+    );
+    for name in [
+        "rendered/a/b/x",
+        "decrypted/a/b/y",
+        "edit/edit-Ab12Cd/.lock",
+        "backups/0123456789abcdef/x",
+        "cache/rendered/z",
+        "0123456789abcdef.json",
+        "0123456789abcdef.lock",
+        ".rustow-tmp-Ab12Cd",
+    ] {
+        fx.write(&format!("var/{name}"), "x");
+    }
+    fx.write(".bashrc", "b");
+    fx.ok(&["check"]);
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+    assert!(!fx.home_path("var").exists());
 }
 
 #[test]
