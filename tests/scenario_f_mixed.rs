@@ -59,8 +59,8 @@ fn directory_with_a_skipped_source_never_folds() {
 }
 
 #[test]
-fn fold_off_by_default() {
-    let fx = nvim("version = 1\n");
+fn fold_off_when_disabled() {
+    let fx = nvim("version = 1\n[defaults]\nfold_directories = false\n");
     fx.ok(&["apply"]);
     assert!(fs::symlink_metadata(fx.home_path(".config/nvim")).unwrap().is_dir());
     assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")));
@@ -143,7 +143,7 @@ fn diff_json_shows_unfold_and_collision_as_text() {
 fn unfold_when_folding_is_turned_off() {
     let fx = nvim(FOLD);
     fx.ok(&["apply"]);
-    fx.write(".rustow.toml", "version = 1\n");
+    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.ok(&["apply"]);
     assert!(fs::symlink_metadata(fx.home_path(".config/nvim")).unwrap().is_dir());
     assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")));

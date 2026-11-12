@@ -6,8 +6,10 @@ use common::*;
 use std::fs;
 use std::path::PathBuf;
 
+/// Per-file links: folding is off, so each file gets its own symlink.
 fn flat() -> Fixture {
     let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.write(".bashrc", "# bash\n");
     fx.write(".config/nvim/init.lua", "-- nvim\n");
     fx
@@ -192,6 +194,7 @@ fn unsafe_ancestor_symlink_blocks() {
 #[test]
 fn no_marker_means_no_repository() {
     let mut fx = flat();
+    fs::remove_file(fx.repo.join(".rustow.toml")).unwrap();
     fx.env_repo = false;
     fx.cwd = fx.repo.join(".config/nvim");
     for args in [&["apply", "init.lua"][..], &[][..]] {
@@ -206,7 +209,7 @@ fn no_marker_means_no_repository() {
     );
     let repo = fx.repo.to_str().unwrap().to_owned();
     fx.ok(&["--repo", &repo, "apply", ".config/nvim/init.lua"]);
-    assert!(is_symlink(&fx.home_path(".config/nvim/init.lua")));
+    assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "-- nvim\n");
 }
 
 /// A problem with one source does not stop the run: a nested suffix

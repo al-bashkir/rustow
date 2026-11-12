@@ -69,7 +69,7 @@ impl Default for Defaults {
             cache_dir: ".rustowcache".into(),
             state_dir: None,
             create_directories: true,
-            fold_directories: false,
+            fold_directories: true,
         }
     }
 }

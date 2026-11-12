@@ -143,6 +143,7 @@ fn copy_to_symlink_after_remove_is_conflict_until_backup() {
 #[test]
 fn symlink_to_copy_transition_is_automatic() {
     let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.write(SRC, "x\n");
     fx.ok(&["apply"]);
     assert!(is_symlink(&fx.home_path(SRC)));

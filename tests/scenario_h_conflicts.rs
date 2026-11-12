@@ -108,6 +108,7 @@ fn unlink_removes_only_ours() {
 #[test]
 fn unlink_removes_created_empty_dirs_only() {
     let fx = Fixture::new();
+    fx.write(".rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
     fx.write(".config/nvim/init.lua", "x");
     fx.write(".config/git/ignore", "y");
     fx.ok(&["apply"]);
@@ -231,7 +232,7 @@ fn home_link_into_writable_source_tree_is_refused() {
     assert!(!fx.home_path(".config/app/x.conf").exists());
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
     fx.ok(&["apply"]);
-    assert!(is_symlink(&fx.home_path(".config/app/x.conf")));
+    assert!(is_symlink(&fx.home_path(".config/app")), "folded once the directory is safe");
 }
 
 /// With umask 002, a repository is group-writable. That is trusted only
@@ -285,7 +286,8 @@ fn unwritable_target_directory_fails_in_the_plan_and_the_dry_run() {
     let out = fx.run(&["apply", "--dry-run"]);
     assert_eq!(out.code, 4, "{out:?}");
     let named = format!("directory {}:", ro.display());
-    for src in ["<- .ro/x", "<- .ro/new/y"] {
+    // `.ro` is a direct child of home and never folds; `.ro/new` folds.
+    for src in ["<- .ro/x", "<- .ro/new (link)"] {
         let line = out.stdout.lines().find(|l| l.contains(src)).unwrap_or_default();
         assert!(line.contains("error") && line.contains(&named), "{out:?}");
         assert!(line.contains("privileges"), "{out:?}");

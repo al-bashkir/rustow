@@ -1,6 +1,8 @@
-//! Directory folding (spec §7.1). With `fold_directories = true`, a home
-//! directory whose repository copy holds only ordinary link sources, and
+//! Directory folding (spec §7.1). A home directory whose repository copy
+//! holds only ordinary link sources that may fold (`fold_allowed`), and
 //! that does not exist at the destination yet, is deployed as one symlink.
+//! A direct child of home never folds: on a fresh machine `~/.ssh`,
+//! `~/.gnupg` or `~/.config` would then take private files into the repo.
 //! A folded link that no longer qualifies is unfolded into a real
 //! directory, but only when every file it exposes is a source and the same
 //! run deploys every one of them again (see `plan`), so that no content
@@ -55,17 +57,29 @@ pub fn analyze(
         .into_iter()
         .filter(|(dir, r)| still_linked(ctx, dir, r))
         .collect();
-    let folds = if ctx.config.defaults.fold_directories {
-        fold_candidates(ctx, discovery, selected, &recorded, collided)?
-    } else {
-        Vec::new()
-    };
+    let folds = fold_candidates(ctx, discovery, selected, &recorded, collided)?;
     let unfolds = select_unfolds(selected, &recorded, &folds);
     Ok(Folding { folds, unfolds })
 }
 
 fn is_home(source: &Source) -> bool {
     source.scope == Scope::Home
+}
+
+/// The `[[file_rules]]` value of `path` or of its nearest ancestor
+/// directory; `default` when no rule covers it.
+pub fn fold_allowed(rules: &BTreeMap<RelPath, bool>, default: bool, path: &RelPath) -> bool {
+    std::iter::once(path.clone())
+        .chain(ancestors(path))
+        .find_map(|p| rules.get(&p).copied())
+        .unwrap_or(default)
+}
+
+/// A home link source that may sit below a folded directory.
+fn foldable(ctx: &Context, source: &Source) -> bool {
+    is_home(source)
+        && source.mode == Mode::Link
+        && fold_allowed(&ctx.config.file_rules, ctx.config.defaults.fold_directories, &source.path)
 }
 
 /// Directories above the selected link sources that can be one symlink; the outermost wins.
@@ -79,17 +93,18 @@ fn fold_candidates(
     let link_sources: BTreeSet<&RelPath> = discovery
         .sources
         .iter()
-        .filter(|s| is_home(s) && s.mode == Mode::Link)
+        .filter(|s| foldable(ctx, s))
         .map(|s| &s.path)
         .collect();
     let chosen: BTreeSet<&RelPath> = selected
         .iter()
-        .filter(|s| is_home(s) && s.mode == Mode::Link)
+        .filter(|s| foldable(ctx, s))
         .map(|s| &s.path)
         .collect();
     let mut candidates: Vec<RelPath> = chosen
         .iter()
         .flat_map(|p| ancestors(p))
+        .filter(|d| d.components().count() > 1)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -222,4 +237,27 @@ fn entries_below(ctx: &Context, dir: &RelPath) -> Result<Vec<(RelPath, bool)>> {
         out.push((RelPath::parse(rel)?, entry.file_type().is_dir()));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rules(pairs: &[(&str, bool)]) -> BTreeMap<RelPath, bool> {
+        pairs.iter().map(|(p, v)| (RelPath::parse(p).unwrap(), *v)).collect()
+    }
+
+    fn rel(p: &str) -> RelPath {
+        RelPath::parse(p).unwrap()
+    }
+
+    #[test]
+    fn nearest_rule_wins_else_default() {
+        let r = rules(&[(".config/nvim", false), (".config/nvim/lua", true), (".config/a/b.txt", false)]);
+        assert!(!fold_allowed(&r, true, &rel(".config/nvim/init.lua")));
+        assert!(fold_allowed(&r, true, &rel(".config/nvim/lua/x.lua")));
+        assert!(!fold_allowed(&r, true, &rel(".config/a/b.txt")));
+        assert!(fold_allowed(&r, true, &rel(".config/a/c/b.txt")));
+        assert!(!fold_allowed(&r, false, &rel(".config/other/x")));
+    }
 }

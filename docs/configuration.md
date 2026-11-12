@@ -17,7 +17,7 @@ root_target = "/"
 cache_dir = ".rustowcache"
 # state_dir = "~/.local/state/rustow"
 create_directories = true
-fold_directories = false
+fold_directories = true
 
 [templates]
 extension = ".tmpl"
@@ -55,7 +55,7 @@ mode = "0600"
 | `cache_dir` | `".rustowcache"` | Cache directory. A relative path starts at the repository. An in-repository cache belongs to the repository owner: another user (normally root) uses `<state_dir>/cache` instead, and rustow prints a notice. |
 | `state_dir` | none | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`. |
 | `create_directories` | `true` | Create missing parent directories. |
-| `fold_directories` | `false` | Fold plain directories into one symlink. See below. |
+| `fold_directories` | `true` | Fold plain directories into one symlink. Never a directory directly under the home target. See below. |
 
 ### Cache and state directories
 
@@ -69,15 +69,18 @@ rustow compares `cache_dir` and `state_dir` with the repository in canonical for
 
 ### Folding
 
-When `fold_directories = true`, rustow uses one symlink for the shallowest home directory when all these conditions are true:
+rustow uses one symlink for the shallowest home directory when all these conditions are true:
 
-- The repository directory holds only ordinary link sources.
+- The directory is not directly under the home target. `~/.config/nvim` can fold. `~/.config`, `~/.ssh`, `~/.gnupg` and `~/.local` never fold.
+- The repository directory holds only ordinary link sources, and each of them may fold: its [`[[file_rules]]`](#file_rules) value, or `fold_directories` when no rule covers it, is `true`.
 - It holds no reserved directory, such as `.git` or an in-repository `cache_dir` or `state_dir`. This is also true for a configured directory that does not exist yet.
 - No destination collision is on the directory or below it.
 - The destination directory does not exist.
 - For a new fold, the run selects every source below the directory. A selective run (a path argument, or a command such as `rustow link`) folds a new directory only then. It keeps an existing fold.
 
 rustow never folds in `.rustowroot/`.
+
+Why the top level never folds: on a new machine, `~/.ssh`, `~/.gnupg` or `~/.config` often does not exist yet. A fold there would make ssh, GnuPG and every program that writes to `~/.config` write private files into the repository. The same risk applies to any folded directory: a program that writes a new file into it writes into the repository. Use `[[file_rules]]` to stop folding for a directory that programs write to.
 
 A recorded folded link that no longer qualifies becomes a real directory. This happens when you add a template, a copy, an encrypted file or an ignored file, or when you turn folding off. rustow refuses to unfold when files under the directory are not sources, because they would disappear from the destination.
 
@@ -135,6 +138,32 @@ A rule sets the metadata of a template and makes it deploy as a copy. Set at lea
 - `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem.
 
 A rule on a file that is not a template skips that file with a warning. A registered source or a rule source must exist. It must not be ignored, reserved or a directory. Otherwise rustow skips the entry with a warning, for example "warning: gone.json: .rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)". A template in `[[files]]` is skipped too.
+
+## `[[file_rules]]`
+
+```toml
+[[file_rules]]
+source = ".config/nvim"          # a directory: every source below it
+fold_directories = false
+
+[[file_rules]]
+source = ".config/a/b.txt"       # one file
+fold_directories = false
+```
+
+A rule controls [folding](#folding) for symlinked files. `source` is a file or a directory. `fold_directories` is required. Two rules with the same `source` are a configuration error (exit 2).
+
+Each home link source gets the value of the rule on its own path or on its nearest parent directory. With no rule, it gets `defaults.fold_directories`. A directory can fold only when every link source below it has the value `true`.
+
+| Repository | Rules | Result |
+| --- | --- | --- |
+| `.config/a/b.txt`, `.config/a/c/b.txt` | `.config/a/b.txt` = false | `.config/a` does not fold. `b.txt` gets its own symlink. `.config/a/c` folds. |
+| `.config/nvim/init.lua`, `.config/nvim/lua/x.lua` | `.config/nvim` = false | Nothing at or below `.config/nvim` folds. Each file gets its own symlink. |
+| same | `.config/nvim` = false, `.config/nvim/lua` = true | `.config/nvim/lua` folds. `init.lua` gets its own symlink. |
+
+With `fold_directories = false`, a rule with `true` lets a directory fold. A directory directly under the home target never folds, whatever the rules say.
+
+A rule that stops an existing fold unfolds it, with the rules above. A directory that an unfold has made real keeps per-file links; it does not fold again.
 
 ## Deployment modes
 
