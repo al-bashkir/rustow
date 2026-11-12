@@ -114,6 +114,75 @@ fn root_link_into_writable_source_tree_is_refused() {
     assert!(is_symlink(&fx.root_path("etc/x.conf")));
 }
 
+/// Spec Scenario E step 8: encrypted link, copy and template sources map
+/// under the root target, with an isolated age identity.
+#[test]
+fn encrypted_age_sources_map_under_root_target() {
+    let fx = Fixture::new();
+    let key = fx.age_key("root");
+    fx.age_config(
+        &[&key],
+        &[&key],
+        "[vars]\nport = 8080\n[[files]]\nsource = \".rustowroot/etc/example/copied.conf.age\"\n\
+         [[template_rules]]\nsource = \".rustowroot/etc/example/secure.conf.tmpl.age\"\nmode = \"0640\"\n",
+    );
+    let dir = ".rustowroot/etc/example";
+    fx.age_encrypt(&format!("{dir}/linked.conf.age"), "linked\n", &[&key]);
+    fx.age_encrypt(&format!("{dir}/copied.conf.age"), "copied\n", &[&key]);
+    fx.age_encrypt(
+        &format!("{dir}/rendered.conf.tmpl.age"),
+        "port={{ vars.port }}\n",
+        &[&key],
+    );
+    fx.age_encrypt(
+        &format!("{dir}/secure.conf.tmpl.age"),
+        "secure={{ vars.port }}\n",
+        &[&key],
+    );
+    fx.ok(&["apply"]);
+    let dest = |name: &str| fx.root_path(&format!("etc/example/{name}"));
+    assert!(is_symlink(&dest("linked.conf")));
+    assert_eq!(read(&dest("linked.conf")), "linked\n");
+    assert!(is_regular(&dest("copied.conf")));
+    assert_eq!(mode(&dest("copied.conf")), 0o600);
+    assert_eq!(read(&dest("copied.conf")), "copied\n");
+    assert!(is_symlink(&dest("rendered.conf")));
+    assert_eq!(read(&dest("rendered.conf")), "port=8080\n");
+    assert!(is_regular(&dest("secure.conf")));
+    assert_eq!(mode(&dest("secure.conf")), 0o640);
+    assert_eq!(read(&dest("secure.conf")), "secure=8080\n");
+    assert!(!fx.home_path("etc").exists());
+    assert!(fx.ok(&["apply"]).stdout.contains("0 changed"), "idempotent");
+}
+
+/// Spec Scenario E step 8 with GPG: link and copy sources under
+/// .rustowroot/, with a disposable GNUPGHOME.
+#[test]
+fn encrypted_gpg_sources_map_under_root_target() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("root", false);
+    let fpr = home.fpr.clone();
+    fx.gpg_config(
+        &home,
+        &[&fpr],
+        "[[files]]\nsource = \".rustowroot/etc/example/copied.conf.gpg\"\n",
+    );
+    fx.gpg_encrypt(".rustowroot/etc/example/linked.conf.gpg", "gpg linked\n", &home);
+    fx.gpg_encrypt(".rustowroot/etc/example/copied.conf.gpg", "gpg copied\n", &home);
+    fx.ok(&["apply"]);
+    let linked = fx.root_path("etc/example/linked.conf");
+    assert!(is_symlink(&linked));
+    assert_eq!(read(&linked), "gpg linked\n");
+    let copied = fx.root_path("etc/example/copied.conf");
+    assert!(is_regular(&copied));
+    assert_eq!(mode(&copied), 0o600);
+    assert_eq!(read(&copied), "gpg copied\n");
+    assert!(fx.ok(&["apply"]).stdout.contains("0 changed"), "idempotent");
+}
+
 /// Review M1: a home source and a .rustowroot source that land on the
 /// same file collide, instead of the last one silently winning.
 #[test]
