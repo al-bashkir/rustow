@@ -57,6 +57,18 @@ fn configured_in_repo_cache_and_state_excluded() {
     assert!(is_symlink(&fx.home_path("var/other")));
 }
 
+/// The built-in .rustowcache is reserved by name and hides no source tree,
+/// so an OS file in it (Finder's .DS_Store) must not block commands.
+#[test]
+fn foreign_file_in_default_cache_does_not_block_commands() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "a\n");
+    fx.write(".rustowcache/.DS_Store", "x");
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+    assert!(!fx.home_path(".rustowcache").exists());
+}
+
 #[test]
 fn custom_patterns_and_negation() {
     let fx = Fixture::new();

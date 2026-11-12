@@ -313,7 +313,10 @@ fn internal_dirs(root: &Path, dirs: &[(&str, &PathBuf)]) -> Result<Vec<RelPath>>
             return Err(bad("must not be inside .rustowroot or .git"));
         }
         check_components(root, &rel, name)?;
-        check_own_contents(dir).map_err(|why| bad(&why))?;
+        // The built-in cache is reserved by name and hides no source tree.
+        if rel.as_str() != crate::ignore::DEFAULT_CACHE_DIR {
+            check_own_contents(dir).map_err(|why| bad(&why))?;
+        }
         out.push(rel);
     }
     Ok(out)
