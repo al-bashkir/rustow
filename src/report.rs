@@ -143,7 +143,7 @@ impl Printer {
         }
         let code = match action {
             Action::Create | Action::Update | Action::Replace | Action::Remove => "32",
-            Action::Adopt | Action::Metadata | Action::Forget => "36",
+            Action::Adopt | Action::Metadata | Action::Forget | Action::Orphaned => "36",
             Action::Conflict | Action::Skip => "33",
             Action::Fail => "31",
             Action::Unchanged => "2",

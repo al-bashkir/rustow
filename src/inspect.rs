@@ -8,12 +8,13 @@ use serde_json::json;
 
 use crate::diff;
 use crate::error::Result;
+use crate::execute::{Action, ItemReport};
 use crate::fsops::{self, FileMeta, Observed};
 use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step};
 use crate::repo::Context;
 use crate::report::Printer;
-use crate::source::{Discovery, Mode, check_collisions};
+use crate::source::{Discovery, Mode, Selector, check_collisions};
 use crate::state::{Record, State};
 use crate::template;
 
@@ -214,7 +215,17 @@ pub fn status(
     printer: &Printer,
 ) -> Result<i32> {
     let mut rows: Vec<Row> = plan.items.iter().map(|i| row(i, state)).collect();
-    rows.extend(orphans(ctx, discovery, state, args)?);
+    rows.extend(
+        orphans(ctx, discovery, state, args)?
+            .into_iter()
+            .map(|(dest, record)| Row {
+                source: record.source.to_string(),
+                dest: Some(dest.clone()),
+                mode: record.mode.clone(),
+                status: "ORPHANED",
+                detail: Some(orphan_detail(record)),
+            }),
+    );
     if ignored {
         rows.extend(discovery.ignored.iter().map(|p| Row {
             source: p.to_string(),
@@ -317,13 +328,18 @@ fn deployed_status(mode: &Mode) -> &'static str {
 }
 
 /// Recorded destinations in the current targets whose source no longer exists.
-fn orphans(ctx: &Context, discovery: &Discovery, state: &State, args: &[String]) -> Result<Vec<Row>> {
+fn orphans<'a>(
+    ctx: &Context,
+    discovery: &Discovery,
+    state: &'a State,
+    args: &[String],
+) -> Result<Vec<(&'a PathBuf, &'a Record)>> {
     let prefixes: Vec<RelPath> = args
         .iter()
         .filter(|a| !matches!(a.as_str(), "." | "./"))
         .map(|a| RelPath::parse(a))
         .collect::<Result<_>>()?;
-    let mut rows = Vec::new();
+    let mut found = Vec::new();
     for (dest, record) in &state.entries {
         let known = discovery.sources.iter().any(|s| s.path == record.source)
             || (record.folded_dir && ctx.root.join(record.source.as_path()).is_dir());
@@ -331,15 +347,38 @@ fn orphans(ctx: &Context, discovery: &Discovery, state: &State, args: &[String])
         if known || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;
         }
-        rows.push(Row {
-            source: record.source.to_string(),
-            dest: Some(dest.clone()),
-            mode: record.mode.clone(),
-            status: "ORPHANED",
-            detail: Some("source removed; `rustow undeploy` removes the destination".into()),
-        });
+        found.push((dest, record));
     }
-    Ok(rows)
+    Ok(found)
+}
+
+/// Names the command that removes one orphaned destination (`undeploy`
+/// with no path would remove every managed destination).
+fn orphan_detail(record: &Record) -> String {
+    format!("source removed; `rustow undeploy {}` removes it", record.source)
+}
+
+/// Report lines for the orphaned destinations a deploy command covers.
+/// Nothing is removed and the exit code does not change.
+pub fn orphan_reports(
+    ctx: &Context,
+    discovery: &Discovery,
+    state: &State,
+    args: &[String],
+    selector: Selector,
+) -> Result<Vec<ItemReport>> {
+    let found = orphans(ctx, discovery, state, args)?;
+    Ok(found
+        .into_iter()
+        .filter(|(_, record)| selector.includes_label(&record.mode))
+        .map(|(dest, record)| ItemReport {
+            source: record.source.clone(),
+            dest: dest.clone(),
+            mode: record.mode.clone(),
+            action: Action::Orphaned,
+            detail: Some(orphan_detail(record)),
+        })
+        .collect())
 }
 
 /// Offline validation: discovery (configuration, ignore rules,

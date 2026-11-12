@@ -220,13 +220,14 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     let Prepared {
         ctx,
         mut state,
+        discovery,
         plan,
         _lock,
-        ..
     } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
+    let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
     let policy = g.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {
-        let items: Vec<ItemReport> = plan
+        let mut items: Vec<ItemReport> = plan
             .items
             .iter()
             .map(|i| {
@@ -241,6 +242,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
                 }
             })
             .collect();
+        items.extend(orphaned);
         printer.items(&items, if g.dry_run { RunKind::DryRun } else { RunKind::Blocked });
         return Ok(execute::exit_code(&items));
     }
@@ -256,7 +258,8 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         cache_dir: &ctx.cache_dir,
         stop: &stop,
     };
-    let items = execute::execute(plan, &run, &mut state);
+    let mut items = execute::execute(plan, &run, &mut state);
+    items.extend(orphaned);
     finish(&ctx, &state, printer, &items)
 }
 

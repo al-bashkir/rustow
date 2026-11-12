@@ -248,6 +248,36 @@ fn unwritable_target_directory_fails_in_the_plan_and_the_dry_run() {
     fs::set_permissions(&ro, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// `apply` names a managed destination whose source was removed, with
+/// the command that removes it, and removes nothing itself. The exit code
+/// stays 0; the JSON output carries the same item.
+#[test]
+fn apply_reports_orphaned_destinations_and_keeps_them() {
+    let fx = two();
+    fx.ok(&["apply"]);
+    fs::remove_file(fx.repo.join(".zshrc")).unwrap();
+    let out = fx.ok(&["apply"]);
+    let line = out.stdout.lines().find(|l| l.contains("~/.zshrc")).unwrap_or_default();
+    assert!(line.contains("orphaned"), "{out:?}");
+    assert!(
+        line.contains("source removed; `rustow undeploy .zshrc` removes it"),
+        "{out:?}"
+    );
+    assert!(is_symlink(&fx.home_path(".zshrc")));
+    let out = fx.ok(&["apply", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("json");
+    let items = v["items"].as_array().unwrap();
+    let item = items.iter().find(|i| i["source"] == ".zshrc").expect("orphan item");
+    assert_eq!(item["action"], "orphaned");
+    assert!(item["detail"].as_str().unwrap().contains("`rustow undeploy .zshrc`"));
+    fx.ok(&["undeploy", ".zshrc"]);
+    assert!(!is_symlink(&fx.home_path(".zshrc")));
+    assert!(
+        is_symlink(&fx.home_path(".bashrc")),
+        "the suggestion removes only the orphan"
+    );
+}
+
 /// Names that differ only in case are two files on a case-sensitive
 /// target and one file on a case-insensitive one (APFS by default). Linux
 /// covers only the first branch; macOS CI covers the second.

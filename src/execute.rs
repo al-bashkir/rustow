@@ -39,6 +39,8 @@ pub enum Action {
     Conflict,
     Skip,
     Fail,
+    /// Report only: a managed destination whose source was removed.
+    Orphaned,
 }
 
 impl Action {
@@ -55,6 +57,7 @@ impl Action {
             Action::Conflict => "conflict",
             Action::Skip => "skip",
             Action::Fail => "error",
+            Action::Orphaned => "orphaned",
         }
     }
 
