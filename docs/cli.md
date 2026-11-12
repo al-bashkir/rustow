@@ -10,58 +10,58 @@ Without a command, rustow runs `apply`.
 
 ## Global options
 
-| Option | Meaning |
-| --- | --- |
-| `--repo <DIR>` | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `.rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2. |
-| `--target <DIR>` | Target of home sources. |
-| `--root-target <DIR>` | Target of `.rustowroot/` sources. |
-| `-n`, `--dry-run` | Show what would change. Change nothing. |
-| `--backup` | Same as `--on-conflict backup`. |
-| `--force` | Same as `--on-conflict overwrite`. |
-| `--on-conflict <POLICY>` | `abort` (default), `skip`, `backup`, `overwrite`. |
-| `-v`, `--verbose` | Also list unchanged items. |
-| `-q`, `--quiet` | Print only conflicts and errors. |
-| `--json` | JSON output. |
-| `--no-color` | No colors. Also `NO_COLOR`. |
-| `--interactive` | Allow passphrase prompts: GnuPG pinentry and the age identity prompt. Without it, a locked key fails (exit 4) with a hint. This also applies to `enc edit`. See [encryption](encryption.md#interactive-and-unattended-runs). |
-| `-h`, `--help` | Help. |
-| `-V`, `--version` | Version. |
+| Option                   | Meaning                                                                                                                                                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <DIR>`           | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `.rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                |
+| `--target <DIR>`         | Target of home sources.                                                                                                                                                                                                      |
+| `--root-target <DIR>`    | Target of `.rustowroot/` sources.                                                                                                                                                                                            |
+| `-n`, `--dry-run`        | Show what would change. Change nothing.                                                                                                                                                                                      |
+| `--backup`               | Same as `--on-conflict backup`.                                                                                                                                                                                              |
+| `--force`                | Same as `--on-conflict overwrite`.                                                                                                                                                                                           |
+| `--on-conflict <POLICY>` | `abort` (default), `skip`, `backup`, `overwrite`.                                                                                                                                                                            |
+| `-v`, `--verbose`        | Also list unchanged items.                                                                                                                                                                                                   |
+| `-q`, `--quiet`          | Print only conflicts and errors.                                                                                                                                                                                             |
+| `--json`                 | JSON output.                                                                                                                                                                                                                 |
+| `--no-color`             | No colors. Also `NO_COLOR`.                                                                                                                                                                                                  |
+| `--interactive`          | Allow passphrase prompts: GnuPG pinentry and the age identity prompt. Without it, a locked key fails (exit 4) with a hint. This also applies to `enc edit`. See [encryption](encryption.md#interactive-and-unattended-runs). |
+| `-h`, `--help`           | Help.                                                                                                                                                                                                                        |
+| `-V`, `--version`        | Version.                                                                                                                                                                                                                     |
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `apply [PATH]...` | Deploy all eligible sources. |
-| `link [PATH]...` | Deploy ordinary plaintext symlinks only. System files are never symlinks. |
-| `unlink [PATH]...` | Remove managed link-mode symlinks (and folded directory links). |
-| `init` | Prepare the repository. Deploys nothing. |
-| `file add\|remove [PATH]...` | Register or unregister copy sources. |
-| `file list` | List registered sources. |
-| `file apply` | Deploy registered copies only. |
-| `file diff` | Diff registered copies. |
-| `template list` | List templates and how they deploy. |
-| `template apply` | Deploy templates only (also encrypted). |
-| `diff [PATH]...` | Show differences. May print secrets. |
-| `status [--ignored] [PATH]...` | Show the state of each destination. |
-| `check` | Validate offline. |
-| `doctor` | Report on the environment. |
-| `undeploy [PATH]...` | Remove managed destinations of any mode. |
-| `cache clean` | Remove unused cache entries and stale edit workspaces. |
-| `enc [--backend age\|gpg] PATH` | Encrypt a source. |
-| `enc edit [--reencrypt] PATH` | Edit an encrypted source. |
-| `completions <SHELL>` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). |
+| Command                         | Purpose                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `apply [PATH]...`               | Deploy all eligible sources.                                               |
+| `link [PATH]...`                | Deploy ordinary plaintext symlinks only. System files are never symlinks.  |
+| `unlink [PATH]...`              | Remove managed link-mode symlinks (and folded directory links).            |
+| `init`                          | Prepare the repository. Deploys nothing.                                   |
+| `file add\|remove [PATH]...`    | Register or unregister copy sources.                                       |
+| `file list`                     | List registered sources.                                                   |
+| `file apply`                    | Deploy registered copies only.                                             |
+| `file diff`                     | Diff registered copies.                                                    |
+| `template list`                 | List templates and how they deploy.                                        |
+| `template apply`                | Deploy templates only (also encrypted).                                    |
+| `diff [PATH]...`                | Show differences. May print secrets.                                       |
+| `status [--ignored] [PATH]...`  | Show the state of each destination.                                        |
+| `check`                         | Validate offline.                                                          |
+| `doctor`                        | Report on the environment.                                                 |
+| `undeploy [PATH]...`            | Remove managed destinations of any mode.                                   |
+| `cache clean`                   | Remove unused cache entries and stale edit workspaces.                     |
+| `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                          |
+| `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                  |
+| `completions <SHELL>`           | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). |
 
 Path arguments are repository-relative. They are never relative to the current directory. A path argument that matches only sources of other modes is a usage error (exit 2). A path argument that names a [skipped source](#skipped-sources) is a usage error (exit 2) with the reason, for example "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". A directory argument that holds skipped sources deploys the other sources and prints a warning for each skipped one.
 
 ## Exit codes
 
-| Code | Meaning |
-| --- | --- |
-| 0 | Success, or clean. |
-| 1 | Differences found (`diff`, `status`, `check`). `doctor` uses 1 for a failed check. |
-| 2 | Usage or configuration error. A problem with one source is a warning, not exit 2. |
-| 3 | Conflicts. Under the default policy nothing changed. Also when `--on-conflict skip` left conflicts. |
-| 4 | Runtime or partial failure. This includes render failure, decrypt failure, a destination directory that you cannot write, a state file that rustow cannot write, and interruption. |
+| Code | Meaning                                                                                                                                                                            |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | Success, or clean.                                                                                                                                                                 |
+| 1    | Differences found (`diff`, `status`, `check`). `doctor` uses 1 for a failed check.                                                                                                 |
+| 2    | Usage or configuration error. A problem with one source is a warning, not exit 2.                                                                                                  |
+| 3    | Conflicts. Under the default policy nothing changed. Also when `--on-conflict skip` left conflicts.                                                                                |
+| 4    | Runtime or partial failure. This includes render failure, decrypt failure, a destination directory that you cannot write, a state file that rustow cannot write, and interruption. |
 
 ## Skipped sources
 
@@ -99,19 +99,19 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 ## Decisions
 
-| Destination | Action |
-| --- | --- |
-| Missing | create |
-| Own recorded symlink with old target | update |
-| Correct but not recorded | adopt (record it; no write). `status` shows UNMANAGED. |
-| Symlink in other text that reaches the same source (for example an absolute path) | update (rewrite it as rustow's link text) |
-| Foreign file or symlink, not recorded (also a broken symlink) | conflict |
-| Managed copy unchanged, desired content changed | update |
-| Destination changed since last apply | MODIFIED conflict |
-| Cache entry behind rustow's link changed since last apply (also after a switch to a copy) | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>` |
-| Several sources map to the destination | conflict (collision) |
-| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target") |
-| Directory of the destination is not writable | error, also in `--dry-run` and `status`; `diff` still shows the content |
+| Destination                                                                                              | Action                                                                          |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Missing                                                                                                  | create                                                                          |
+| Own recorded symlink with old target                                                                     | update                                                                          |
+| Correct but not recorded                                                                                 | adopt (record it; no write). `status` shows UNMANAGED.                          |
+| Symlink in other text that reaches the same source (for example an absolute path)                        | update (rewrite it as rustow's link text)                                       |
+| Foreign file or symlink, not recorded (also a broken symlink)                                            | conflict                                                                        |
+| Managed copy unchanged, desired content changed                                                          | update                                                                          |
+| Destination changed since last apply                                                                     | MODIFIED conflict                                                               |
+| Cache entry behind rustow's link changed since last apply (also after a switch to a copy)                | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>` |
+| Several sources map to the destination                                                                   | conflict (collision)                                                            |
+| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target")                                              |
+| Directory of the destination is not writable                                                             | error, also in `--dry-run` and `status`; `diff` still shows the content         |
 
 Two sources collide when they have the same destination, for example `x`, `x.age` and `x.tmpl`. On a case-insensitive target filesystem, names that differ only in case collide too. A root target of `/` always counts as case-sensitive (known limit).
 

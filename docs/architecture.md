@@ -14,32 +14,32 @@ rustow has one planner and one executor. Every command that changes files builds
 
 ## Modules
 
-| Module | Role |
-| --- | --- |
-| `cli` | Argument definitions (clap). |
-| `app` | Dispatch and preparation. |
-| `repo` | `Context`, repository discovery, internal directories. |
-| `config` (+ `edit`) | Schema, validation, comment-preserving edits. |
-| `ignore` | Ignore rules and built-in exclusions. |
-| `source` | Discover, classify, `Mode`, `Selector`, collisions. |
-| `plan` | Decision table, build, fold integration, removal. |
-| `fold` | Directory folding and unfolding. |
-| `execute` | Predict, execute, remove. |
-| `fsops` | Safe file operations (temp file, rename, ancestors). |
-| `state` | Per-repository JSON state and lock. |
-| `cache` | Rendered and decrypted entries, edit workspaces. |
-| `template` | MiniJinja context and rendering. |
-| `crypto` (age, gpg) | Encryption backends. |
-| `enc` | `enc` and `enc edit`. |
-| `init` | `init`. |
-| `files` | `file add/remove/list`. |
-| `inspect` | `diff`, `status`, `check`. |
-| `doctor` | `doctor`. |
-| `diff` | Diff output. |
-| `report` | Output and JSON. |
-| `hash` | Content hashes. |
-| `paths` | Path types. |
-| `error` | Errors and exit codes. |
+| Module              | Role                                                   |
+| ------------------- | ------------------------------------------------------ |
+| `cli`               | Argument definitions (clap).                           |
+| `app`               | Dispatch and preparation.                              |
+| `repo`              | `Context`, repository discovery, internal directories. |
+| `config` (+ `edit`) | Schema, validation, comment-preserving edits.          |
+| `ignore`            | Ignore rules and built-in exclusions.                  |
+| `source`            | Discover, classify, `Mode`, `Selector`, collisions.    |
+| `plan`              | Decision table, build, fold integration, removal.      |
+| `fold`              | Directory folding and unfolding.                       |
+| `execute`           | Predict, execute, remove.                              |
+| `fsops`             | Safe file operations (temp file, rename, ancestors).   |
+| `state`             | Per-repository JSON state and lock.                    |
+| `cache`             | Rendered and decrypted entries, edit workspaces.       |
+| `template`          | MiniJinja context and rendering.                       |
+| `crypto` (age, gpg) | Encryption backends.                                   |
+| `enc`               | `enc` and `enc edit`.                                  |
+| `init`              | `init`.                                                |
+| `files`             | `file add/remove/list`.                                |
+| `inspect`           | `diff`, `status`, `check`.                             |
+| `doctor`            | `doctor`.                                              |
+| `diff`              | Diff output.                                           |
+| `report`            | Output and JSON.                                       |
+| `hash`              | Content hashes.                                        |
+| `paths`             | Path types.                                            |
+| `error`             | Errors and exit codes.                                 |
 
 ## Modes
 
@@ -47,12 +47,12 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 
 `source::classify` applies one scope rule after the mode is selected (`scoped_mode`). Under `.rustowroot/` (`Scope::Root`), no source is a link:
 
-| Selected mode | Home | Root |
-| --- | --- | --- |
-| Link | Link | skipped: register it with `rustow file add` |
-| DecryptLink | DecryptLink | skipped: register it with `rustow file add` |
-| TemplateLink | TemplateLink | TemplateCopy with empty metadata |
-| FileCopy, DecryptCopy, TemplateCopy | unchanged | unchanged |
+| Selected mode                       | Home         | Root                                        |
+| ----------------------------------- | ------------ | ------------------------------------------- |
+| Link                                | Link         | skipped: register it with `rustow file add` |
+| DecryptLink                         | DecryptLink  | skipped: register it with `rustow file add` |
+| TemplateLink                        | TemplateLink | TemplateCopy with empty metadata            |
+| FileCopy, DecryptCopy, TemplateCopy | unchanged    | unchanged                                   |
 
 `classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
 

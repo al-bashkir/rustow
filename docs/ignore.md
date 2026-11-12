@@ -4,11 +4,11 @@
 
 Patterns match repository paths:
 
-| Pattern | Matches |
-| --- | --- |
-| `/.rustowroot/etc/x` | The system file `/etc/x`. |
-| `/etc/` | The repository directory `etc/` only. |
-| `*.bak` | Any `.bak` file, also under `.rustowroot/`. |
+| Pattern              | Matches                                     |
+| -------------------- | ------------------------------------------- |
+| `/.rustowroot/etc/x` | The system file `/etc/x`.                   |
+| `/etc/`              | The repository directory `etc/` only.       |
+| `*.bak`              | Any `.bak` file, also under `.rustowroot/`. |
 
 ```gitignore
 # Private cache.

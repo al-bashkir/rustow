@@ -37,13 +37,13 @@ other content
 
 The meta block is the group of `meta.` lines at the start of the file. It stops at the first line that is not a meta line. rustow reads it and removes it before rendering, so it is never in the output. A line has this form: `{%` or `{%-`, then `meta.<key>`, then `=` or `==`, then a value in double quotes or a whole number, then `%}` or `-%}`. Spaces between the parts and a CRLF line end are allowed. A `meta.` line lower in the file is not part of the block: MiniJinja reports it as a syntax error.
 
-| Key | Form | Meaning |
-| --- | --- | --- |
-| `mode` | `= "0600"` | File mode. The same rules as `mode` in `[[template_rules]]`. |
-| `uid` | `= 1001` | Owner, by numeric id. |
-| `owner` | `= "name"` | Owner, by name. The same as `owner` in `[[template_rules]]`. |
-| `gid` | `= 1001` | Group, by numeric id. |
-| `group` | `= "name"` | Group, by name. |
+| Key                                            | Form         | Meaning                                                               |
+| ---------------------------------------------- | ------------ | --------------------------------------------------------------------- |
+| `mode`                                         | `= "0600"`   | File mode. The same rules as `mode` in `[[template_rules]]`.          |
+| `uid`                                          | `= 1001`     | Owner, by numeric id.                                                 |
+| `owner`                                        | `= "name"`   | Owner, by name. The same as `owner` in `[[template_rules]]`.          |
+| `gid`                                          | `= 1001`     | Group, by numeric id.                                                 |
+| `group`                                        | `= "name"`   | Group, by name.                                                       |
 | `os`, `arch`, `family`, `hostname`, `username` | `== "value"` | Condition. Compared with the [variable](#variables) of the same name. |
 
 - **Settings** (`mode`, `uid`, `owner`, `gid`, `group`) make the template deploy as `template+copy` with that metadata. A template must not have both settings in its meta block and a `[[template_rules]]` entry. If it has both, rustow skips it with a warning: "set metadata either in the template meta block or in [[template_rules]], not both". A meta block with conditions only can have a rule.
@@ -65,16 +65,16 @@ The meta block is the group of `meta.` lines at the start of the file. It stops 
 
 ## Variables
 
-| Name | Value |
-| --- | --- |
-| `os` | `"linux"` or `"macos"` |
-| `arch` | CPU architecture |
-| `family` | `"unix"` |
-| `hostname` | Host name |
-| `username` | User name |
-| `uid`, `gid` | Numeric ids |
-| `home_dir` | The home target |
-| `vars` | Values from `[vars]` |
+| Name         | Value                  |
+| ------------ | ---------------------- |
+| `os`         | `"linux"` or `"macos"` |
+| `arch`       | CPU architecture       |
+| `family`     | `"unix"`               |
+| `hostname`   | Host name              |
+| `username`   | User name              |
+| `uid`, `gid` | Numeric ids            |
+| `home_dir`   | The home target        |
+| `vars`       | Values from `[vars]`   |
 
 ## Rules of the engine
 

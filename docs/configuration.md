@@ -48,14 +48,14 @@ mode = "0600"
 
 ## `[defaults]`
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `target` | `"~"` | Target of home sources. `--target` overrides it. |
-| `root_target` | `"/"` | Target of `.rustowroot/` sources. `--root-target` overrides it. |
-| `cache_dir` | `".rustowcache"` | Cache directory. A relative path starts at the repository. An in-repository cache belongs to the repository owner: another user (normally root) uses `<state_dir>/cache` instead, and rustow prints a notice. |
-| `state_dir` | none | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`. |
-| `create_directories` | `true` | Create missing parent directories. |
-| `fold_directories` | `true` | Fold plain directories into one symlink. Never a directory directly under the home target or under `~/.local`. See below. |
+| Key                  | Default          | Meaning                                                                                                                                                                                                       |
+| -------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target`             | `"~"`            | Target of home sources. `--target` overrides it.                                                                                                                                                              |
+| `root_target`        | `"/"`            | Target of `.rustowroot/` sources. `--root-target` overrides it.                                                                                                                                               |
+| `cache_dir`          | `".rustowcache"` | Cache directory. A relative path starts at the repository. An in-repository cache belongs to the repository owner: another user (normally root) uses `<state_dir>/cache` instead, and rustow prints a notice. |
+| `state_dir`          | none             | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`.                                                                                                                             |
+| `create_directories` | `true`           | Create missing parent directories.                                                                                                                                                                            |
+| `fold_directories`   | `true`           | Fold plain directories into one symlink. Never a directory directly under the home target or under `~/.local`. See below.                                                                                     |
 
 ### Cache and state directories
 
@@ -92,22 +92,22 @@ If you replace rustow's folded link yourself (with a directory or your own symli
 
 ## `[templates]`
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `extension` | `".tmpl"` | Template suffix. It must start with `.`. It must not end in `.age` or `.gpg`. |
-| `engine` | `"minijinja"` | Only `"minijinja"` is valid. |
+| Key         | Default       | Meaning                                                                       |
+| ----------- | ------------- | ----------------------------------------------------------------------------- |
+| `extension` | `".tmpl"`     | Template suffix. It must start with `.`. It must not end in `.age` or `.gpg`. |
+| `engine`    | `"minijinja"` | Only `"minijinja"` is valid.                                                  |
 
 ## `[encryption]`
 
 See [encryption](encryption.md).
 
-| Key | Meaning |
-| --- | --- |
-| `backend` | Default backend for `rustow enc`: `"age"` (default) or `"gpg"`. |
-| `recipients` | age public keys (`age1...`). |
-| `identity_files` | age identity files. |
-| `[encryption.gpg] recipients` | Full GnuPG key fingerprints. |
-| `[encryption.gpg] homedir` | GnuPG home directory. |
+| Key                           | Meaning                                                         |
+| ----------------------------- | --------------------------------------------------------------- |
+| `backend`                     | Default backend for `rustow enc`: `"age"` (default) or `"gpg"`. |
+| `recipients`                  | age public keys (`age1...`).                                    |
+| `identity_files`              | age identity files.                                             |
+| `[encryption.gpg] recipients` | Full GnuPG key fingerprints.                                    |
+| `[encryption.gpg] homedir`    | GnuPG home directory.                                           |
 
 ## `[vars]`
 
@@ -155,11 +155,11 @@ A rule controls [folding](#folding) for symlinked files. `source` is a file or a
 
 Each home link source gets the value of the rule on its own path or on its nearest parent directory. With no rule, it gets `defaults.fold_directories`. A directory can fold only when every link source below it has the value `true`.
 
-| Repository | Rules | Result |
-| --- | --- | --- |
-| `.config/a/b.txt`, `.config/a/c/b.txt` | `.config/a/b.txt` = false | `.config/a` does not fold. `b.txt` gets its own symlink. `.config/a/c` folds. |
-| `.config/nvim/init.lua`, `.config/nvim/lua/x.lua` | `.config/nvim` = false | Nothing at or below `.config/nvim` folds. Each file gets its own symlink. |
-| same | `.config/nvim` = false, `.config/nvim/lua` = true | `.config/nvim/lua` folds. `init.lua` gets its own symlink. |
+| Repository                                        | Rules                                             | Result                                                                        |
+| ------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `.config/a/b.txt`, `.config/a/c/b.txt`            | `.config/a/b.txt` = false                         | `.config/a` does not fold. `b.txt` gets its own symlink. `.config/a/c` folds. |
+| `.config/nvim/init.lua`, `.config/nvim/lua/x.lua` | `.config/nvim` = false                            | Nothing at or below `.config/nvim` folds. Each file gets its own symlink.     |
+| same                                              | `.config/nvim` = false, `.config/nvim/lua` = true | `.config/nvim/lua` folds. `init.lua` gets its own symlink.                    |
 
 With `fold_directories = false`, a rule with `true` lets a directory fold. A directory directly under the home target or under `~/.local` never folds, whatever the rules say.
 
@@ -169,13 +169,13 @@ An entry that cannot apply gives a warning, and rustow ignores the entry. This h
 
 ## Deployment modes
 
-| Mode | Label | Source |
-| --- | --- | --- |
-| Link | link | Ordinary home file |
-| FileCopy | copy | Listed in `[[files]]` |
-| DecryptLink | decrypt+link | `.age` or `.gpg` home file |
-| DecryptCopy | decrypt+copy | Encrypted file listed in `[[files]]` |
-| TemplateLink | template+link | Home template without rule |
+| Mode         | Label         | Source                                   |
+| ------------ | ------------- | ---------------------------------------- |
+| Link         | link          | Ordinary home file                       |
+| FileCopy     | copy          | Listed in `[[files]]`                    |
+| DecryptLink  | decrypt+link  | `.age` or `.gpg` home file               |
+| DecryptCopy  | decrypt+copy  | Encrypted file listed in `[[files]]`     |
+| TemplateLink | template+link | Home template without rule               |
 | TemplateCopy | template+copy | Template with a rule, or system template |
 
 A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).

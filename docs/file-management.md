@@ -36,11 +36,11 @@ rustow file remove .config/example/settings.json
 
 ## Selecting by mode
 
-| Command | Deploys |
-| --- | --- |
-| `rustow link` | Link only (never a system file) |
-| `rustow file apply` | copy and decrypt+copy |
-| `rustow template apply` | All templates |
-| `rustow apply` | All |
+| Command                 | Deploys                         |
+| ----------------------- | ------------------------------- |
+| `rustow link`           | Link only (never a system file) |
+| `rustow file apply`     | copy and decrypt+copy           |
+| `rustow template apply` | All templates                   |
+| `rustow apply`          | All                             |
 
 A path argument that matches only sources of other modes is a usage error (exit 2).

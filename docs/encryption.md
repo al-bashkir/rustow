@@ -31,13 +31,13 @@ rustow runs the installed `gpg` (GnuPG 2.2 or newer). It finds `gpg` in `PATH`. 
 
 Install GnuPG:
 
-| System | Command |
-| --- | --- |
-| Debian, Ubuntu | `sudo apt install gnupg` |
-| Fedora | `sudo dnf install gnupg2` |
-| Arch Linux | `sudo pacman -S gnupg` |
-| Alpine | `sudo apk add gnupg` |
-| macOS (Homebrew) | `brew install gnupg` |
+| System           | Command                   |
+| ---------------- | ------------------------- |
+| Debian, Ubuntu   | `sudo apt install gnupg`  |
+| Fedora           | `sudo dnf install gnupg2` |
+| Arch Linux       | `sudo pacman -S gnupg`    |
+| Alpine           | `sudo apk add gnupg`      |
+| macOS (Homebrew) | `brew install gnupg`      |
 
 Run `rustow doctor` to see which `gpg` rustow finds.
 
