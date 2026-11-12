@@ -123,3 +123,22 @@ fn recorded_top_level_fold_is_unfolded_on_upgrade() {
     assert!(is_symlink(&fx.home_path(".local/bin/x")));
     assert_eq!(read(&fx.home_path(".local/bin/x")), "x\n");
 }
+
+#[test]
+fn file_rule_warning_prints_but_status_has_no_row() {
+    let fx = Fixture::new();
+    fx.write(
+        ".rustow.toml",
+        "version = 1\n[[file_rules]]\nsource = \"gone\"\nfold_directories = false\n",
+    );
+    fx.write(".bashrc", "b\n");
+    let warning = "warning: gone: .rustow.toml [[file_rules]] entry does not exist";
+    let out = fx.ok(&["apply"]);
+    assert!(out.stderr.contains(warning), "{out:?}");
+    let json = fx.ok(&["apply", "--json"]);
+    assert!(json.stdout.contains("[[file_rules]] entry does not exist"), "{json:?}");
+    assert!(fx.ok(&["check"]).stderr.contains(warning));
+    let st = fx.run(&["status", "-v"]);
+    assert_eq!(st.code, 0, "{st:?}");
+    assert!(!st.stdout.contains("SKIPPED"), "{st:?}");
+}

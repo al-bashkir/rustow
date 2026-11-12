@@ -89,6 +89,7 @@ fn template_list(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
     let prepared = prepare(g, env, p, paths, selector, false)?;
     p.warn(prepared.ctx.skipped(&prepared.discovery, paths)?);
+    p.warn(&prepared.discovery.rule_warnings);
     inspect::diff(&prepared.plan, &prepared.state, p)
 }
 
@@ -229,6 +230,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         _lock,
     } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
     printer.warn(ctx.skipped(&discovery, paths)?);
+    printer.warn(&discovery.rule_warnings);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
     let policy = g.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {

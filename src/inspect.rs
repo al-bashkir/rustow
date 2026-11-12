@@ -425,6 +425,7 @@ pub fn orphan_reports(
 pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
     let discovery = ctx.discover()?;
     printer.warn(&discovery.skipped);
+    printer.warn(&discovery.rule_warnings);
     let mut findings: Vec<String> = check_collisions(&discovery.sources, crate::plan::case_folding(ctx))
         .iter()
         .map(ToString::to_string)

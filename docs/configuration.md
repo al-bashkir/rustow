@@ -165,6 +165,8 @@ With `fold_directories = false`, a rule with `true` lets a directory fold. A dir
 
 A rule that stops an existing fold unfolds it, with the rules above. A directory that an unfold has made real keeps per-file links; it does not fold again.
 
+An entry that cannot apply gives a warning, and rustow ignores the entry. This happens when the source does not exist, is ignored or reserved, is under `.rustowroot/`, or is a file that is not a plain symlinked file (a template, a copy or an encrypted file). Example: "warning: gone: .rustow.toml [[file_rules]] entry does not exist (remove the entry)". The warning shows on stderr, in the JSON `warnings` array and in `rustow check`. `status` shows no row for it. A directory rule that covers templates or copies is valid; the rule has no effect on them.
+
 ## Deployment modes
 
 | Mode | Label | Source |

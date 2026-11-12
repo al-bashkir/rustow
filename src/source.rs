@@ -142,6 +142,9 @@ pub struct Discovery {
     /// Plaintext templates whose meta condition is false on this host,
     /// sorted by path. Not a problem, so no warning.
     pub inactive: Vec<Skipped>,
+    /// `[[file_rules]]` entries that cannot apply, sorted by path. Warnings
+    /// only: the path itself may still deploy.
+    pub rule_warnings: Vec<Skipped>,
 }
 
 /// Two or more sources that would write the same destination, or one
@@ -192,7 +195,48 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Resu
     out.skipped.extend(unmatched);
     out.skipped.sort();
     out.inactive.sort();
+    out.rule_warnings = check_file_rules(repo, ignore, cfg, &out);
     Ok(out)
+}
+
+/// Each `[[file_rules]]` entry that cannot control folding, with the reason.
+fn check_file_rules(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Discovery) -> Vec<Skipped> {
+    cfg.file_rules
+        .keys()
+        .filter_map(|path| {
+            let why = file_rule_problem(repo, ignore, found, path)?;
+            Some(Skipped {
+                path: path.clone(),
+                reason: format!("{} [[file_rules]] entry {why}", crate::config::CONFIG_FILE),
+            })
+        })
+        .collect()
+}
+
+/// Why a `[[file_rules]]` entry cannot apply; None for a home link
+/// source or a usable directory.
+fn file_rule_problem(repo: &Path, ignore: &Ignore, found: &Discovery, path: &RelPath) -> Option<&'static str> {
+    const NOT_LINK: &str = "is not a plain symlinked file; fold rules apply only to link sources";
+    let p = path.as_str();
+    if p == ROOT_DIR || p.strip_prefix(ROOT_DIR).is_some_and(|r| r.starts_with('/')) {
+        return Some("is under .rustowroot/, where rustow never folds");
+    }
+    if let Some(s) = found.sources.iter().find(|s| &s.path == path) {
+        return (s.mode != Mode::Link).then_some(NOT_LINK);
+    }
+    if found.skipped.iter().chain(&found.inactive).any(|s| &s.path == path) {
+        return Some(NOT_LINK);
+    }
+    let is_dir = repo.join(path.as_path()).is_dir();
+    if ignore.is_reserved(path, is_dir) {
+        Some("is reserved and can never be deployed")
+    } else if ignore.is_ignored(path, is_dir) {
+        Some("is ignored by .rustowignore")
+    } else if is_dir {
+        None
+    } else {
+        Some("does not exist (remove the entry)")
+    }
 }
 
 /// Where a classified source goes once its meta block is applied.
@@ -927,5 +971,69 @@ mod tests {
     fn plain_files_are_not_read_for_meta() {
         let dir = repo_with(&[("a.conf", "{%- meta.os == \"plan9\" %}\n")]);
         assert_eq!(paths(&run(&dir, &cfg("")).unwrap()), vec!["a.conf"]);
+    }
+
+    fn rule_reasons(files: &[(&str, &str)], config: &str) -> Vec<(String, String)> {
+        let dir = repo_with(files);
+        let d = run(&dir, &cfg(config)).unwrap();
+        assert!(
+            d.skipped.is_empty(),
+            "rule problems never become skipped records: {d:?}"
+        );
+        d.rule_warnings
+            .iter()
+            .map(|w| (w.path.as_str().to_owned(), w.reason.clone()))
+            .collect()
+    }
+
+    fn rule(source: &str) -> String {
+        format!("[[file_rules]]\nsource = \"{source}\"\nfold_directories = false\n")
+    }
+
+    #[test]
+    fn file_rules_on_link_sources_and_directories_are_fine() {
+        let files = [(".config/a/b.txt", "x"), (".config/a/c.tmpl", "x")];
+        let config = rule(".config/a/b.txt") + &rule(".config/a") + &rule(".config");
+        assert!(rule_reasons(&files, &config).is_empty());
+    }
+
+    #[test]
+    fn file_rule_problems_are_warnings() {
+        let files = [
+            (".rustowignore", "*.bak\n"),
+            ("t.tmpl", "x"),
+            ("off.tmpl", "{%- meta.os == \"plan9\" %}\n"),
+            ("c.conf", "x"),
+            ("x.bak", "x"),
+            (".rustowroot/etc/x.tmpl", "x"),
+        ];
+        let config = String::from("[[files]]\nsource = \"c.conf\"\n")
+            + &rule("t.tmpl")
+            + &rule("off.tmpl")
+            + &rule("c.conf")
+            + &rule("x.bak")
+            + &rule(".rustowroot/etc")
+            + &rule(".rustowroot")
+            + &rule("gone")
+            + &rule(".git/x");
+        let entry = ".rustow.toml [[file_rules]] entry";
+        let not_link = format!("{entry} is not a plain symlinked file; fold rules apply only to link sources");
+        let root = format!("{entry} is under .rustowroot/, where rustow never folds");
+        assert_eq!(
+            rule_reasons(&files, &config),
+            vec![
+                (
+                    ".git/x".into(),
+                    format!("{entry} is reserved and can never be deployed")
+                ),
+                (".rustowroot".into(), root.clone()),
+                (".rustowroot/etc".into(), root),
+                ("c.conf".into(), not_link.clone()),
+                ("gone".into(), format!("{entry} does not exist (remove the entry)")),
+                ("off.tmpl".into(), not_link.clone()),
+                ("t.tmpl".into(), not_link),
+                ("x.bak".into(), format!("{entry} is ignored by .rustowignore")),
+            ]
+        );
     }
 }
