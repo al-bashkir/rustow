@@ -14,11 +14,30 @@ rustow never runs `sudo`. To write to `/etc` you must start rustow with the need
 
 `owner` and `group` in a template rule need privilege. Without it, rustow fails with a privilege hint and leaves no partial file.
 
-## Copy or symlink
+## Copies only
 
-Use a copy for system files. Set a `[[template_rules]]` entry, or use `rustow file add`.
+A system file never deploys as a symlink. A symlink into a private cache is unusable: cache directories have mode 0700 and cache files 0600, so other programs get "Permission denied". A symlink into a user-writable repository or cache is unsafe: that user can change a system file.
 
-Every symlink is checked before it is planned, in every scope. Its target is the cache entry (templates, decrypted files) or the repository file (ordinary links). Every path on the target chain must be owned by root or by the owner of the destination directory. See the [trust rule](security.md#trust-rule) for write access. When the check fails, rustow reports a conflict. The message starts with "untrusted link target: repository source: …; copy it instead with `rustow file add`", or with "untrusted link target: cache entry: …". So when you run rustow as root with a repository in your home, use copies for system files (`rustow file add`, or template metadata).
+- A template without a `[[template_rules]]` entry deploys as `template+copy`. A new file gets mode 0644, or 0600 when the template is encrypted. An update keeps the mode, owner and group of the existing file.
+- A template with a rule deploys as `template+copy` with the metadata of the rule.
+- An ordinary or encrypted file must be registered with `rustow file add`. It then deploys as `copy` or `decrypt+copy`.
+- An ordinary or encrypted file that is not registered is a configuration error (exit 2). Every command that reads all sources stops and writes nothing, for example `apply`, `diff`, `status` and `check`. The message tells you what to do: "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`".
+- `rustow file add` works also while other system files are not registered yet.
+- rustow skips an ignored file before this check.
+
+`rustow link` and `rustow unlink` take symlinks only, so they never deploy or remove a system file. `rustow file apply`, `rustow template apply` and `rustow apply` deploy system files. `rustow undeploy` removes them.
+
+The [trust rule](security.md#trust-rule) checks symlinks. System files are copies, so it does not apply to them.
+
+## Old symlinks
+
+An older rustow deployed some system files as symlinks. rustow replaces such a symlink with a copy:
+
+- A template symlink becomes a copy on the next `apply`.
+- An ordinary or encrypted symlink becomes a copy after `rustow file add`. Until then, the configuration error stops every command that reads all sources, and the symlink stays.
+- If you edited the file through the old symlink, you edited the cache entry. Then `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--backup` saves your edit under `<state_dir>/backups/<repo-id>/<time>/cache/<dest>`. `--force` discards it.
+
+## Cache of other users
 
 The cache inside the repository belongs to the repository owner. When another user (normally root) runs rustow, it uses a private cache in its own state directory (`<state_dir>/cache`) and prints a notice. Root and user runs never share or block one cache.
 

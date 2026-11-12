@@ -106,7 +106,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 
 ## Deployment
 
-- Default: decrypt into the cache and link to it (`decrypt+link`).
+- Default: decrypt into the cache and link to it (`decrypt+link`). A system file under `.rustowroot/` never links: register it with `rustow file add`.
 - `rustow file add x.age`: decrypt and copy (`decrypt+copy`, mode 0600).
 - Encrypted templates: decrypt, then render.
 - Output names the backend in the mode label: `decrypt(age)+link`, `decrypt(gpg)+copy`, `decrypt(gpg)+template+link`. Plans (text and JSON), `status`, `undeploy`, `template list` and `file list` show these labels.

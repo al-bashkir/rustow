@@ -1,6 +1,6 @@
 # File management (copies)
 
-By default rustow links files. Use `[[files]]` to deploy a file as a copy instead.
+By default rustow links home files. Use `[[files]]` to deploy a file as a copy instead. A system file under `.rustowroot/` that is not a template must be registered. See [system files](system-files.md).
 
 ```sh
 rustow file add .config/example/settings.json
@@ -18,6 +18,7 @@ rustow file remove .config/example/settings.json
 - It keeps comments and CRLF line endings in `.rustow.toml`. `file remove` keeps them too.
 - It exits with code 2 for a template, a directory, an ignored path, a reserved path or an unknown path.
 - `file add x.age` makes a `decrypt+copy` source with mode 0600.
+- It registers a system file also while other system files are not registered yet.
 
 ## remove
 
@@ -37,7 +38,7 @@ rustow file remove .config/example/settings.json
 
 | Command | Deploys |
 | --- | --- |
-| `rustow link` | Link only |
+| `rustow link` | Link only (never a system file) |
 | `rustow file apply` | copy and decrypt+copy |
 | `rustow template apply` | All templates |
 | `rustow apply` | All |

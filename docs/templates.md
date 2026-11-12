@@ -4,8 +4,9 @@ A template is a source file whose name ends in the template extension (default `
 
 ## Deployment
 
-- Without a rule, a template deploys as `template+link`. rustow writes the rendered file to the cache and links to it.
+- Without a rule, a home template deploys as `template+link`. rustow writes the rendered file to the cache and links to it.
 - With a `[[template_rules]]` entry, a template deploys as `template+copy`. The rule sets `mode`, `owner` and `group`.
+- A system template under `.rustowroot/` always deploys as `template+copy`, also without a rule. See [system files](system-files.md).
 
 ```toml
 [[template_rules]]
@@ -13,7 +14,7 @@ source = ".ssh/config.tmpl"
 mode = "0600"
 ```
 
-A new copy gets the rule `mode`. Without a rule `mode`, a new copy gets 0644 (0600 if the source is encrypted). The rule `mode` takes octal digits only and must include owner read (0400). Otherwise it is a configuration error (exit 2).
+A new copy gets the rule `mode`. Without a rule `mode` (or without a rule, for a system template), a new copy gets 0644 (0600 if the source is encrypted), and an update keeps the mode of the existing file. The rule `mode` takes octal digits only and must include owner read (0400). Otherwise it is a configuration error (exit 2).
 
 If you edited the cache entry through the link and then add a rule, `apply` reports a conflict on the cache entry. `--backup` saves your edit under `<state_dir>/backups/<repo-id>/<time>/cache/<dest>`.
 

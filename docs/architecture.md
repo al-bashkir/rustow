@@ -45,6 +45,17 @@ rustow has one planner and one executor. Every command that changes files builds
 
 Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels are link, copy, decrypt+link, decrypt+copy, template+link, template+copy. State and selectors use these labels. Output uses `source::shown_label`, which adds the backend: `decrypt(age)+link`, `decrypt(gpg)+template+link`. Commands choose modes: `link` takes Link only, `file apply` takes FileCopy and DecryptCopy, `template apply` takes templates, `apply` takes all.
 
+`source::classify` applies one scope rule after the mode is selected (`scoped_mode`). Under `.rustowroot/` (`Scope::Root`), no source is a link:
+
+| Selected mode | Home | Root |
+| --- | --- | --- |
+| Link | Link | configuration error: register it with `rustow file add` |
+| DecryptLink | DecryptLink | configuration error: register it with `rustow file add` |
+| TemplateLink | TemplateLink | TemplateCopy with empty metadata |
+| FileCopy, DecryptCopy, TemplateCopy | unchanged | unchanged |
+
+`file add` discovers with `source::classify_unscoped`, so it can register an unregistered system file.
+
 ## Cache
 
 Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<scope-id>/<dest>`. Directories are 0700 and files 0600. Before it writes, rustow creates the cache root, or sets its mode to 0700 without a message. It refuses a cache root that is not a directory (it never follows a symlink there) or that another user owns (`fsops::ensure_private_dir`). Entries that feed copies are refreshed.

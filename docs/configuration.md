@@ -117,7 +117,7 @@ Free-form values. Templates read them as `vars.<name>`. Tables and lists are all
 source = ".config/example/settings.json"
 ```
 
-Registers a source for copy deployment. Use `rustow file add` to edit this list. See [file management](file-management.md).
+Registers a source for copy deployment. Use `rustow file add` to edit this list. See [file management](file-management.md). A system file under `.rustowroot/` that is not a template must be in this list. See [system files](system-files.md).
 
 ## `[[template_rules]]`
 
@@ -129,10 +129,10 @@ owner = "root"
 group = "root"
 ```
 
-A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`.
+A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. A system template under `.rustowroot/` deploys as a copy also without a rule.
 
 - `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. Only the digits 0–7 are allowed, with no sign or space. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits. The mode must include owner read (`0400`), because rustow reads the deployed file to find changes. Any other mode is a configuration error (exit 2).
-- `owner` and `group` are a name or a numeric id. An unknown name is an error.
+- `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem.
 
 A rule on a file that is not a template is an error. A registered source or a rule source must exist. It must not be ignored or reserved.
 
@@ -140,12 +140,14 @@ A rule on a file that is not a template is an error. A registered source or a ru
 
 | Mode | Label | Source |
 | --- | --- | --- |
-| Link | link | Ordinary file |
+| Link | link | Ordinary home file |
 | FileCopy | copy | Listed in `[[files]]` |
-| DecryptLink | decrypt+link | `.age` or `.gpg` file |
+| DecryptLink | decrypt+link | `.age` or `.gpg` home file |
 | DecryptCopy | decrypt+copy | Encrypted file listed in `[[files]]` |
-| TemplateLink | template+link | Template without rule |
-| TemplateCopy | template+copy | Template with a rule |
+| TemplateLink | template+link | Home template without rule |
+| TemplateCopy | template+copy | Template with a rule, or system template |
+
+A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` is a configuration error (exit 2). See [system files](system-files.md).
 
 Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. Nested names such as `x.age.gpg` are rejected. The destination name drops the encryption suffix, then the template extension.
 

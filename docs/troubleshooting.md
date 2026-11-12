@@ -49,10 +49,11 @@ Read the message. A TOML error gives the line, the column and the key path: `.ru
 
 - "holds 'X', which is not rustow's": a configured in-repository `cache_dir` or `state_dir` holds a file that rustow did not write. Move the file, or choose another directory.
 - "is reserved by rustow and is never deployed": the path is reserved, for example a name that starts with `.rustow-tmp-`.
+- "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`": a system file is not registered. Run the command in the message. Or add the path to `.rustowignore`. See [system files](system-files.md).
 
 ## Untrusted link target
 
-rustow checks every symlink, in every scope (see the [trust rule](security.md#trust-rule)). The conflict starts with "untrusted link target: repository source: …; copy it instead with `rustow file add`", or "untrusted link target: cache entry: …". A path on the link target chain is not owned by root or by the destination owner, or others can write to it, or a group other than the owner's private group can write to it.
+rustow checks every symlink (see the [trust rule](security.md#trust-rule)). Only home files deploy as symlinks; system files are always copies. The conflict starts with "untrusted link target: repository source: …; copy it instead with `rustow file add`", or "untrusted link target: cache entry: …". A path on the link target chain is not owned by root or by the destination owner, or others can write to it, or a group other than the owner's private group can write to it.
 
 - "writable by group N, which is not the private group of uid M": run the `chmod g-w` command in the message.
 - "writable by others": run `chmod o-w` on that path.

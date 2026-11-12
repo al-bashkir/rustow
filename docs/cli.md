@@ -32,7 +32,7 @@ Without a command, rustow runs `apply`.
 | Command | Purpose |
 | --- | --- |
 | `apply [PATH]...` | Deploy all eligible sources. |
-| `link [PATH]...` | Deploy ordinary plaintext symlinks only. |
+| `link [PATH]...` | Deploy ordinary plaintext symlinks only. System files are never symlinks. |
 | `unlink [PATH]...` | Remove managed link-mode symlinks (and folded directory links). |
 | `init` | Prepare the repository. Deploys nothing. |
 | `file add\|remove [PATH]...` | Register or unregister copy sources. |
@@ -84,7 +84,7 @@ Path arguments are repository-relative. They are never relative to the current d
 | Destination changed since last apply | MODIFIED conflict |
 | Cache entry behind rustow's link changed since last apply (also after a switch to a copy) | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>` |
 | Several sources map to the destination | conflict (collision) |
-| Symlink target fails the [trust rule](security.md#trust-rule) | conflict ("untrusted link target") |
+| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target") |
 | Directory of the destination is not writable | error, also in `--dry-run` and `status` |
 
 Two sources collide when they have the same destination, for example `x`, `x.age` and `x.tmpl`. On a case-insensitive target filesystem, names that differ only in case collide too. A root target of `/` always counts as case-sensitive (known limit).
@@ -119,7 +119,7 @@ When the source and the destination both changed, `diff` prints "<dest>: conflic
 
 ## check and doctor
 
-`check` is offline. It checks the configuration, ignore rules, registrations and collisions. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2.
+`check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2.
 
 `doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
 

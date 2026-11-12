@@ -4,6 +4,7 @@
 
 - It never runs `sudo` and never runs commands from templates.
 - It writes files with a temporary file in the same directory (mode 0600), then `fchown`/`fchmod`, `fsync` and `rename`. It never follows a symlink at the final destination.
+- It deploys system files (`.rustowroot/`) only as copies. A symlink into a private cache is unusable for other programs. A symlink into a user-writable repository or cache is unsafe.
 - It checks every symlink before it plans it, and every symlinked ancestor of a destination before it follows it. See [Trust rule](#trust-rule).
 - It never changes a destination that resolves inside the repository or the cache.
 - It creates private cache (0700/0600) and state (0700/0600) directories. It refuses a cache root or state directory that you do not own.
@@ -12,7 +13,7 @@
 
 ## Trust rule
 
-A symlink must point only at a file that other users cannot change. rustow checks each path on the chain of the link target: the repository source of an ordinary link, or the cache entry of a template or a decrypted file. This applies in every scope, for home files and for system files.
+A symlink must point only at a file that other users cannot change. rustow checks each path on the chain of the link target: the repository source of an ordinary link, or the cache entry of a template or a decrypted file. Only home files deploy as symlinks, so the rule applies to home files. System files are always copies.
 
 - Each path must be owned by root or by the owner of the destination directory.
 - No path may be writable by others. A sticky directory that root owns, such as `/tmp`, is the exception.
