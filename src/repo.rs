@@ -111,7 +111,12 @@ impl Context {
     }
 
     pub fn discover(&self) -> Result<Discovery> {
-        discover(&self.root, &self.ignore, &self.config, classify)
+        let found = discover(&self.root, &self.ignore, &self.config, classify)?;
+        // Until the commands report skipped sources, they refuse them as before.
+        match found.skipped.first() {
+            Some(s) => Err(Error::Config(format!("source '{}': {}", s.path, s.reason))),
+            None => Ok(found),
+        }
     }
 
     pub fn target_root(&self, scope: Scope) -> &Path {

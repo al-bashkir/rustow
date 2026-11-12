@@ -121,12 +121,23 @@ pub struct Source {
     pub mode: Mode,
 }
 
+/// A repository file (or a configuration entry) that cannot deploy. The
+/// rest of the repository deploys; commands print a warning for it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Skipped {
+    pub path: RelPath,
+    /// Why it cannot deploy, without the path.
+    pub reason: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Discovery {
     /// Sorted by path.
     pub sources: Vec<Source>,
     /// User-ignored paths (top-most ignored entry), sorted. Reserved paths are not listed.
     pub ignored: Vec<RelPath>,
+    /// Files and entries that cannot deploy, sorted by path.
+    pub skipped: Vec<Skipped>,
 }
 
 /// Two or more sources that would write the same destination, or one
@@ -152,8 +163,8 @@ impl std::fmt::Display for Collision {
 }
 
 /// Walks the repository and classifies every non-ignored file with
-/// `classify`. Also checks that each registration and template rule names
-/// a deployable source.
+/// `classify`. A file that cannot deploy, and a registration or template
+/// rule that names no deployable file, go to `skipped`.
 pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, classify: Classifier) -> Result<Discovery> {
     let mut out = Discovery::default();
     let mut walker = walkdir::WalkDir::new(repo)
@@ -164,15 +175,17 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, classify: Classifier
     while let Some(entry) = walker.next() {
         let entry = entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
         let rel = repo_relative(repo, entry.path())?;
-        if visit_entry(rel, entry.file_type(), ignore, cfg, classify, &mut out)? {
+        if visit_entry(rel, entry.file_type(), ignore, cfg, classify, &mut out) {
             walker.skip_current_dir();
         }
     }
-    check_registrations(repo, ignore, cfg, &out.sources)?;
+    let unmatched = check_registrations(repo, ignore, cfg, &out);
+    out.skipped.extend(unmatched);
+    out.skipped.sort();
     Ok(out)
 }
 
-/// Sorts one walked entry into sources or ignored paths. True when the walker must skip the directory.
+/// Sorts one walked entry into sources, skipped files or ignored paths. True when the walker must skip the directory.
 fn visit_entry(
     rel: RelPath,
     file_type: std::fs::FileType,
@@ -180,23 +193,28 @@ fn visit_entry(
     cfg: &Config,
     classify: Classifier,
     out: &mut Discovery,
-) -> Result<bool> {
+) -> bool {
     if ignore.is_ignored(&rel, file_type.is_dir()) {
         if !ignore.is_reserved(&rel, file_type.is_dir()) {
             out.ignored.push(rel);
         }
-        return Ok(file_type.is_dir());
+        return file_type.is_dir();
     }
-    if let Some(what) = unexpected_kind(file_type) {
-        return Err(Error::Config(format!(
-            "source '{rel}' is {what}; rustow deploys regular files only. Add it to {} to skip it",
+    if file_type.is_dir() {
+        return false;
+    }
+    let classified = match unexpected_kind(file_type) {
+        Some(what) => Err(format!(
+            "is {what}; rustow deploys regular files only. Add it to {} to skip it",
             crate::ignore::IGNORE_FILE
-        )));
+        )),
+        None => classify(&rel, cfg),
+    };
+    match classified {
+        Ok(source) => out.sources.push(source),
+        Err(reason) => out.skipped.push(Skipped { path: rel, reason }),
     }
-    if file_type.is_file() {
-        out.sources.push(classify(&rel, cfg)?);
-    }
-    Ok(false)
+    false
 }
 
 /// What a repository entry is when it is neither a directory nor a
@@ -222,51 +240,61 @@ fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
     RelPath::parse(text)
 }
 
-/// Every `[[files]]` and `[[template_rules]]` source must be discovered.
-fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, sources: &[Source]) -> Result<()> {
-    let known: BTreeSet<&RelPath> = sources.iter().map(|s| &s.path).collect();
+/// Each `[[files]]` and `[[template_rules]]` entry that names no
+/// discovered or skipped file, with the reason.
+fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Discovery) -> Vec<Skipped> {
+    let known: BTreeSet<&RelPath> = found
+        .sources
+        .iter()
+        .map(|s| &s.path)
+        .chain(found.skipped.iter().map(|s| &s.path))
+        .collect();
     let entries = cfg.files.iter().map(|p| ("[[files]]", p));
     let entries = entries.chain(cfg.template_rules.keys().map(|p| ("[[template_rules]]", p)));
-    for (table, path) in entries {
-        if known.contains(path) {
-            continue;
-        }
-        let why = if ignore.is_reserved(path, false) {
-            "is reserved and can never be deployed"
-        } else if ignore.is_ignored(path, false) {
-            "is ignored by .rustowignore"
-        } else if repo.join(path.as_path()).is_dir() {
-            "is a directory, not a file"
-        } else {
-            "does not exist (remove the entry, e.g. with `rustow file remove`)"
-        };
-        return Err(Error::Config(format!(
-            "{}: {table} source '{path}' {why}",
-            crate::config::CONFIG_FILE
-        )));
+    entries
+        .filter(|(_, path)| !known.contains(path))
+        .map(|(table, path)| Skipped {
+            path: path.clone(),
+            reason: format!(
+                "{} {table} entry {}",
+                crate::config::CONFIG_FILE,
+                unmatched_entry(repo, ignore, path)
+            ),
+        })
+        .collect()
+}
+
+/// Why a configuration entry names no deployable file.
+fn unmatched_entry(repo: &Path, ignore: &Ignore, path: &RelPath) -> &'static str {
+    if ignore.is_reserved(path, false) {
+        "is reserved and can never be deployed"
+    } else if ignore.is_ignored(path, false) {
+        "is ignored by .rustowignore"
+    } else if repo.join(path.as_path()).is_dir() {
+        "is a directory, not a file"
+    } else {
+        "does not exist (remove the entry, e.g. with `rustow file remove`)"
     }
-    Ok(())
 }
 
 /// How discovery classifies each file: `classify` or `classify_unscoped`.
-pub type Classifier = fn(&RelPath, &Config) -> Result<Source>;
+pub type Classifier = fn(&RelPath, &Config) -> std::result::Result<Source, String>;
 
 /// Classifies one deployable repository file (spec §5 steps 3–8), with
-/// the scope rule applied: the mode it deploys with.
-pub fn classify(path: &RelPath, cfg: &Config) -> Result<Source> {
+/// the scope rule applied: the mode it deploys with. The error is the
+/// reason the file is skipped.
+pub fn classify(path: &RelPath, cfg: &Config) -> std::result::Result<Source, String> {
     let source = classify_unscoped(path, cfg)?;
-    let mode =
-        scoped_mode(source.scope, source.mode, path).map_err(|why| Error::Config(format!("source '{path}': {why}")))?;
+    let mode = scoped_mode(source.scope, source.mode, path)?;
     Ok(Source { mode, ..source })
 }
 
 /// The mode from the suffixes and the configuration, before the scope
 /// rule. `rustow file add` uses it to register an unregistered system file.
-pub fn classify_unscoped(path: &RelPath, cfg: &Config) -> Result<Source> {
-    let bad = |why: &str| Error::Config(format!("source '{path}': {why}"));
-    let (scope, inner) = split_scope(path)?;
-    let (backend, template, name) = split_suffixes(inner.file_name(), &cfg.template_extension).map_err(bad)?;
-    let mode = select_mode(path, cfg, backend, template).map_err(|why| bad(&why))?;
+pub fn classify_unscoped(path: &RelPath, cfg: &Config) -> std::result::Result<Source, String> {
+    let (scope, inner) = split_scope(path).map_err(|e| e.to_string())?;
+    let (backend, template, name) = split_suffixes(inner.file_name(), &cfg.template_extension)?;
+    let mode = select_mode(path, cfg, backend, template)?;
     Ok(Source {
         path: path.clone(),
         scope,
@@ -493,11 +521,9 @@ mod tests {
         assert_eq!(mode_of(".rustowroot/etc/r.tmpl", &c), Mode::TemplateCopy(None, rule));
         assert_eq!(mode_of(".rustowroot/etc/c", &c), Mode::FileCopy);
         for p in [".rustowroot/etc/l", ".rustowroot/etc/l.gpg"] {
-            let e = classify(&rel(p), &c).unwrap_err();
-            assert_eq!(e.exit_code(), 2);
             assert_eq!(
-                e.to_string(),
-                format!("source '{p}': system files deploy only as copies; register it with `rustow file add {p}`")
+                classify(&rel(p), &c).unwrap_err(),
+                format!("system files deploy only as copies; register it with `rustow file add {p}`")
             );
             assert!(
                 !classify_unscoped(&rel(p), &c).unwrap().mode.is_copy(),
@@ -529,8 +555,8 @@ mod tests {
     fn nested_encryption_suffix_rejected() {
         let c = cfg("");
         for p in ["a.age.gpg", "a.gpg.age", "a.tmpl.age.age"] {
-            let e = classify(&rel(p), &c).unwrap_err().to_string();
-            assert!(e.contains(p), "{e}");
+            let e = classify(&rel(p), &c).unwrap_err();
+            assert_eq!(e, "nested encryption suffixes are not supported", "{p}");
         }
     }
 
@@ -545,8 +571,8 @@ mod tests {
     #[test]
     fn registered_template_rejected() {
         let c = cfg("[[files]]\nsource = \"a.tmpl\"\n");
-        let e = classify(&rel("a.tmpl"), &c).unwrap_err().to_string();
-        assert!(e.contains("a.tmpl") && e.contains("template"), "{e}");
+        let e = classify(&rel("a.tmpl"), &c).unwrap_err();
+        assert!(e.starts_with("templates cannot be registered"), "{e}");
         let c = cfg("[[files]]\nsource = \"a.tmpl.age\"\n");
         assert!(classify(&rel("a.tmpl.age"), &c).is_err());
     }
@@ -554,8 +580,11 @@ mod tests {
     #[test]
     fn rule_on_non_template_rejected() {
         let c = cfg("[[template_rules]]\nsource = \"a.conf\"\nmode = \"0600\"\n");
-        let e = classify(&rel("a.conf"), &c).unwrap_err().to_string();
-        assert!(e.contains("a.conf"), "{e}");
+        let e = classify(&rel("a.conf"), &c).unwrap_err();
+        assert_eq!(
+            e,
+            "has a [[template_rules]] entry but is not a template (no '.tmpl' suffix)"
+        );
     }
 
     #[test]
@@ -634,44 +663,67 @@ mod tests {
         assert_eq!(ignored, [".config/nvim/x.swp", "private"]);
     }
 
+    fn skipped(d: &Discovery) -> Vec<String> {
+        d.skipped.iter().map(|s| format!("{}: {}", s.path, s.reason)).collect()
+    }
+
+    /// A file that cannot deploy is skipped with its reason; discovery
+    /// still finds every other source.
     #[test]
-    fn source_symlink_rejected() {
-        let dir = repo(&["real"]);
+    fn discovery_skips_each_file_that_cannot_deploy() {
+        let dir = repo(&[
+            ".bashrc",
+            "real",
+            ".rustowroot/etc/x",
+            "n.age.gpg",
+            "a.conf",
+            "t.tmpl",
+            ".age",
+        ]);
         std::os::unix::fs::symlink("real", dir.path().join(".vimrc")).unwrap();
-        let e = run(&dir, &cfg("")).unwrap_err().to_string();
-        assert!(e.contains(".vimrc") && e.contains(".rustowignore"), "{e}");
+        let c = cfg("[[files]]\nsource = \"t.tmpl\"\n[[template_rules]]\nsource = \"a.conf\"\nmode = \"0600\"\n");
+        let d = run(&dir, &c).unwrap();
+        assert_eq!(paths(&d), [".bashrc", "real"]);
+        assert_eq!(
+            skipped(&d),
+            [
+                ".age: the destination name is empty after removing suffixes",
+                ".rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`",
+                ".vimrc: is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it",
+                "a.conf: has a [[template_rules]] entry but is not a template (no '.tmpl' suffix)",
+                "n.age.gpg: nested encryption suffixes are not supported",
+                "t.tmpl: templates cannot be registered with `rustow file add`; use [[template_rules]] metadata to copy them",
+            ]
+        );
         fs::write(dir.path().join(".rustowignore"), ".vimrc\n").unwrap();
-        assert_eq!(paths(&run(&dir, &cfg("")).unwrap()), ["real"]);
+        let d = run(&dir, &c).unwrap();
+        assert!(!skipped(&d).iter().any(|s| s.starts_with(".vimrc")), "{d:?}");
     }
 
+    /// A `[[files]]` or `[[template_rules]]` entry that names no
+    /// deployable file is skipped; a skipped file is named only once.
     #[test]
-    fn registered_missing_source_rejected() {
-        let dir = repo(&[".bashrc"]);
-        let e = run(&dir, &cfg("[[files]]\nsource = \"gone.json\"\n"))
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("gone.json") && e.contains("does not exist"), "{e}");
-        let e = run(
-            &dir,
-            &cfg("[[template_rules]]\nsource = \"gone.tmpl\"\nmode = \"0600\"\n"),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(e.contains("gone.tmpl"), "{e}");
-    }
-
-    #[test]
-    fn registered_ignored_or_reserved_source_rejected() {
-        let dir = repo(&["a.bak"]);
+    fn registrations_without_a_deployable_file_are_skipped() {
+        let dir = repo(&[".bashrc", "a.bak", "d/f", "n.age.gpg"]);
         fs::write(dir.path().join(".rustowignore"), "*.bak\n").unwrap();
-        let e = run(&dir, &cfg("[[files]]\nsource = \"a.bak\"\n"))
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("a.bak") && e.contains("ignored"), "{e}");
-        let e = run(&dir, &cfg("[[files]]\nsource = \".rustowignore\"\n"))
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("reserved"), "{e}");
+        let c = cfg("[[files]]\nsource = \"gone.json\"\n[[files]]\nsource = \"a.bak\"\n\
+             [[files]]\nsource = \".rustowignore\"\n[[files]]\nsource = \"d\"\n\
+             [[files]]\nsource = \"n.age.gpg\"\n\
+             [[template_rules]]\nsource = \"gone.tmpl\"\nmode = \"0600\"\n");
+        let d = run(&dir, &c).unwrap();
+        assert_eq!(paths(&d), [".bashrc", "d/f"]);
+        let gone = "does not exist (remove the entry, e.g. with `rustow file remove`)";
+        assert_eq!(
+            skipped(&d),
+            [
+                ".rustowignore: .rustow.toml [[files]] entry is reserved and can never be deployed".to_owned(),
+                "a.bak: .rustow.toml [[files]] entry is ignored by .rustowignore".to_owned(),
+                "d: .rustow.toml [[files]] entry is a directory, not a file".to_owned(),
+                format!("gone.json: .rustow.toml [[files]] entry {gone}"),
+                format!("gone.tmpl: .rustow.toml [[template_rules]] entry {gone}"),
+                "n.age.gpg: nested encryption suffixes are not supported".to_owned(),
+            ]
+        );
     }
 
     fn src(path: &str, scope: Scope, dest: &str) -> Source {

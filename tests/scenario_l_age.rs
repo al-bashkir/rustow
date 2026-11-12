@@ -377,7 +377,7 @@ fn enc_and_edit_refuse_a_symlinked_parent_directory() {
     assert_eq!(out.code, 2, "{out:?}");
     assert!(
         out.stderr.contains(
-            "source 'ld' is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it"
+            "source 'ld': is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it"
         ),
         "{out:?}"
     );
