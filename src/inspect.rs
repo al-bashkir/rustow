@@ -347,7 +347,7 @@ fn orphans(ctx: &Context, discovery: &Discovery, state: &State, args: &[String])
 /// rendering. Never decrypts. Exit 0 clean, 1 findings.
 pub fn check(ctx: &Context, printer: &Printer) -> Result<i32> {
     let discovery = ctx.discover()?;
-    let mut findings: Vec<String> = check_collisions(&discovery.sources)
+    let mut findings: Vec<String> = check_collisions(&discovery.sources, crate::plan::case_folding(ctx))
         .iter()
         .map(ToString::to_string)
         .collect();

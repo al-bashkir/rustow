@@ -214,3 +214,25 @@ fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
         "{cached}"
     );
 }
+
+/// Names that differ only in case are two files on a case-sensitive
+/// target and one file on a case-insensitive one (APFS by default). Linux
+/// covers only the first branch; macOS CI covers the second.
+#[test]
+fn names_that_differ_only_in_case_collide_only_on_a_case_insensitive_target() {
+    let fx = Fixture::new();
+    fx.write("X", "upper\n");
+    fx.write("x.tmpl", "lower\n");
+    fs::write(fx.base.join("probe"), "").unwrap();
+    let insensitive = fx.base.join("PROBE").exists();
+    let out = fx.run(&["apply"]);
+    if insensitive {
+        assert_eq!(out.code, 3, "{out:?}");
+        assert!(out.stdout.contains("same destination"), "{out:?}");
+        assert!(!fx.home_path("x").exists());
+    } else {
+        assert_eq!(out.code, 0, "{out:?}");
+        assert_eq!(read(&fx.home_path("X")), "upper\n");
+        assert_eq!(read(&fx.home_path("x")), "lower\n");
+    }
+}

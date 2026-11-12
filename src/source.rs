@@ -331,30 +331,41 @@ fn plain_mode(
 
 /// Detects destination collisions across all modes (spec §5 step 9): two
 /// sources with one destination, or a destination that is an ancestor
-/// directory of another destination.
-pub fn check_collisions(sources: &[Source]) -> Vec<Collision> {
-    let mut by_dest: BTreeMap<(Scope, &RelPath), Vec<&RelPath>> = BTreeMap::new();
+/// directory of another destination. `folded(scope)` says that the
+/// scope's target ignores case; its destinations are compared case-folded.
+pub fn check_collisions(sources: &[Source], folded: impl Fn(Scope) -> bool) -> Vec<Collision> {
+    let mut by_dest: BTreeMap<(Scope, String), Vec<&Source>> = BTreeMap::new();
     for s in sources {
-        by_dest.entry((s.scope, &s.dest)).or_default().push(&s.path);
+        let key = collision_key(s.dest.as_str(), folded(s.scope));
+        by_dest.entry((s.scope, key)).or_default().push(s);
     }
     let mut out = Vec::new();
-    for ((scope, dest), paths) in &by_dest {
-        let mut involved: Vec<RelPath> = paths.iter().map(|p| (*p).clone()).collect();
-        for ((other_scope, other_dest), other_paths) in &by_dest {
-            if other_scope == scope && other_dest.strip_prefix(dest).is_some() {
-                involved.extend(other_paths.iter().map(|p| (*p).clone()));
+    for ((scope, dest), group) in &by_dest {
+        let mut involved: Vec<RelPath> = group.iter().map(|s| s.path.clone()).collect();
+        for ((other_scope, other_dest), others) in &by_dest {
+            let below = other_dest
+                .strip_prefix(dest.as_str())
+                .is_some_and(|r| r.starts_with('/'));
+            if other_scope == scope && below {
+                involved.extend(others.iter().map(|s| s.path.clone()));
             }
         }
         if involved.len() > 1 {
             involved.sort();
             out.push(Collision {
                 scope: *scope,
-                dest: (*dest).clone(),
+                dest: group[0].dest.clone(),
                 sources: involved,
             });
         }
     }
     out
+}
+
+/// A destination path as compared for collisions: case-folded when the
+/// target ignores case.
+pub fn collision_key(path: &str, folded: bool) -> String {
+    if folded { path.to_lowercase() } else { path.to_owned() }
 }
 
 #[cfg(test)]
@@ -581,7 +592,7 @@ mod tests {
             src(".ssh/x.gpg", Scope::Home, ".ssh/x"),
             src(".rustowroot/.ssh/x", Scope::Root, ".ssh/x"),
         ];
-        let c = check_collisions(&sources);
+        let c = check_collisions(&sources, |_| false);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].dest, rel(".ssh/x"));
         assert_eq!(c[0].sources, [rel(".ssh/x"), rel(".ssh/x.age"), rel(".ssh/x.gpg")]);
@@ -593,8 +604,30 @@ mod tests {
             src(".config.tmpl", Scope::Home, ".config"),
             src(".config/x", Scope::Home, ".config/x"),
         ];
-        let c = check_collisions(&sources);
+        let c = check_collisions(&sources, |_| false);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].sources, [rel(".config.tmpl"), rel(".config/x")]);
+    }
+
+    #[test]
+    fn collision_keys_ignore_case_only_on_a_case_insensitive_target() {
+        let sources = [
+            src("X", Scope::Home, "X"),
+            src("x.tmpl", Scope::Home, "x"),
+            src(".Config.tmpl", Scope::Home, ".Config"),
+            src(".config/a", Scope::Home, ".config/a"),
+            src(".rustowroot/x", Scope::Root, "x"),
+        ];
+        assert!(check_collisions(&sources, |_| false).is_empty());
+        let c = check_collisions(&sources, |scope| scope == Scope::Home);
+        let found: Vec<&[RelPath]> = c.iter().map(|c| c.sources.as_slice()).collect();
+        assert_eq!(
+            found,
+            [
+                &[rel(".Config.tmpl"), rel(".config/a")][..],
+                &[rel("X"), rel("x.tmpl")][..]
+            ],
+            "the root scope is case-sensitive here"
+        );
     }
 }

@@ -14,7 +14,7 @@ use crate::fsops::{self, FileMeta, Observed, ParentState};
 use crate::hash::Hash;
 use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
-use crate::source::{Discovery, Mode, Selector, Source, check_collisions};
+use crate::source::{Discovery, Mode, Selector, Source, check_collisions, collision_key};
 use crate::state::{Record, State};
 use crate::{cache, crypto, fold, template};
 
@@ -249,10 +249,42 @@ struct Want {
     record: Record,
 }
 
+/// Whether each scope's target ignores case (see `case_insensitive`).
+pub fn case_folding(ctx: &Context) -> impl Fn(Scope) -> bool + use<> {
+    let home = case_insensitive(&ctx.home_target);
+    let root = case_insensitive(&ctx.root_target);
+    move |scope| match scope {
+        Scope::Home => home,
+        Scope::Root => root,
+    }
+}
+
+/// True when the filesystem at `dir` ignores case: the same directory is
+/// found again with the case of one path component swapped. A path with
+/// no letter to swap counts as case-sensitive.
+/// shortcut: "/" has no component, so a root target of "/" counts as
+/// case-sensitive; probe a known entry if a case-insensitive "/" matters.
+fn case_insensitive(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let id = |p: &Path| fs::metadata(p).ok().map(|m| (m.dev(), m.ino()));
+    for path in dir.ancestors() {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+            continue;
+        };
+        let upper = name.to_uppercase();
+        let swapped = if upper != name { upper } else { name.to_lowercase() };
+        if swapped != name {
+            return id(path).is_some() && id(path) == id(&parent.join(swapped));
+        }
+    }
+    false
+}
+
 /// Collision text for every source involved in a collision.
 fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(Scope, &'a RelPath), String> {
+    let folded = case_folding(ctx);
     let mut collided = BTreeMap::new();
-    for c in check_collisions(&discovery.sources) {
+    for c in check_collisions(&discovery.sources, &folded) {
         let detail = c.to_string();
         for s in discovery.sources.iter().filter(|s| c.sources.contains(&s.path)) {
             collided.insert((s.scope, &s.dest), detail.clone());
@@ -261,14 +293,19 @@ fn collision_details<'a>(ctx: &Context, discovery: &'a Discovery) -> BTreeMap<(S
     // The home and root targets can overlap (`.rustowroot/home/<user>/x`).
     let mut by_path: BTreeMap<PathBuf, Vec<&Source>> = BTreeMap::new();
     for s in &discovery.sources {
-        by_path.entry(ctx.dest_path(s)).or_default().push(s);
+        let path = ctx.dest_path(s);
+        let key = match folded(s.scope) {
+            true => PathBuf::from(collision_key(&path.to_string_lossy(), true)),
+            false => path,
+        };
+        by_path.entry(key).or_default().push(s);
     }
-    for (path, group) in by_path.iter().filter(|(_, g)| g.len() > 1) {
+    for group in by_path.values().filter(|g| g.len() > 1) {
         let names: Vec<&str> = group.iter().map(|s| s.path.as_str()).collect();
         let detail = format!(
             "sources {} map to the same destination '{}'",
             names.join(", "),
-            path.display()
+            ctx.dest_path(group[0]).display()
         );
         for s in group {
             collided.entry((s.scope, &s.dest)).or_insert_with(|| detail.clone());
@@ -1161,6 +1198,23 @@ mod tests {
             gid: 1,
         };
         assert_eq!(decide(&want, &ok, Recorded::Copy(&h("a"))), UpToDate);
+    }
+
+    #[test]
+    fn case_probe_compares_the_swapped_name_with_the_real_one() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().canonicalize().unwrap().join("home");
+        fs::create_dir(&dir).unwrap();
+        assert!(!case_insensitive(&dir), "no HOME next to home");
+        // A swapped-case name that reaches the same directory is what a case-insensitive filesystem shows.
+        std::os::unix::fs::symlink(&dir, dir.with_file_name("HOME")).unwrap();
+        assert!(case_insensitive(&dir));
+        fs::create_dir(dir.join("42")).unwrap();
+        assert!(
+            case_insensitive(&dir.join("42")),
+            "'42' has no letter, so 'home' decides"
+        );
+        assert!(!case_insensitive(Path::new("/")), "no letter to swap");
     }
 
     #[test]
