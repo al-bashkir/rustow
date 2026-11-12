@@ -82,10 +82,14 @@ fn fold_candidates(
         .filter(|s| is_home(s) && s.mode == Mode::Link)
         .map(|s| &s.path)
         .collect();
-    let mut candidates: Vec<RelPath> = selected
+    let chosen: BTreeSet<&RelPath> = selected
         .iter()
         .filter(|s| is_home(s) && s.mode == Mode::Link)
-        .flat_map(|s| ancestors(&s.path))
+        .map(|s| &s.path)
+        .collect();
+    let mut candidates: Vec<RelPath> = chosen
+        .iter()
+        .flat_map(|p| ancestors(p))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -95,7 +99,11 @@ fn fold_candidates(
         if folds.iter().any(|f| dir.starts_with(f)) {
             continue;
         }
-        if qualifies(ctx, &dir, recorded.get(&dir).copied(), &link_sources, collided)? {
+        // Keeping rustow's own link changes nothing; a new fold must not
+        // expose sources that this run does not select.
+        let record = recorded.get(&dir).copied();
+        let allowed = if record.is_some() { &link_sources } else { &chosen };
+        if qualifies(ctx, &dir, record, allowed, collided)? {
             folds.push(dir);
         }
     }

@@ -303,3 +303,26 @@ fn collision_on_or_below_a_directory_blocks_its_fold() {
         assert!(!fx.home_path(file).exists(), "{file}: {out:?}");
     }
 }
+
+/// Audit F4: a selective run folds a new directory only when it selects
+/// every source below it; a fold of ~/.config would expose b/y.
+#[test]
+fn selective_apply_folds_only_fully_selected_directories() {
+    let fx = Fixture::new();
+    fx.write(".rustow.toml", FOLD);
+    fx.write(".config/a/x", "x\n");
+    fx.write(".config/b/y", "y\n");
+    let out = fx.ok(&["apply", ".config/a/x"]);
+    assert!(!is_symlink(&fx.home_path(".config")), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/a")), "{out:?}");
+    assert!(!fx.home_path(".config/b").exists(), "{out:?}");
+}
+
+#[test]
+fn selective_apply_keeps_an_existing_fold() {
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    let out = fx.ok(&["apply", ".config/nvim/init.lua"]);
+    assert!(out.stdout.contains("0 changed"), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/nvim")));
+}
