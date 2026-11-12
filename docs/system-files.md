@@ -21,9 +21,10 @@ A system file never deploys as a symlink. A symlink into a private cache is unus
 - A template without a `[[template_rules]]` entry deploys as `template+copy`. A new file gets mode 0644, or 0600 when the template is encrypted. An update keeps the mode, owner and group of the existing file.
 - A template with a rule deploys as `template+copy` with the metadata of the rule.
 - An ordinary or encrypted file must be registered with `rustow file add`. It then deploys as `copy` or `decrypt+copy`.
-- An ordinary or encrypted file that is not registered is a configuration error (exit 2). Every command that reads all sources stops and writes nothing, for example `apply`, `diff`, `status` and `check`. The message tells you what to do: "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`".
+- An ordinary or encrypted file that is not registered does not deploy. rustow skips it and deploys the other sources. The exit code does not change. The warning tells you what to do: "warning: .rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". `status` shows the file as SKIPPED. You can leave a file unregistered on purpose.
+- A command that names such a file, for example `rustow apply .rustowroot/etc/x`, stops with exit 2: "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". A directory argument, for example `.rustowroot/etc/`, only warns.
 - `rustow file add` works also while other system files are not registered yet.
-- rustow skips an ignored file before this check.
+- An ignored file gets no warning: rustow skips it before this check.
 
 `rustow link` and `rustow unlink` take symlinks only, so they never deploy or remove a system file. `rustow file apply`, `rustow template apply` and `rustow apply` deploy system files. `rustow undeploy` removes them.
 
@@ -34,7 +35,7 @@ The [trust rule](security.md#trust-rule) checks symlinks. System files are copie
 An older rustow deployed some system files as symlinks. rustow replaces such a symlink with a copy:
 
 - A template symlink becomes a copy on the next `apply`.
-- An ordinary or encrypted symlink becomes a copy after `rustow file add`. Until then, the configuration error stops every command that reads all sources, and the symlink stays.
+- An ordinary or encrypted symlink becomes a copy after `rustow file add`. Until then, rustow skips the source with a warning, and the symlink stays. It is not reported as orphaned.
 - If you edited the file through the old symlink, you edited the cache entry. Then `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--backup` saves your edit under `<state_dir>/backups/<repo-id>/<time>/cache/<dest>`. `--force` discards it.
 
 ## Cache of other users

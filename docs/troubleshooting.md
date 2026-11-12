@@ -45,11 +45,22 @@ The state records a destination whose source is gone. `status` and the deploy co
 
 ## Exit code 2: configuration
 
-Read the message. A TOML error gives the line, the column and the key path: `.rustow.toml: line L, column C, key <path>: <message>`. Common causes: missing `version = 1`, an unknown key, a rule on a non-template, a registered source that does not exist or is ignored, a bad mode string, a template `mode` without owner read (0400).
+Read the message. A TOML error gives the line, the column and the key path: `.rustow.toml: line L, column C, key <path>: <message>`. Common causes: missing `version = 1`, an unknown key, a bad mode string, a template `mode` without owner read (0400).
 
 - "holds 'X', which is not rustow's": a configured in-repository `cache_dir` or `state_dir` holds a file that rustow did not write. Move the file, or choose another directory.
 - "is reserved by rustow and is never deployed": the path is reserved, for example a name that starts with `.rustow-tmp-`.
-- "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`": a system file is not registered. Run the command in the message. Or add the path to `.rustowignore`. See [system files](system-files.md).
+- "source '<path>': <reason>": a path argument names a skipped source. The reason is the same as in the warning (see below). Fix the source, or give another path.
+
+## Warnings: skipped sources
+
+A `warning:` line names a source that rustow skipped. The other sources deploy, and the exit code does not change. See [skipped sources](cli.md#skipped-sources).
+
+- "system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`": a system file is not registered. Run the command in the message. Or add the path to `.rustowignore`. Or leave it: it stays undeployed. See [system files](system-files.md).
+- "is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it" (or "is not a regular file"): add the path to `.rustowignore`.
+- "nested encryption suffixes are not supported" or "the destination name is empty after removing suffixes": rename the file.
+- "has a [[template_rules]] entry but is not a template": remove the rule, or give the file the template extension.
+- "templates cannot be registered with `rustow file add`": remove the `[[files]]` entry. Use a `[[template_rules]]` entry to copy a template.
+- ".rustow.toml [[files]] entry does not exist" (or "is ignored by .rustowignore", "is reserved", "is a directory"): fix the entry, or remove it with `rustow file remove`.
 
 ## Untrusted link target
 

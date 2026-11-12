@@ -32,7 +32,7 @@ rustow always excludes these. A `!` pattern or an explicit path cannot re-includ
 
 ## Special files
 
-Symlinks and FIFOs in the repository are errors. Ignore them.
+rustow skips symlinks and FIFOs in the repository with a warning. Ignore them to remove the warning.
 
 rustow never decrypts an ignored source.
 

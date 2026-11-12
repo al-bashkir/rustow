@@ -1,6 +1,6 @@
 # File management (copies)
 
-By default rustow links home files. Use `[[files]]` to deploy a file as a copy instead. A system file under `.rustowroot/` that is not a template must be registered. See [system files](system-files.md).
+By default rustow links home files. Use `[[files]]` to deploy a file as a copy instead. A system file under `.rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
 
 ```sh
 rustow file add .config/example/settings.json
@@ -16,7 +16,7 @@ rustow file remove .config/example/settings.json
 
 - It is idempotent. A repeat prints "already registered".
 - It keeps comments and CRLF line endings in `.rustow.toml`. `file remove` keeps them too.
-- It exits with code 2 for a template, a directory, an ignored path, a reserved path or an unknown path.
+- It exits with code 2 for a template, a directory, an ignored path, a reserved path or an unknown path. It also exits with code 2 for a file that cannot deploy as a copy, for example a symlink or a name with nested suffixes such as `x.age.gpg`. The message gives the reason. It registers nothing then.
 - `file add x.age` makes a `decrypt+copy` source with mode 0600.
 - It registers a system file also while other system files are not registered yet.
 

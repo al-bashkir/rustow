@@ -2,7 +2,7 @@
 
 The file is `<repo>/.rustow.toml`. It is optional. Without it, rustow uses the defaults. If the file exists, it must contain `version = 1`.
 
-rustow rejects unknown keys everywhere, except under `[vars]`. A configuration error gives exit code 2.
+rustow rejects unknown keys everywhere, except under `[vars]`. A configuration error gives exit code 2. A problem with one source or one `[[files]]` or `[[template_rules]]` entry is a warning instead: rustow skips that source and deploys the rest. See [skipped sources](cli.md#skipped-sources).
 
 A TOML error reads `.rustow.toml: line L, column C, key <path>: <message>`, for example `.rustow.toml: line 7, column 22, key defaults.create_directories: invalid type, expected a boolean`. The key part is missing when rustow cannot find the key. The message never shows the source line or a value. Other validation messages can name values that are not secret, such as a `mode`, an `owner`, the `engine`, the `extension` or a source path. rustow never shows `[vars]` values.
 
@@ -134,7 +134,7 @@ A rule sets the metadata of a template and makes it deploy as a copy. Set at lea
 - `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. Only the digits 0–7 are allowed, with no sign or space. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits. The mode must include owner read (`0400`), because rustow reads the deployed file to find changes. Any other mode is a configuration error (exit 2).
 - `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem.
 
-A rule on a file that is not a template is an error. A registered source or a rule source must exist. It must not be ignored or reserved.
+A rule on a file that is not a template skips that file with a warning. A registered source or a rule source must exist. It must not be ignored, reserved or a directory. Otherwise rustow skips the entry with a warning, for example "warning: gone.json: .rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)". A template in `[[files]]` is skipped too.
 
 ## Deployment modes
 
@@ -147,9 +147,9 @@ A rule on a file that is not a template is an error. A registered source or a ru
 | TemplateLink | template+link | Home template without rule |
 | TemplateCopy | template+copy | Template with a rule, or system template |
 
-A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` is a configuration error (exit 2). See [system files](system-files.md).
+A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).
 
-Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. Nested names such as `x.age.gpg` are rejected. The destination name drops the encryption suffix, then the template extension.
+Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. rustow skips nested names such as `x.age.gpg` with a warning. The destination name drops the encryption suffix, then the template extension.
 
 The state file and mode selection use these labels. Output names the decrypt step and the backend of an encrypted source: `decrypt(age)+link`, `decrypt(gpg)+copy`, `decrypt(gpg)+template+link`. Plans (text and JSON), `status`, `undeploy`, `template list` and `file list` show these labels.
 

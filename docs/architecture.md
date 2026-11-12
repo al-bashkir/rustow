@@ -7,7 +7,7 @@ rustow has one planner and one executor. Every command that changes files builds
 1. `cli` parses arguments. `app` dispatches and prepares the context.
 2. `repo` finds the repository and builds the `Context` (and the internal directories).
 3. `config` loads `.rustow.toml`. `ignore` loads `.rustowignore`.
-4. `source` discovers files and classifies each into a `Mode`. It also finds collisions and applies the selector.
+4. `source` discovers files and classifies each into a `Mode`. A file or configuration entry that cannot deploy goes to `Discovery::skipped`, with the reason. It also finds collisions and applies the selector.
 5. `plan` decides an action for each destination, with the decision table. It integrates `fold`. It also plans removals.
 6. `execute` predicts and executes the plan, or removes. `fsops` does the file operations.
 7. `state` records each successful item. `report` prints the result.
@@ -49,12 +49,12 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 
 | Selected mode | Home | Root |
 | --- | --- | --- |
-| Link | Link | configuration error: register it with `rustow file add` |
-| DecryptLink | DecryptLink | configuration error: register it with `rustow file add` |
+| Link | Link | skipped: register it with `rustow file add` |
+| DecryptLink | DecryptLink | skipped: register it with `rustow file add` |
 | TemplateLink | TemplateLink | TemplateCopy with empty metadata |
 | FileCopy, DecryptCopy, TemplateCopy | unchanged | unchanged |
 
-`file add` discovers with `source::classify_unscoped`, so it can register an unregistered system file.
+`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
 
 ## Cache
 

@@ -11,6 +11,7 @@ The repository root mirrors your home directory. The `.rustowroot/` directory mi
 - Encrypted sources: age (built in) and GnuPG (installed `gpg`).
 - System files under `.rustowroot/`. They deploy only as copies, never as symlinks. rustow never runs `sudo`.
 - Safe conflict handling. By default rustow changes nothing when any item conflicts or fails to plan.
+- A problem with one source does not stop the run. rustow skips that source with a warning and deploys the rest.
 - State file per repository. `status`, `diff` and `check` show differences. They exit with code 1 when they find some.
 - `.rustowignore` with gitignore syntax.
 

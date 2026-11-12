@@ -51,7 +51,7 @@ Without a command, rustow runs `apply`.
 | `enc edit [--reencrypt] PATH` | Edit an encrypted source. |
 | `completions <SHELL>` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). |
 
-Path arguments are repository-relative. They are never relative to the current directory. A path argument that matches only sources of other modes is a usage error (exit 2).
+Path arguments are repository-relative. They are never relative to the current directory. A path argument that matches only sources of other modes is a usage error (exit 2). A path argument that names a [skipped source](#skipped-sources) is a usage error (exit 2) with the reason, for example "source '.rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`". A directory argument that holds skipped sources deploys the other sources and prints a warning for each skipped one.
 
 ## Exit codes
 
@@ -59,9 +59,34 @@ Path arguments are repository-relative. They are never relative to the current d
 | --- | --- |
 | 0 | Success, or clean. |
 | 1 | Differences found (`diff`, `status`, `check`). `doctor` uses 1 for a failed check. |
-| 2 | Usage or configuration error. |
+| 2 | Usage or configuration error. A problem with one source is a warning, not exit 2. |
 | 3 | Conflicts. Under the default policy nothing changed. Also when `--on-conflict skip` left conflicts. |
 | 4 | Runtime or partial failure. This includes render failure, decrypt failure, a destination directory that you cannot write, a state file that rustow cannot write, and interruption. |
+
+## Skipped sources
+
+A problem with one source does not stop the run. rustow skips that source and deploys the other sources. You can leave a file undeployed on purpose. rustow skips:
+
+- an ordinary or encrypted system file that is not in `[[files]]`;
+- a name with nested encryption suffixes, such as `x.age.gpg`;
+- a name that is empty after rustow removes the suffixes, such as `.age`;
+- a file with a `[[template_rules]]` entry that is not a template;
+- a template in `[[files]]`;
+- a symlink or another file that is not a regular file;
+- a `[[files]]` or `[[template_rules]]` entry whose source does not exist, is ignored, is reserved or is a directory.
+
+`apply`, `rustow` without a command, `link`, `file apply`, `template apply` and `diff` print one line on stderr for each skipped source in the path selection:
+
+```text
+warning: .rustowroot/etc/x: system files deploy only as copies; register it with `rustow file add .rustowroot/etc/x`
+warning: n.age.gpg: nested encryption suffixes are not supported
+warning: .vimrc: is a symbolic link; rustow deploys regular files only. Add it to .rustowignore to skip it
+warning: gone.json: .rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)
+```
+
+`-q` hides these lines. With `--json`, the output has a `warnings` array. Each object has `source` and `reason`. Warnings do not change the exit code. `status` shows a skipped source as SKIPPED. `check` prints the warnings, but they are not problems. `unlink` and `undeploy` read only the state, so they do not look at skipped sources.
+
+Problems that are not about one source still stop every command with exit 2. Examples: TOML syntax, an unknown key, an unsupported `version`, a bad `mode` string, a bad cache or state directory, a repository path that is not UTF-8.
 
 ## Conflict policies
 
@@ -97,7 +122,7 @@ Before it replaces an object, rustow checks the object again. If it changed, the
 
 `apply`, `link`, `file apply`, `template apply`, `unlink` and `undeploy` print one line for each item, then a summary. A dry run summary starts with "dry run, nothing written: ". When the abort policy stops a run, the summary starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: ".
 
-With `--json` they print one object: `dry_run`, `aborted`, `items` (each with `source`, `dest`, `mode`, `action` and `detail`) and `summary` (`changed`, `unchanged`, `adopted`, `conflicts`, `errors`). `dry_run` is true only with `-n`. `aborted` is true when the abort policy stopped the run before it wrote anything.
+With `--json` they print one object: `dry_run`, `aborted`, `items` (each with `source`, `dest`, `mode`, `action` and `detail`), `summary` (`changed`, `unchanged`, `adopted`, `conflicts`, `errors`) and `warnings` (each with `source` and `reason`; always empty for `unlink` and `undeploy`). `dry_run` is true only with `-n`. `aborted` is true when the abort policy stopped the run before it wrote anything.
 
 `apply`, `link`, `file apply` and `template apply` also report recorded destinations of their modes whose source is gone, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". In JSON the item has the action `orphaned`. rustow removes nothing, and the exit code does not change.
 
@@ -105,7 +130,7 @@ When rustow cannot write the state file, these commands still print the item rep
 
 ## status
 
-States: LINKED, COPIED, TEMPLATED (clean); MISSING, OUTDATED, MODIFIED, CONFLICT, UNMANAGED, ERROR (rustow cannot compute the desired state, or cannot write the destination directory), ORPHANED (recorded, source removed; the detail is "source removed; `rustow undeploy <source>` removes it"), IGNORED (with `--ignored`). Clean rows are hidden unless `-v`. Exit 0 when clean, 1 when attention is needed. JSON output never contains content.
+States: LINKED, COPIED, TEMPLATED (clean); MISSING, OUTDATED, MODIFIED, CONFLICT, UNMANAGED, ERROR (rustow cannot compute the desired state, or cannot write the destination directory), ORPHANED (recorded, source removed; the detail is "source removed; `rustow undeploy <source>` removes it"), SKIPPED (a [skipped source](#skipped-sources) in the selection; the detail is the reason), IGNORED (with `--ignored`). Clean rows are hidden unless `-v`. SKIPPED and IGNORED rows always show, and they do not need attention. Exit 0 when clean, 1 when attention is needed. JSON output never contains content.
 
 MODIFIED means that the destination, or the cache entry behind rustow's link, changed since rustow last applied it. When the desired content changed too, `status` shows CONFLICT: "source and destination both changed since rustow last applied it".
 
@@ -115,11 +140,11 @@ MODIFIED means that the destination, or the cache entry behind rustow's link, ch
 
 When the source and the destination both changed, `diff` prints "<dest>: conflict: source and destination both changed since rustow last applied it" before the content diff. When rustow cannot render or decrypt an item, it prints "rustow: <source>: cannot compute desired content: <message>" to stderr, and the exit code is 4.
 
-`diff --json` and `file diff --json` print `{"items": [...]}`, with one object for each item that differs: `dest`, `source`, `mode`, `kind`, `detail`, `binary` and `diff`. `kind` is the status word in lower case (`missing`, `outdated`, `modified`, `conflict`, …), or `metadata` when only the metadata differs. A render or decrypt error has the kind `error`, with the message in `detail`. The `diff` field holds the content, so it can hold secrets. The exit codes are the same: 0, 1 or 4.
+`diff --json` and `file diff --json` print `{"items": [...], "warnings": [...]}`, with one object for each item that differs: `dest`, `source`, `mode`, `kind`, `detail`, `binary` and `diff`. `kind` is the status word in lower case (`missing`, `outdated`, `modified`, `conflict`, …), or `metadata` when only the metadata differs. A render or decrypt error has the kind `error`, with the message in `detail`. The `diff` field holds the content, so it can hold secrets. The exit codes are the same: 0, 1 or 4.
 
 ## check and doctor
 
-`check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2.
+`check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2. It prints a warning for each [skipped source](#skipped-sources). A warning is not a problem and does not change the exit code. `check --json` prints `sources`, `problems` and `warnings`.
 
 `doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
 
