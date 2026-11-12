@@ -269,6 +269,7 @@ fn diff_json_lists_each_differing_item() {
         .find(|i| i["source"] == "bad.tmpl");
     assert_eq!(bad.map(|b| &b["kind"]), Some(&serde_json::json!("error")), "{v}");
     assert!(bad.is_some_and(|b| b["detail"].is_string()), "{v}");
+    assert_eq!(bad.map(|b| &b["binary"]), Some(&serde_json::json!(false)), "{v}");
 }
 
 /// Spec §8.5: when the source and the destination both changed, status and

@@ -58,6 +58,7 @@ fn status_labels_and_exit_codes() {
     fx.ok(&["apply"]);
     let after = status(&fx);
     assert_eq!(after.code, 0, "{after:?}");
+    assert!(after.stdout.lines().any(|l| l == "3 ok, 0 need attention"), "{after:?}");
     assert!(line_for(&after, "~/.bashrc").contains("LINKED"));
     assert!(line_for(&after, "~/copied.conf").contains("COPIED"));
     assert!(line_for(&after, "~/.gitconfig").contains("TEMPLATED"));

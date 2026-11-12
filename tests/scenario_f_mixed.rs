@@ -98,6 +98,29 @@ fn unfold_when_template_added() {
     assert!(fx.ok(&["apply"]).stdout.contains("0 changed"));
 }
 
+/// `diff --json` describes an unfold and a collision in text: neither is binary.
+#[test]
+fn diff_json_shows_unfold_and_collision_as_text() {
+    let fx = nvim(&format!("{FOLD}[vars]\nx = \"y\"\n"));
+    fx.ok(&["apply"]);
+    fx.write(".config/nvim/local.lua.tmpl", "{{ vars.x }}\n");
+    fx.write("c", "c\n");
+    fx.write("c.tmpl", "t\n");
+    let out = fx.run(&["diff", "--json"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    let items = v["items"].as_array().unwrap();
+    for (source, text) in [
+        (".config/nvim", "would become a real directory"),
+        ("c", "same destination"),
+    ] {
+        let item = items.iter().find(|i| i["source"] == source);
+        let item = item.unwrap_or_else(|| panic!("{source}: {v}"));
+        assert!(item["diff"].as_str().unwrap().contains(text), "{source}: {v}");
+        assert_eq!(item["binary"], false, "{source}: {v}");
+    }
+}
+
 #[test]
 fn unfold_when_folding_is_turned_off() {
     let fx = nvim(FOLD);
