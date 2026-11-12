@@ -61,3 +61,15 @@ Encrypted templates (`name.tmpl.age`) are decrypted first, then rendered. `check
 ## Cache
 
 Rendered files go to `<cache>/rendered/<repo-id>/<scope-id>/<dest>`. The directories have mode 0700 and the files 0600. If you edit the deployed file through the symlink, you edit the cache entry. `status` shows the item as MODIFIED. `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--dry-run` writes no cache.
+
+### When rustow renders again
+
+rustow renders each selected template again on every run that plans it: `apply`, `template apply`, `status` and `diff`. The output changes when one of these changes:
+
+- The template file. For an encrypted template, this is the decrypted text.
+- A value in `[vars]`.
+- A built-in variable, for example `hostname`, `uid` or `home_dir`.
+
+rustow compares the hash of the new output with the cache entry. It writes the cache entry only when the content is different. Unchanged output is not rewritten. A `template+copy` destination follows the same rule.
+
+The cache path includes the repository id and the scope id. A moved repository, or another `--target` or `--root-target`, uses a new cache entry.

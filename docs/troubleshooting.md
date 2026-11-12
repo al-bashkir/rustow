@@ -58,14 +58,18 @@ rustow never runs `sudo`. Run rustow with the needed rights. An unreadable desti
 - "no configured age identity can decrypt it": add the right identity file to `identity_files`.
 - "not valid age ciphertext": the file is damaged or is not age.
 - Identity file refused: run `chmod 600` on it. It must be yours, outside the repository and the cache.
-- Passphrase-protected identity: use `--interactive`.
+- Passphrase-protected identity: use `--interactive`. This is also necessary for `enc edit`.
 
 ## GnuPG
 
 - `gpg` not found: install GnuPG 2.2 or newer and put it in `PATH`.
 - Recipient refused: use full fingerprints.
+- "<fpr> is a subkey fingerprint; configure the primary key fingerprint <primary>": put the primary fingerprint in `recipients`.
 - "not trusted": set the key trust in your keyring. rustow does not change it.
-- Locked key: unlock `gpg-agent` or use `--interactive`.
+- Locked key: unlock `gpg-agent`, or use `--interactive` (also for `enc edit`).
+- "not OpenPGP data (empty, damaged or another format)": the `.gpg` file is not OpenPGP. It can be an age file with the wrong suffix.
+- "not public-key encrypted OpenPGP data (no recipient key ids)": the file has no recipient. rustow decrypts only data encrypted to public keys.
+- "gpg gave no status output; the gpg run failed": gpg did not start or stopped early. Run `rustow doctor` and check the GnuPG home.
 - Wrong home: set `[encryption.gpg] homedir` or `$GNUPGHOME`. You must own it. Others must not write to it.
 
 ## State file refused
