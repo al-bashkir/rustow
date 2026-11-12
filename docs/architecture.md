@@ -55,6 +55,8 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 | TemplateLink                        | TemplateLink | TemplateCopy with empty metadata            |
 | FileCopy, DecryptCopy, TemplateCopy | unchanged    | unchanged                                   |
 
+With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a TemplateCopy with empty metadata. A home Link or DecryptLink stays a link source. `app::selected` decides if the command deploys it (`may_link`): only `rustow link <path>`, or a state record with a link at its destination or at a folded parent.
+
 `classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
 
 ## Cache

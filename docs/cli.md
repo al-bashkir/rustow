@@ -31,8 +31,8 @@ Without a command, rustow runs `apply`.
 
 | Command                         | Purpose                                                                                                                                |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `apply [PATH]...`               | Deploy all eligible sources.                                                                                                           |
-| `link [PATH]...`                | Deploy ordinary plaintext symlinks only. System files are never symlinks.                                                              |
+| `apply [PATH]...`               | Deploy all eligible sources. In [copy mode](configuration.md#copy-mode), it makes no new symlink.                                      |
+| `link [PATH]...`                | Deploy ordinary plaintext symlinks only. System files are never symlinks. In copy mode, only a path argument makes a new link.         |
 | `unlink [PATH]...`              | Remove managed link-mode symlinks (and folded directory links).                                                                        |
 | `init`                          | Prepare the repository. Deploys nothing.                                                                                               |
 | `file add\|remove [PATH]...`    | Register or unregister copy sources.                                                                                                   |

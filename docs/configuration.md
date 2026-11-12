@@ -18,6 +18,7 @@ cache_dir = ".rustowcache"
 # state_dir = "~/.local/state/rustow"
 create_directories = true
 fold_directories = true
+mode = "symlink"
 
 [templates]
 extension = ".tmpl"
@@ -61,6 +62,27 @@ ignore = [".config/foot/"]
 | `state_dir`          | none             | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`.                                                                                                                             |
 | `create_directories` | `true`           | Create missing parent directories.                                                                                                                                                                            |
 | `fold_directories`   | `true`           | Fold plain directories into one symlink. Never a directory directly under the home target or under `~/.local`. See below.                                                                                     |
+| `mode`               | `"symlink"`      | `"symlink"` or `"copy"`. With `"copy"`, `apply` makes no new symlink. See [copy mode](#copy-mode).                                                                                                            |
+
+### Copy mode
+
+With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys only:
+
+- the sources in `[[files]]` (add one with `rustow file add <path>`),
+- the templates, as copies. A `[[template_rules]]` entry can set their metadata,
+- the links that the state records. `rustow link <path>` makes a link and the state records it.
+
+`apply` skips each other plain or encrypted home file. It prints no warning for it, and `status` shows no row for it.
+
+- `rustow link <path>` links each plain file below the path. A directory can [fold](#folding).
+- `rustow link` without a path makes no new link. It deploys only the links that the state records.
+- `rustow unlink <path>` removes the link and its record. Then `apply` does not link the file again.
+- `rustow file add <path>` makes a linked file a copy. `apply` replaces rustow's link with the copy.
+- A path argument that names only files that are not linked exits 2, for example `rustow apply .vimrc`.
+
+The state is per machine. On a new machine, run `rustow link <path>` again for each link. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before stay in the state, so `apply` keeps them. Use `rustow unlink <path>` to remove one. Templates that rustow linked before become copies on the next `apply`.
+
+`.rustowroot/` sources work the same in both modes.
 
 ### Cache and state directories
 
@@ -221,6 +243,8 @@ A rule without conditions, an unknown key or a bad pattern is a configuration er
 | TemplateCopy | template+copy | Template with a rule, or system template |
 
 A system file under `.rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).
+
+In [copy mode](#copy-mode), a home template is template+copy. A Link or DecryptLink source deploys only when the state records its link.
 
 Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. rustow skips nested names such as `x.age.gpg` with a warning. The destination name drops the encryption suffix, then the template extension.
 

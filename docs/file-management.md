@@ -1,6 +1,6 @@
 # File management (copies)
 
-By default rustow links home files. Use `[[files]]` to deploy a file as a copy instead. A system file under `.rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
+By default rustow links home files. Use `[[files]]` to deploy a file as a copy instead. With `[defaults] mode = "copy"`, `apply` links no file by itself: you add each file with `file add` or `rustow link <path>`. See [copy mode](configuration.md#copy-mode). A system file under `.rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
 
 ```sh
 rustow file add .config/example/settings.json
