@@ -59,11 +59,15 @@ fn unified_plan_apply_and_idempotency() {
     assert_eq!(mode_of(".gitconfig.tmpl"), "template+link");
     assert_eq!(mode_of(".config/example/settings.json"), "copy");
     assert_eq!(mode_of(".rustowroot/etc/example/config.conf.tmpl"), "template+copy");
-    assert_eq!(mode_of(".ssh/private.conf.age"), "decrypt+link");
-    assert_eq!(mode_of(".ssh/copied-secret.conf.age"), "decrypt+copy");
-    assert_eq!(mode_of(".ssh/gpg-private.conf.gpg"), "decrypt+link");
-    assert_eq!(mode_of(".ssh/gpg-copied-secret.conf.gpg"), "decrypt+copy");
-    assert_eq!(mode_of(".config/example/gpg-settings.json.tmpl.gpg"), "template+link");
+    // The plan shows the decrypt step and its backend (spec Scenario G).
+    assert_eq!(mode_of(".ssh/private.conf.age"), "decrypt(age)+link");
+    assert_eq!(mode_of(".ssh/copied-secret.conf.age"), "decrypt(age)+copy");
+    assert_eq!(mode_of(".ssh/gpg-private.conf.gpg"), "decrypt(gpg)+link");
+    assert_eq!(mode_of(".ssh/gpg-copied-secret.conf.gpg"), "decrypt(gpg)+copy");
+    assert_eq!(
+        mode_of(".config/example/gpg-settings.json.tmpl.gpg"),
+        "decrypt(gpg)+template+link"
+    );
     assert_eq!(items.len(), 9);
     assert!(!fx.repo.join(".rustowcache").exists(), "dry run writes nothing");
 

@@ -232,7 +232,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
             .iter()
             .map(|i| {
                 let (action, detail) = execute::predict(i, policy);
-                let mode = i.source.mode.label().to_owned();
+                let mode = i.source.mode.shown_label();
                 ItemReport {
                     source: i.source.path.clone(),
                     dest: i.dest.clone(),

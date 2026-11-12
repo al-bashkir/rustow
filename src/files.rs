@@ -89,11 +89,7 @@ pub fn list(ctx: &Context, printer: &Printer) -> Result<i32> {
         .files
         .iter()
         .map(|path| match classify(path, &ctx.config) {
-            Ok(s) => (
-                path.to_string(),
-                printer.path(&ctx.dest_path(&s)),
-                s.mode.label().to_owned(),
-            ),
+            Ok(s) => (path.to_string(), printer.path(&ctx.dest_path(&s)), s.mode.shown_label()),
             Err(e) => (path.to_string(), String::new(), format!("invalid: {e}")),
         })
         .collect();

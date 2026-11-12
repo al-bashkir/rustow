@@ -203,7 +203,7 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
         out.push(ItemReport {
             source: item.source.path.clone(),
             dest: item.dest.clone(),
-            mode: item.source.mode.label().to_owned(),
+            mode: item.source.mode.shown_label(),
             action,
             detail,
         });

@@ -14,7 +14,7 @@ use crate::fsops::{self, FileMeta, Observed, ParentState};
 use crate::hash::Hash;
 use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
-use crate::source::{Discovery, Mode, Selector, Source, check_collisions, collision_key};
+use crate::source::{Discovery, Mode, Selector, Source, check_collisions, collision_key, shown_label};
 use crate::state::{Record, State};
 use crate::{cache, crypto, fold, template};
 
@@ -989,7 +989,7 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
         let (path, observed) = observe_recorded(ctx, record, dest, rel)?;
         out.push(Removal {
             source: record.source.clone(),
-            mode: record.mode.clone(),
+            mode: shown_label(&record.mode, record.backend),
             dest: dest.clone(),
             path,
             verdict: removal_verdict(observed, record),

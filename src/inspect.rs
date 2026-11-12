@@ -14,7 +14,7 @@ use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step};
 use crate::repo::Context;
 use crate::report::Printer;
-use crate::source::{Discovery, Mode, Selector, check_collisions};
+use crate::source::{Discovery, Mode, Selector, check_collisions, shown_label};
 use crate::state::{Record, State};
 use crate::template;
 
@@ -221,7 +221,7 @@ pub fn status(
             .map(|(dest, record)| Row {
                 source: record.source.to_string(),
                 dest: Some(dest.clone()),
-                mode: record.mode.clone(),
+                mode: shown_label(&record.mode, record.backend),
                 status: "ORPHANED",
                 detail: Some(orphan_detail(record)),
             }),
@@ -272,7 +272,7 @@ fn row(item: &PlanItem, state: &State) -> Row {
     Row {
         source: item.source.path.to_string(),
         dest: Some(item.dest.clone()),
-        mode: item.source.mode.label().to_owned(),
+        mode: item.source.mode.shown_label(),
         status,
         detail,
     }
@@ -374,7 +374,7 @@ pub fn orphan_reports(
         .map(|(dest, record)| ItemReport {
             source: record.source.clone(),
             dest: dest.clone(),
-            mode: record.mode.clone(),
+            mode: shown_label(&record.mode, record.backend),
             action: Action::Orphaned,
             detail: Some(orphan_detail(record)),
         })

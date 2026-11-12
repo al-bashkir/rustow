@@ -38,7 +38,7 @@ impl Mode {
         matches!(self, Mode::TemplateLink(_) | Mode::TemplateCopy(..))
     }
 
-    /// Short label used in plans, status and state.
+    /// Short label stored in state and matched by selectors.
     pub fn label(&self) -> &'static str {
         match self {
             Mode::Link => "link",
@@ -48,6 +48,23 @@ impl Mode {
             Mode::TemplateLink(_) => "template+link",
             Mode::TemplateCopy(..) => "template+copy",
         }
+    }
+
+    /// Label shown in plans, status and lists (see `shown_label`).
+    pub fn shown_label(&self) -> String {
+        shown_label(self.label(), self.backend())
+    }
+}
+
+/// A state label with the decrypt step and its backend shown:
+/// `decrypt(age)+link`, `decrypt(gpg)+template+copy`.
+pub fn shown_label(label: &str, backend: Option<Backend>) -> String {
+    match backend {
+        Some(b) => {
+            let name = b.suffix().trim_start_matches('.');
+            format!("decrypt({name})+{}", label.trim_start_matches("decrypt+"))
+        }
+        None => label.to_owned(),
     }
 }
 
@@ -479,6 +496,28 @@ mod tests {
         let c = cfg("[[template_rules]]\nsource = \"a.conf\"\nmode = \"0600\"\n");
         let e = classify(&rel("a.conf"), &c).unwrap_err().to_string();
         assert!(e.contains("a.conf"), "{e}");
+    }
+
+    #[test]
+    fn shown_labels_name_the_decrypt_step_and_backend() {
+        let meta =
+            cfg("[[template_rules]]\nsource = \"a.tmpl\"\nmode = \"0600\"\n").template_rules[&rel("a.tmpl")].clone();
+        let cases = [
+            (Mode::Link, "link"),
+            (Mode::FileCopy, "copy"),
+            (Mode::DecryptLink(Backend::Age), "decrypt(age)+link"),
+            (Mode::DecryptCopy(Backend::Gpg), "decrypt(gpg)+copy"),
+            (Mode::TemplateLink(None), "template+link"),
+            (Mode::TemplateLink(Some(Backend::Gpg)), "decrypt(gpg)+template+link"),
+            (
+                Mode::TemplateCopy(Some(Backend::Age), meta),
+                "decrypt(age)+template+copy",
+            ),
+        ];
+        for (mode, shown) in cases {
+            assert_eq!(mode.shown_label(), shown);
+            assert_eq!(shown_label(mode.label(), mode.backend()), shown, "from a state record");
+        }
     }
 
     #[test]

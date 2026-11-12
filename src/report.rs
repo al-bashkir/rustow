@@ -240,13 +240,7 @@ impl Printer {
     pub fn sources(&self, ctx: &crate::repo::Context, sources: &[&crate::source::Source], key: &str) {
         let rows: Vec<(String, String, String)> = sources
             .iter()
-            .map(|s| {
-                let mode = match s.mode.backend() {
-                    Some(b) => format!("{}, {}", s.mode.label(), b.suffix().trim_start_matches('.')),
-                    None => s.mode.label().to_owned(),
-                };
-                (s.path.to_string(), self.path(&ctx.dest_path(s)), mode)
-            })
+            .map(|s| (s.path.to_string(), self.path(&ctx.dest_path(s)), s.mode.shown_label()))
             .collect();
         if self.json {
             let list: Vec<_> = rows
