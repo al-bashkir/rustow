@@ -3,7 +3,7 @@
 ## Requirements
 
 - Linux or macOS.
-- Rust 1.89 or newer, to build from source.
+- Rust 1.99 or newer, to build from source.
 - GnuPG 2.2 or newer, only if you use `.gpg` sources. The tests use GnuPG 2.4.9. On macOS, run `brew install gnupg`.
 
 age needs no extra program. rustow includes it.

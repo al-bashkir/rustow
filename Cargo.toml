@@ -2,7 +2,7 @@
 name = "rustow"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.99"
 description = "Flat-repository dotfiles and configuration manager: symlinks, copies, templates, age/GPG secrets"
 license = "MIT"
 readme = "README.md"
