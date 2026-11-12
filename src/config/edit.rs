@@ -242,7 +242,7 @@ mod tests {
     fn minimal_config_is_valid() {
         let cfg = Config::parse(&minimal()).unwrap();
         assert_eq!(cfg.defaults.cache_dir, ".rustowcache");
-        assert!(cfg.files.is_empty() && cfg.vars.as_object().unwrap().is_empty());
+        assert!(cfg.files.is_empty() && cfg.vars.is_empty());
     }
 
     #[test]

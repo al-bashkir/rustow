@@ -80,7 +80,9 @@ impl Context {
                 "refusing to use the filesystem root as the repository".into(),
             ));
         }
-        let config = Config::load(&root)?;
+        let host = Host::current();
+        let mut config = Config::load(&root)?;
+        config.apply_host(&host);
         let (home_target, root_target) = resolve_targets(opts, env, &root, &config, &home)?;
 
         let InternalDirs {
@@ -89,7 +91,7 @@ impl Context {
             inside,
             private_cache,
         } = InternalDirs::resolve(&root, &home, &config, env)?;
-        let ignore = Ignore::load(&root, inside)?;
+        let ignore = Ignore::load(&root, inside)?.with_rules(&root, &config.global_rules, &host)?;
         notices.extend(setup_notices(
             private_cache.then_some(cache_dir.as_path()),
             &root_target,
@@ -173,7 +175,8 @@ impl Context {
             )));
         }
         if self.ignore.is_ignored(&rel, is_dir) {
-            return Err(Error::Usage(format!("'{rel}' is ignored by {IGNORE_FILE}")));
+            let by = self.ignore.ignoring_rule(&rel, is_dir).unwrap_or(IGNORE_FILE);
+            return Err(Error::Usage(format!("'{rel}' is ignored by {by}")));
         }
         // An inactive template is not for this host: selecting it is not an error.
         let mut paths = (discovery.sources.iter().map(|s| &s.path)).chain(discovery.inactive.iter().map(|s| &s.path));

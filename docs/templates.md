@@ -65,16 +65,16 @@ The meta block is the group of `meta.` lines at the start of the file. It stops 
 
 ## Variables
 
-| Name         | Value                  |
-| ------------ | ---------------------- |
-| `os`         | `"linux"` or `"macos"` |
-| `arch`       | CPU architecture       |
-| `family`     | `"unix"`               |
-| `hostname`   | Host name              |
-| `username`   | User name              |
-| `uid`, `gid` | Numeric ids            |
-| `home_dir`   | The home target        |
-| `vars`       | Values from `[vars]`   |
+| Name         | Value                                                                           |
+| ------------ | ------------------------------------------------------------------------------- |
+| `os`         | `"linux"` or `"macos"`                                                          |
+| `arch`       | CPU architecture                                                                |
+| `family`     | `"unix"`                                                                        |
+| `hostname`   | Host name                                                                       |
+| `username`   | User name                                                                       |
+| `uid`, `gid` | Numeric ids                                                                     |
+| `home_dir`   | The home target                                                                 |
+| `vars`       | Values from `[vars]`, after [`[[global_rules]]`](configuration.md#global_rules) |
 
 ## Rules of the engine
 

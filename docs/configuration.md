@@ -2,7 +2,7 @@
 
 The file is `<repo>/.rustow.toml`. It is optional. Without it, rustow uses the defaults. If the file exists, it must contain `version = 1`.
 
-rustow rejects unknown keys everywhere, except under `[vars]`. A configuration error gives exit code 2. A problem with one source or one `[[files]]` or `[[template_rules]]` entry is a warning instead: rustow skips that source and deploys the rest. See [skipped sources](cli.md#skipped-sources).
+rustow rejects unknown keys everywhere, except under `[vars]` and the `vars` of a `[[global_rules]]` entry. A configuration error gives exit code 2. A problem with one source or one `[[files]]` or `[[template_rules]]` entry is a warning instead: rustow skips that source and deploys the rest. See [skipped sources](cli.md#skipped-sources).
 
 A TOML error reads `.rustow.toml: line L, column C, key <path>: <message>`, for example `.rustow.toml: line 7, column 22, key defaults.create_directories: invalid type, expected a boolean`. The key part is missing when rustow cannot find the key. The message never shows the source line or a value. Other validation messages can name values that are not secret, such as a `mode`, an `owner`, the `engine`, the `extension` or a source path. rustow never shows `[vars]` values.
 
@@ -44,6 +44,11 @@ source = ".config/example/settings.json"
 [[template_rules]]
 source = ".ssh/config.tmpl"
 mode = "0600"
+
+[[global_rules]]
+os = "macos"
+vars = { editor = "vim" }
+ignore = [".config/foot/"]
 ```
 
 ## `[defaults]`
@@ -111,7 +116,7 @@ See [encryption](encryption.md).
 
 ## `[vars]`
 
-Free-form values. Templates read them as `vars.<name>`. Tables and lists are allowed.
+Free-form values. Templates read them as `vars.<name>`. Tables and lists are allowed. A matching [`[[global_rules]]`](#global_rules) entry can change them for one host.
 
 ## `[[files]]`
 
@@ -166,6 +171,43 @@ With `fold_directories = false`, a rule with `true` lets a directory fold. A dir
 A rule that stops an existing fold unfolds it, with the rules above. A directory that an unfold has made real keeps per-file links; it does not fold again.
 
 An entry that cannot apply gives a warning, and rustow ignores the entry. This happens when the source does not exist, is ignored or reserved, is under `.rustowroot/`, or is a file that is not a plain symlinked file (a template, a copy or an encrypted file). Example: "warning: gone: .rustow.toml [[file_rules]] entry does not exist (remove the entry)". The warning shows on stderr, in the JSON `warnings` array and in `rustow check`. `status` shows no row for it. A directory rule that covers templates or copies is valid; the rule has no effect on them.
+
+## `[[global_rules]]`
+
+```toml
+[vars]
+user = "alice"
+uid = 1000
+
+[vars.git]
+name = "Alice"
+email = "alice@home.example"
+
+[[global_rules]]
+os = "macos"
+vars = { uid = 501 }
+ignore = [".config/foot/"]
+
+[[global_rules]]
+hostname = "work"
+vars = { user = "asmith", git = { email = "asmith@work.example" } }
+ignore = ["/.gitconfig"]
+```
+
+A rule changes `[vars]` and the ignore rules on some hosts only.
+
+- **Conditions:** `os`, `arch`, `family`, `hostname` and `username`. They have the same values as the [template variables](templates.md#variables). Each value is an exact string. A rule matches when all its conditions are true. A rule must have at least one condition.
+- **`vars`:** a table. A matching rule merges it over `[vars]`. Tables merge key by key. Any other value replaces the old value. Keys that the rule does not set keep their value. When two matching rules set the same key, the lower rule in the file wins. In the example, on the host `work`, `vars.git.name` stays `"Alice"` and `vars.git.email` becomes `"asmith@work.example"`.
+- **`ignore`:** a list of patterns in [ignore](ignore.md) syntax. A matching rule adds them to `.rustowignore`. Each rule works alone: a `!` pattern in a rule cannot re-include a path that `.rustowignore` or another rule ignores. rustow checks the patterns of every rule, also of rules that do not match this host.
+
+A path that a matching rule ignores is not for this host:
+
+- rustow does not deploy it and prints no warning. A `[[files]]`, `[[template_rules]]` or `[[file_rules]]` entry for it gives no warning either.
+- `status --ignored` shows it as IGNORED.
+- A path argument that names it exits 2: "'.gitconfig' is ignored by [[global_rules]] #2 (hostname == "work")".
+- If it was deployed before, its destination is ORPHANED, for example "orphaned ~/.gitconfig <- .gitconfig (link): ignored by [[global_rules]] #2 (hostname == "work"); `rustow undeploy .gitconfig` removes it". rustow removes nothing.
+
+A rule without conditions, an unknown key or a bad pattern is a configuration error (exit 2). The message names the rule by its number in the file, from 1. It never shows a `vars` value.
 
 ## Deployment modes
 

@@ -42,7 +42,7 @@ impl Host {
         }
     }
 
-    fn get(&self, fact: Fact) -> &str {
+    pub fn get(&self, fact: Fact) -> &str {
         match fact {
             Fact::Os => &self.os,
             Fact::Arch => &self.arch,
@@ -54,7 +54,7 @@ impl Host {
 }
 
 /// Template context: built-in platform values plus `vars` from `.rustow.toml`.
-pub fn context(vars: &Value, home_dir: &Path) -> Value {
+pub fn context(vars: &serde_json::Map<String, Value>, home_dir: &Path) -> Value {
     let host = Host::current();
     json!({
         "os": host.os,
@@ -121,7 +121,7 @@ impl Fact {
         })
     }
 
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Fact::Os => "os",
             Fact::Arch => "arch",
@@ -308,7 +308,9 @@ mod tests {
 
     fn ctx() -> Value {
         context(
-            &json!({ "editor": "nvim", "git": { "user_name": "Example User" } }),
+            json!({ "editor": "nvim", "git": { "user_name": "Example User" } })
+                .as_object()
+                .unwrap(),
             Path::new("/home/u"),
         )
     }
@@ -368,7 +370,7 @@ mod tests {
 
     #[test]
     fn nothing_is_escaped() {
-        let c = context(&json!({ "v": "<a&\"b\">" }), Path::new("/h"));
+        let c = context(json!({ "v": "<a&\"b\">" }).as_object().unwrap(), Path::new("/h"));
         assert_eq!(render("x.html", "{{ vars.v }}", &c).unwrap(), "<a&\"b\">");
         assert_eq!(render("x.json", "{{ vars.v }}", &c).unwrap(), "<a&\"b\">");
     }

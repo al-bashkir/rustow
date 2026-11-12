@@ -241,6 +241,8 @@ fn file_rule_problem(repo: &Path, ignore: &Ignore, found: &Discovery, path: &Rel
     let is_dir = repo.join(path.as_path()).is_dir();
     if ignore.is_reserved(path, is_dir) {
         Some("is reserved and can never be deployed")
+    } else if ignore.ignoring_rule(path, is_dir).is_some() {
+        None // not for this host
     } else if ignore.is_ignored(path, is_dir) {
         Some("is ignored by .rustowignore")
     } else if is_dir {
@@ -362,7 +364,8 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
     let entries = cfg.files.iter().map(|p| ("[[files]]", p));
     let entries = entries.chain(cfg.template_rules.keys().map(|p| ("[[template_rules]]", p)));
     entries
-        .filter(|(_, path)| !known.contains(path))
+        // A path that a matching [[global_rules]] entry ignores is not for this host: no warning.
+        .filter(|(_, path)| !known.contains(path) && ignore.ignoring_rule(path, false).is_none())
         .map(|(table, path)| Skipped {
             path: path.clone(),
             reason: format!(

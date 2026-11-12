@@ -19,6 +19,8 @@ Patterns match repository paths:
 /README.md
 ```
 
+To ignore paths on some hosts only, use the `ignore` list of a [`[[global_rules]]`](configuration.md#global_rules) entry.
+
 ## Built-in exclusions
 
 rustow always excludes these. A `!` pattern or an explicit path cannot re-include them.

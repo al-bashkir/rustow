@@ -9,8 +9,10 @@ use std::path::Path;
 
 use ::ignore::gitignore::{Gitignore, GitignoreBuilder};
 
+use crate::config::{CONFIG_FILE, GlobalRule};
 use crate::error::{Error, Result};
 use crate::paths::RelPath;
+use crate::template::Host;
 
 pub const IGNORE_FILE: &str = ".rustowignore";
 pub const DEFAULT_CACHE_DIR: &str = ".rustowcache";
@@ -23,6 +25,9 @@ pub struct Ignore {
     matcher: Gitignore,
     /// Configured cache and state directories inside the repository.
     internal: Vec<RelPath>,
+    /// The `[[global_rules]]` that match this host: name and patterns.
+    /// Each works alone, so a rule can only add ignored paths.
+    rules: Vec<(String, Gitignore)>,
 }
 
 impl Ignore {
@@ -39,7 +44,38 @@ impl Ignore {
         let matcher = builder
             .build()
             .map_err(|e| Error::Config(format!("{IGNORE_FILE}: {e}")))?;
-        Ok(Ignore { matcher, internal })
+        Ok(Ignore {
+            matcher,
+            internal,
+            rules: Vec::new(),
+        })
+    }
+
+    /// Adds the `ignore` patterns of each rule that matches `host`. The
+    /// patterns of every rule must be valid, also on other hosts.
+    pub fn with_rules(mut self, repo: &Path, rules: &[GlobalRule], host: &Host) -> Result<Ignore> {
+        for rule in rules {
+            let bad = |e: ::ignore::Error| {
+                Error::Config(format!("{CONFIG_FILE}: [[global_rules]] #{}: ignore: {e}", rule.number))
+            };
+            let mut builder = GitignoreBuilder::new(repo);
+            for pattern in &rule.ignore {
+                builder.add_line(None, pattern).map_err(bad)?;
+            }
+            let matcher = builder.build().map_err(bad)?;
+            if rule.matches(host) {
+                self.rules.push((rule.to_string(), matcher));
+            }
+        }
+        Ok(self)
+    }
+
+    /// The name of the matching `[[global_rules]]` entry that ignores the path.
+    pub fn ignoring_rule(&self, path: &RelPath, is_dir: bool) -> Option<&str> {
+        self.rules
+            .iter()
+            .find(|(_, m)| excludes(m, path, is_dir))
+            .map(|(name, _)| name.as_str())
     }
 
     /// Built-in exclusion. The `.rustowroot` directory is traversed, but a
@@ -61,10 +97,13 @@ impl Ignore {
         self.internal.iter().any(|d| d.starts_with(dir))
     }
 
-    /// Reserved, or excluded by `.rustowignore` (the path or any ancestor).
-    /// An ignored ancestor directory cannot be re-included, as in Git.
+    /// Reserved, or excluded by `.rustowignore` or a matching
+    /// `[[global_rules]]` entry (the path or any ancestor). An ignored
+    /// ancestor directory cannot be re-included, as in Git.
     pub fn is_ignored(&self, path: &RelPath, is_dir: bool) -> bool {
-        self.is_reserved(path, is_dir) || excludes(&self.matcher, path, is_dir)
+        self.is_reserved(path, is_dir)
+            || excludes(&self.matcher, path, is_dir)
+            || self.ignoring_rule(path, is_dir).is_some()
     }
 }
 

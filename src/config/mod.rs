@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, IoContext, Result};
 use crate::paths::RelPath;
+use crate::template::{Condition, Fact, Host};
 
 pub mod edit;
 
@@ -102,13 +103,47 @@ pub struct Config {
     pub defaults: Defaults,
     pub template_extension: String,
     pub encryption: Encryption,
-    /// User variables, always a JSON object.
-    pub vars: serde_json::Value,
+    /// User variables. After `apply_host`, with the matching rules merged in.
+    pub vars: serde_json::Map<String, serde_json::Value>,
     /// Sources registered for copy deployment.
     pub files: BTreeSet<RelPath>,
     pub template_rules: BTreeMap<RelPath, Metadata>,
     /// `[[file_rules]]`: `fold_directories` by rule source (a file or a directory).
     pub file_rules: BTreeMap<RelPath, bool>,
+    /// `[[global_rules]]`, in file order.
+    pub global_rules: Vec<GlobalRule>,
+}
+
+/// One `[[global_rules]]` entry. When every condition holds on the host,
+/// its `vars` merge over `[vars]` and its `ignore` patterns apply.
+#[derive(Debug, Clone)]
+pub struct GlobalRule {
+    /// Position in the file, from 1.
+    pub number: usize,
+    /// Never empty.
+    pub conditions: Vec<Condition>,
+    pub vars: serde_json::Map<String, serde_json::Value>,
+    /// gitignore patterns.
+    pub ignore: Vec<String>,
+}
+
+impl GlobalRule {
+    pub fn matches(&self, host: &Host) -> bool {
+        self.conditions.iter().all(|c| host.get(c.fact) == c.value)
+    }
+}
+
+/// `[[global_rules]] #2 (os == "macos", hostname == "work")`. Condition
+/// values are host facts, not secrets; `vars` are never shown.
+impl std::fmt::Display for GlobalRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let conditions: Vec<String> = self
+            .conditions
+            .iter()
+            .map(|c| format!("{} == \"{}\"", c.fact.name(), c.value))
+            .collect();
+        write!(f, "[[global_rules]] #{} ({})", self.number, conditions.join(", "))
+    }
 }
 
 impl Default for Config {
@@ -118,10 +153,11 @@ impl Default for Config {
             defaults: Defaults::default(),
             template_extension: ".tmpl".into(),
             encryption: Encryption::default(),
-            vars: serde_json::Value::Object(Default::default()),
+            vars: Default::default(),
             files: BTreeSet::new(),
             template_rules: BTreeMap::new(),
             file_rules: BTreeMap::new(),
+            global_rules: Vec::new(),
         }
     }
 }
@@ -144,17 +180,69 @@ impl Config {
         let files = parse_files(&raw.files)?;
         let template_rules = parse_template_rules(raw.template_rules)?;
         let file_rules = parse_file_rules(&raw.file_rules)?;
+        let global_rules = parse_global_rules(raw.global_rules)?;
         Ok(Config {
             present: true,
             defaults: raw.defaults,
             template_extension: raw.templates.extension,
             encryption: raw.encryption,
-            vars: serde_json::Value::Object(raw.vars),
+            vars: raw.vars,
             files,
             template_rules,
             file_rules,
+            global_rules,
         })
     }
+
+    /// Merges the `vars` of each `[[global_rules]]` entry that matches
+    /// `host` over `vars`, in file order: a later rule wins.
+    pub fn apply_host(&mut self, host: &Host) {
+        for rule in self.global_rules.iter().filter(|r| r.matches(host)) {
+            merge(&mut self.vars, &rule.vars);
+        }
+    }
+}
+
+/// Tables merge key by key; any other value replaces.
+fn merge(base: &mut serde_json::Map<String, serde_json::Value>, top: &serde_json::Map<String, serde_json::Value>) {
+    for (key, value) in top {
+        match (base.get_mut(key), value) {
+            (Some(serde_json::Value::Object(b)), serde_json::Value::Object(t)) => merge(b, t),
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn parse_global_rules(raw: Vec<RawGlobalRule>) -> Result<Vec<GlobalRule>> {
+    raw.into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let conditions: Vec<Condition> = [
+                (Fact::Os, r.os),
+                (Fact::Arch, r.arch),
+                (Fact::Family, r.family),
+                (Fact::Hostname, r.hostname),
+                (Fact::Username, r.username),
+            ]
+            .into_iter()
+            .filter_map(|(fact, value)| Some(Condition { fact, value: value? }))
+            .collect();
+            if conditions.is_empty() {
+                return Err(invalid(&format!(
+                    "[[global_rules]] #{}: set at least one condition: os, arch, family, hostname, username",
+                    i + 1
+                )));
+            }
+            Ok(GlobalRule {
+                number: i + 1,
+                conditions,
+                vars: r.vars,
+                ignore: r.ignore,
+            })
+        })
+        .collect()
 }
 
 /// Checks the schema version, template engine and template extension.
@@ -336,6 +424,22 @@ struct Raw {
     template_rules: Vec<RawRule>,
     #[serde(default)]
     file_rules: Vec<RawFileRule>,
+    #[serde(default)]
+    global_rules: Vec<RawGlobalRule>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGlobalRule {
+    os: Option<String>,
+    arch: Option<String>,
+    family: Option<String>,
+    hostname: Option<String>,
+    username: Option<String>,
+    #[serde(default)]
+    vars: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    ignore: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -679,10 +783,32 @@ group = "root"
         assert!(e.contains("encryption.backend") && !e.contains("pgp"), "{e}");
     }
 
+    /// Every condition of a rule must hold; the name lists them all.
     #[test]
-    fn vars_must_be_a_table() {
-        let cfg = Config::parse("version = 1\n").unwrap();
-        assert!(cfg.vars.is_object());
+    fn global_rule_vars_need_every_condition() {
+        let text = "version = 1\n[vars]\nu = \"base\"\n\
+                    [[global_rules]]\nhostname = \"work\"\nusername = \"al\"\nvars = { u = \"work\" }\n";
+        let host = |hostname: &str, username: &str| Host {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            family: "unix".into(),
+            hostname: hostname.into(),
+            username: username.into(),
+        };
+        for (h, want) in [
+            (host("work", "al"), "work"),
+            (host("work", "bo"), "base"),
+            (host("home", "al"), "base"),
+        ] {
+            let mut cfg = Config::parse(text).unwrap();
+            cfg.apply_host(&h);
+            assert_eq!(cfg.vars["u"], want, "{h:?}");
+        }
+        let cfg = Config::parse(text).unwrap();
+        assert_eq!(
+            cfg.global_rules[0].to_string(),
+            "[[global_rules]] #1 (hostname == \"work\", username == \"al\")"
+        );
     }
 
     #[test]

@@ -230,7 +230,7 @@ pub fn status(
                 dest: Some(dest.clone()),
                 mode: shown_label(&record.mode, record.backend),
                 status: "ORPHANED",
-                detail: Some(orphan_detail(discovery, record)),
+                detail: Some(orphan_detail(ctx, discovery, record)),
             }),
     );
     // An inactive template that is already an ORPHANED row gets no second row.
@@ -401,13 +401,15 @@ fn orphans<'a>(
 
 /// Names the command that removes one orphaned destination (`undeploy`
 /// with no path would remove every managed destination).
-/// A template whose meta condition turned false names that condition.
-fn orphan_detail(discovery: &Discovery, record: &Record) -> String {
-    let why = discovery
-        .inactive
-        .iter()
-        .find(|s| s.path == record.source)
-        .map_or("source removed", |s| s.reason.as_str());
+/// A template whose meta condition turned false names that condition; a
+/// source that a `[[global_rules]]` entry ignores names the rule.
+fn orphan_detail(ctx: &Context, discovery: &Discovery, record: &Record) -> String {
+    let inactive = discovery.inactive.iter().find(|s| s.path == record.source);
+    let why = match (inactive, ctx.ignore.ignoring_rule(&record.source, record.folded_dir)) {
+        (Some(s), _) => s.reason.clone(),
+        (None, Some(rule)) => format!("ignored by {rule}"),
+        (None, None) => "source removed".into(),
+    };
     format!("{why}; `rustow undeploy {}` removes it", record.source)
 }
 
@@ -429,7 +431,7 @@ pub fn orphan_reports(
             dest: dest.clone(),
             mode: shown_label(&record.mode, record.backend),
             action: Action::Orphaned,
-            detail: Some(orphan_detail(discovery, record)),
+            detail: Some(orphan_detail(ctx, discovery, record)),
         })
         .collect())
 }
