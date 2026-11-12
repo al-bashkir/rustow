@@ -110,6 +110,35 @@ fn malformed_config_fails_without_overwriting() {
 }
 
 #[test]
+fn configuration_errors_never_print_values() {
+    for (config, place) in [
+        (
+            "version = 1\n[vars]\napi_token = \"TOPSECRET-1\" extra\n",
+            "line 3, column 27, key vars.api_token",
+        ),
+        (
+            "version = 1\n[vars]\napi_token = \"TOPSECRET-2\"\napi_token = \"TOPSECRET-3\"\n",
+            "line 4, column 1",
+        ),
+        (
+            "version = 1\n[defaults]\ncreate_directories = \"TOPSECRET-4\"\n",
+            "line 3, column 22, key defaults.create_directories",
+        ),
+        ("version = \"TOPSECRET-5\"\n", "line 1, column 11, key version"),
+    ] {
+        let fx = Fixture::new();
+        fx.write(".rustow.toml", config);
+        for args in [&["check"][..], &["init"], &["file", "add", "x"]] {
+            let out = fx.run(args);
+            assert_eq!(out.code, 2, "{args:?} {config}\n{out:?}");
+            assert!(!format!("{out:?}").contains("TOPSECRET"), "{args:?} {config}\n{out:?}");
+            assert!(out.stderr.contains(place), "{args:?} {config}\n{out:?}");
+        }
+        assert_eq!(read(&fx.repo.join(".rustow.toml")), config);
+    }
+}
+
+#[test]
 fn conflicting_objects_fail_without_changes() {
     let fx = Fixture::new();
     let elsewhere = fx.base.join("elsewhere");

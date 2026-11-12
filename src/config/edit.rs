@@ -22,7 +22,7 @@ pub fn minimal() -> String {
 /// Adds `version = 1` to an existing configuration that lacks it, then
 /// validates the result. Malformed or unsupported configuration is an error.
 pub fn ensure_init(text: &str) -> Result<Option<String>> {
-    let doc: DocumentMut = text.parse().map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))?;
+    let doc = parse_doc(text)?;
     let updated = if doc.contains_key("version") {
         None
     } else {
@@ -173,7 +173,8 @@ fn rename_in_key(item: Option<&mut Item>, from: &RelPath, to: &RelPath) -> usize
 }
 
 fn parse_doc(text: &str) -> Result<DocumentMut> {
-    text.parse().map_err(|e| Error::Config(format!("{CONFIG_FILE}: {e}")))
+    text.parse()
+        .map_err(|e: toml_edit::TomlError| super::toml_error(text, e.message(), e.span()))
 }
 
 fn file_table(source: &RelPath) -> Table {
@@ -221,6 +222,16 @@ mod tests {
     fn ensure_init_leaves_complete_config_alone() {
         assert_eq!(ensure_init("version = 1\n").unwrap(), None);
         assert_eq!(ensure_init(&minimal()).unwrap(), None);
+    }
+
+    #[test]
+    fn syntax_errors_name_the_place_but_no_value() {
+        let text = "version = 1\n[vars]\nt = \"S3CRET\" x\n";
+        for e in [ensure_init(text).unwrap_err(), parse_doc(text).unwrap_err()] {
+            let e = e.to_string();
+            assert!(e.contains("line 3, column 14, key vars.t"), "{e}");
+            assert!(!e.contains("S3CRET"), "{e}");
+        }
     }
 
     #[test]

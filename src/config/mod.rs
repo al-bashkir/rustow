@@ -1,6 +1,7 @@
 //! `.rustow.toml`: typed schema, parsed and validated once at load.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -134,7 +135,7 @@ impl Config {
 
     /// Parses the text of an existing `.rustow.toml`.
     pub fn parse(text: &str) -> Result<Config> {
-        let raw: Raw = toml_edit::de::from_str(text).map_err(|e| invalid(e.to_string().trim_end()))?;
+        let raw: Raw = toml_edit::de::from_str(text).map_err(|e| toml_error(text, e.message(), e.span()))?;
         check_header(&raw)?;
         let files = parse_files(&raw.files)?;
         let template_rules = parse_template_rules(raw.template_rules)?;
@@ -196,6 +197,108 @@ fn parse_template_rules(raw: Vec<RawRule>) -> Result<BTreeMap<RelPath, Metadata>
 
 fn invalid(msg: &str) -> Error {
     Error::Config(format!("{CONFIG_FILE}: {msg}"))
+}
+
+/// A TOML error as line, column and key path. Never the source line or a
+/// value: values, `[vars]` above all, may be secrets (spec §14.4).
+pub(crate) fn toml_error(text: &str, message: &str, span: Option<Range<usize>>) -> Error {
+    let Some(span) = span.filter(|s| text.is_char_boundary(s.start)) else {
+        return invalid(&without_value(text, message, None));
+    };
+    let before = &text[..span.start];
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let line = before.matches('\n').count() + 1;
+    let column = before[line_start..].chars().count() + 1;
+    let key = key_at(text, span.start, line_start).map_or_else(String::new, |k| format!(", key {k}"));
+    let what = without_value(text, message, Some(span));
+    invalid(&format!("line {line}, column {column}{key}: {what}"))
+}
+
+/// The message minus the value that serde puts after "invalid type:",
+/// "invalid value:" or "unknown variant"; a duplicate key gets its name.
+fn without_value(text: &str, message: &str, span: Option<Range<usize>>) -> String {
+    if message == "duplicate key"
+        && let Some(key) = span.and_then(|s| text.get(s))
+    {
+        return format!("duplicate key `{key}`");
+    }
+    let Some(head) = ["invalid type", "invalid value", "unknown variant"]
+        .into_iter()
+        .find(|h| message.starts_with(h))
+    else {
+        return message.to_owned();
+    };
+    let expected = message.rfind(", expected ").map_or("", |i| &message[i..]);
+    format!("{head}{expected}")
+}
+
+/// Path of the last key, table header or array element that starts at or
+/// before `pos`: anywhere in a document that parses (a schema error), else
+/// on the error line of the text before the syntax error.
+fn key_at(text: &str, pos: usize, line_start: usize) -> Option<String> {
+    let (doc, min) = match toml_edit::Document::parse(text) {
+        Ok(doc) => (doc, 0),
+        Err(_) => (toml_edit::Document::parse(&text[..pos]).ok()?, line_start),
+    };
+    let mut best = None;
+    walk_table(doc.as_table(), "", pos, &mut best);
+    best.filter(|(start, _)| *start >= min).map(|(_, path)| path)
+}
+
+type Found = Option<(usize, String)>;
+
+fn consider(start: Option<usize>, path: &str, pos: usize, best: &mut Found) {
+    if let Some(s) = start.filter(|s| *s <= pos)
+        && best.as_ref().is_none_or(|(b, _)| s >= *b)
+    {
+        *best = Some((s, path.to_owned()));
+    }
+}
+
+fn walk_table(table: &dyn toml_edit::TableLike, path: &str, pos: usize, best: &mut Found) {
+    for (key, item) in table.iter() {
+        let sub = if path.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{path}.{key}")
+        };
+        consider(
+            table.key(key).and_then(toml_edit::Key::span).map(|s| s.start),
+            &sub,
+            pos,
+            best,
+        );
+        walk_item(item, &sub, pos, best);
+    }
+}
+
+fn walk_item(item: &toml_edit::Item, path: &str, pos: usize, best: &mut Found) {
+    match item {
+        toml_edit::Item::Table(t) => walk_table(t, path, pos, best),
+        toml_edit::Item::ArrayOfTables(tables) => {
+            for (i, t) in tables.iter().enumerate() {
+                let sub = format!("{path}[{i}]");
+                consider(t.span().map(|s| s.start), &sub, pos, best);
+                walk_table(t, &sub, pos, best);
+            }
+        }
+        toml_edit::Item::Value(v) => walk_value(v, path, pos, best),
+        toml_edit::Item::None => {}
+    }
+}
+
+fn walk_value(value: &toml_edit::Value, path: &str, pos: usize, best: &mut Found) {
+    match value {
+        toml_edit::Value::InlineTable(t) => walk_table(t, path, pos, best),
+        toml_edit::Value::Array(values) => {
+            for (i, v) in values.iter().enumerate() {
+                let sub = format!("{path}[{i}]");
+                consider(v.span().map(|s| s.start), &sub, pos, best);
+                walk_value(v, &sub, pos, best);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[derive(Deserialize)]
@@ -423,6 +526,44 @@ group = "root"
     }
 
     #[test]
+    fn toml_errors_give_place_and_key_but_no_value() {
+        for (text, want) in [
+            (
+                "version = 1\n[vars]\nt = \"S3CRET\" extra\n",
+                "line 3, column 14, key vars.t: unexpected key or value, expected newline, `#`",
+            ),
+            (
+                "version = 1\n[vars]\nt = \"S3CRET\"\nt = \"S3CRET\"\n",
+                "line 4, column 1: duplicate key `t`",
+            ),
+            (
+                "version = 1\n[defaults]\ntarget = 5\n",
+                "line 3, column 10, key defaults.target: invalid type, expected a string",
+            ),
+            (
+                "version = 1\n[encryption]\nbackend = \"S3CRET\"\n",
+                "line 3, column 11, key encryption.backend: unknown variant, expected `age` or `gpg`",
+            ),
+            (
+                "version = 1\n[[files]]\nsource = \"a\"\n[[files]]\n",
+                "line 4, column 1, key files[1]: missing field `source`",
+            ),
+            (
+                "version = 1\nfiles = [{ source = \"a\" }, { source = [\"S3CRET\"] }]\n",
+                "line 2, column 39, key files[1].source: invalid type, expected a string",
+            ),
+            (
+                "version = 1\n[defaults]\nfoo = \"S3CRET\"\n",
+                "line 3, column 1, key defaults.foo: unknown field `foo`",
+            ),
+        ] {
+            let e = err(text);
+            assert!(e.starts_with(&format!(".rustow.toml: {want}")), "{text}\n{e}");
+            assert!(!e.contains("S3CRET") && !e.contains('\n'), "{text}\n{e}");
+        }
+    }
+
+    #[test]
     fn engine_other_than_minijinja_rejected() {
         let e = err("version = 1\n[templates]\nengine = \"tera\"\n");
         assert!(e.contains("tera"), "{e}");
@@ -494,7 +635,8 @@ group = "root"
         assert_eq!(Config::parse("version = 1\n").unwrap().encryption.backend, Backend::Age);
         let cfg = Config::parse("version = 1\n[encryption]\nbackend = \"gpg\"\n").unwrap();
         assert_eq!(cfg.encryption.backend, Backend::Gpg);
-        assert!(err("version = 1\n[encryption]\nbackend = \"pgp\"\n").contains("pgp"));
+        let e = err("version = 1\n[encryption]\nbackend = \"pgp\"\n");
+        assert!(e.contains("encryption.backend") && !e.contains("pgp"), "{e}");
     }
 
     #[test]
