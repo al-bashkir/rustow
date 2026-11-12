@@ -107,6 +107,8 @@ pub struct Config {
     /// Sources registered for copy deployment.
     pub files: BTreeSet<RelPath>,
     pub template_rules: BTreeMap<RelPath, Metadata>,
+    /// `[[file_rules]]`: `fold_directories` by rule source (a file or a directory).
+    pub file_rules: BTreeMap<RelPath, bool>,
 }
 
 impl Default for Config {
@@ -119,6 +121,7 @@ impl Default for Config {
             vars: serde_json::Value::Object(Default::default()),
             files: BTreeSet::new(),
             template_rules: BTreeMap::new(),
+            file_rules: BTreeMap::new(),
         }
     }
 }
@@ -140,6 +143,7 @@ impl Config {
         check_header(&raw)?;
         let files = parse_files(&raw.files)?;
         let template_rules = parse_template_rules(raw.template_rules)?;
+        let file_rules = parse_file_rules(&raw.file_rules)?;
         Ok(Config {
             present: true,
             defaults: raw.defaults,
@@ -148,6 +152,7 @@ impl Config {
             vars: serde_json::Value::Object(raw.vars),
             files,
             template_rules,
+            file_rules,
         })
     }
 }
@@ -181,6 +186,17 @@ fn parse_files(raw: &[RawFile]) -> Result<BTreeSet<RelPath>> {
         }
     }
     Ok(files)
+}
+
+fn parse_file_rules(raw: &[RawFileRule]) -> Result<BTreeMap<RelPath, bool>> {
+    let mut rules = BTreeMap::new();
+    for (i, r) in raw.iter().enumerate() {
+        let path = RelPath::parse(&r.source).map_err(|e| invalid(&format!("file_rules[{i}].source: {e}")))?;
+        if rules.insert(path, r.fold_directories).is_some() {
+            return Err(invalid(&format!("duplicate [[file_rules]] entry for '{}'", r.source)));
+        }
+    }
+    Ok(rules)
 }
 
 fn parse_template_rules(raw: Vec<RawRule>) -> Result<BTreeMap<RelPath, Metadata>> {
@@ -318,6 +334,15 @@ struct Raw {
     files: Vec<RawFile>,
     #[serde(default)]
     template_rules: Vec<RawRule>,
+    #[serde(default)]
+    file_rules: Vec<RawFileRule>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFileRule {
+    source: String,
+    fold_directories: bool,
 }
 
 #[derive(Deserialize)]
@@ -368,7 +393,7 @@ impl RawRule {
 
 /// Parses an octal permission string such as "0600". Special bits
 /// (setuid, setgid, sticky) are rejected: dotfiles never need them.
-fn parse_mode(text: &str) -> std::result::Result<u32, String> {
+pub(crate) fn parse_mode(text: &str) -> std::result::Result<u32, String> {
     let bad = || format!("mode \"{text}\" must be 3 or 4 octal digits no greater than 0777, e.g. \"0600\"");
     // from_str_radix alone would accept a sign.
     if !(3..=4).contains(&text.len()) || !text.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
@@ -386,7 +411,7 @@ fn parse_mode(text: &str) -> std::result::Result<u32, String> {
     Ok(mode)
 }
 
-fn parse_owner(field: &str, text: &str) -> std::result::Result<Owner, String> {
+pub(crate) fn parse_owner(field: &str, text: &str) -> std::result::Result<Owner, String> {
     if text.is_empty() || text.contains([':', '/']) || text.chars().any(char::is_whitespace) {
         return Err(format!("{field} \"{text}\" is not a valid user or group name"));
     }
@@ -658,5 +683,35 @@ group = "root"
     fn vars_must_be_a_table() {
         let cfg = Config::parse("version = 1\n").unwrap();
         assert!(cfg.vars.is_object());
+    }
+
+    #[test]
+    fn file_rules_parse_into_a_map() {
+        let c = Config::parse(
+            "version = 1\n[[file_rules]]\nsource = \".config/nvim\"\nfold_directories = false\n\
+             [[file_rules]]\nsource = \".config/a/b.txt\"\nfold_directories = true\n",
+        )
+        .unwrap();
+        assert_eq!(c.file_rules.get(&RelPath::parse(".config/nvim").unwrap()), Some(&false));
+        assert_eq!(c.file_rules.get(&RelPath::parse(".config/a/b.txt").unwrap()), Some(&true));
+    }
+
+    #[test]
+    fn file_rules_duplicate_source_is_an_error() {
+        let e = Config::parse(
+            "version = 1\n[[file_rules]]\nsource = \"a\"\nfold_directories = false\n\
+             [[file_rules]]\nsource = \"a\"\nfold_directories = true\n",
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("duplicate [[file_rules]] entry for 'a'"), "{e}");
+    }
+
+    #[test]
+    fn file_rules_need_fold_directories_and_reject_unknown_keys() {
+        assert!(Config::parse("version = 1\n[[file_rules]]\nsource = \"a\"\n").is_err());
+        assert!(
+            Config::parse("version = 1\n[[file_rules]]\nsource = \"a\"\nfold_directories = false\nmode = \"0600\"\n")
+                .is_err()
+        );
     }
 }
