@@ -293,6 +293,7 @@ pub fn build(ctx: &Context, discovery: &Discovery, selected: &[&Source], state: 
             None => plan_source(ctx, source, state, &collided, &folding)?,
         });
     }
+    hold_partial_unfolds(discovery, &mut items);
     items.sort_by(|a, b| (a.source.scope, &a.source.path).cmp(&(b.source.scope, &b.source.path)));
     Ok(Plan { items })
 }
@@ -360,19 +361,64 @@ fn plan_unfolds(
 /// A source below a folded directory that cannot be unfolded is blocked
 /// too: its destination path still runs through rustow's folded link.
 fn below_blocked_unfold(ctx: &Context, source: &Source, blocked: &[RelPath]) -> Option<PlanItem> {
-    let dir = blocked
-        .iter()
-        .find(|d| source.scope == Scope::Home && source.dest.strip_prefix(d).is_some())?;
-    let detail = format!("the folded directory {dir} cannot be unfolded yet");
-    let step = Step::Blocked {
-        conflict: Conflict::ParentBlocked,
-        detail,
-    };
+    let dir = blocked.iter().find(|d| is_below(source, d))?;
     Some(PlanItem {
         source: source.clone(),
         dest: ctx.dest_path(source),
-        step,
+        step: unfold_pending(dir),
     })
+}
+
+fn is_below(source: &Source, dir: &RelPath) -> bool {
+    source.scope == Scope::Home && source.dest.strip_prefix(dir).is_some()
+}
+
+fn unfold_pending(dir: &RelPath) -> Step {
+    blocked(
+        Conflict::ParentBlocked,
+        format!("the folded directory {dir} cannot be unfolded yet"),
+    )
+}
+
+/// An unfold empties the folded directory, so it may run only when this
+/// run deploys again every source below it. Otherwise the unfold becomes
+/// a conflict and no deploy below it runs.
+fn hold_partial_unfolds(discovery: &Discovery, items: &mut [PlanItem]) {
+    let held: Vec<(RelPath, &RelPath)> = items
+        .iter()
+        .filter(|i| matches!(i.step, Step::Unfold { .. }))
+        .filter_map(|i| Some((i.source.dest.clone(), not_redeployed(discovery, items, &i.source.dest)?)))
+        .collect();
+    for (dir, missing) in held {
+        for item in items.iter_mut() {
+            if item.source.path == dir {
+                let detail = format!("{missing} would not be deployed again; run `rustow apply {dir}`");
+                item.step = blocked(Conflict::FoldedStrays, detail);
+            } else if is_below(&item.source, &dir) && matches!(item.step, Step::Deploy(_)) {
+                item.step = unfold_pending(&dir);
+            }
+        }
+    }
+}
+
+/// The first source below `dir` that `items` does not deploy without a conflict.
+fn not_redeployed<'a>(discovery: &'a Discovery, items: &[PlanItem], dir: &RelPath) -> Option<&'a RelPath> {
+    let clean: Vec<&RelPath> = items
+        .iter()
+        .filter(|i| deploys_cleanly(&i.step))
+        .map(|i| &i.source.path)
+        .collect();
+    discovery
+        .sources
+        .iter()
+        .filter(|s| is_below(s, dir))
+        .map(|s| &s.path)
+        .find(|p| !clean.contains(p))
+}
+
+fn deploys_cleanly(step: &Step) -> bool {
+    let conflict = |d: &Decision| matches!(d, Decision::Conflict(_));
+    matches!(step, Step::Deploy(d) if !conflict(&d.decision) && !d.cache.as_ref().is_some_and(|c| conflict(&c.decision)))
 }
 
 fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &State) -> Result<PlanItem> {

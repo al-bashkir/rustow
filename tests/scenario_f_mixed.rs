@@ -201,6 +201,58 @@ fn walk_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
+/// Audit F1: an unfold that does not deploy again every source below the
+/// folded link would drop the others from view. It waits for `apply <dir>`.
+#[test]
+fn unfold_waits_until_every_source_below_it_is_deployed() {
+    let cases: [&[&str]; 2] = [&["template", "apply"], &["apply", ".config/nvim/local.lua.tmpl"]];
+    for args in cases {
+        let fx = nvim(&format!("{FOLD}[vars]\nx = \"y\"\n"));
+        fx.ok(&["apply"]);
+        fx.write(".config/nvim/local.lua.tmpl", "{{ vars.x }}\n");
+        let out = fx.run(args);
+        assert_eq!(out.code, 3, "{args:?}: {out:?}");
+        assert!(out.stdout.contains("rustow apply .config/nvim"), "{args:?}: {out:?}");
+        assert!(
+            is_symlink(&fx.home_path(".config/nvim")),
+            "{args:?}: the folded link stays"
+        );
+        assert_eq!(read(&fx.home_path(".config/nvim/lua/plugins.lua")), "plugins\n");
+        fx.ok(&["apply", ".config/nvim"]);
+        assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "init\n");
+        assert_eq!(read(&fx.home_path(".config/nvim/lua/plugins.lua")), "plugins\n");
+        assert_eq!(read(&fx.home_path(".config/nvim/local.lua")), "y\n");
+    }
+}
+
+#[test]
+fn link_does_not_unfold_around_a_newly_registered_copy() {
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    fx.ok(&["file", "add", ".config/nvim/init.lua"]);
+    let out = fx.run(&["link"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("rustow apply .config/nvim"), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".config/nvim")));
+    assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "init\n");
+}
+
+#[test]
+fn unfold_is_a_conflict_when_an_item_below_it_is_not_deployed() {
+    for policy in [&["--on-conflict", "skip"][..], &["--force"][..]] {
+        let fx = nvim(FOLD);
+        fx.write(".config/nvim/x", "x\n");
+        fx.ok(&["apply"]);
+        // A collision: both sources map to ~/.config/nvim/x, so neither deploys.
+        fx.write(".config/nvim/x.tmpl", "t\n");
+        let out = fx.run(&[&["apply"][..], policy].concat());
+        assert_eq!(out.code, 3, "{policy:?}: {out:?}");
+        assert!(is_symlink(&fx.home_path(".config/nvim")), "{policy:?}: {out:?}");
+        assert_eq!(read(&fx.home_path(".config/nvim/x")), "x\n");
+        assert_eq!(read(&fx.home_path(".config/nvim/init.lua")), "init\n");
+    }
+}
+
 #[test]
 fn unlink_forgets_a_fold_record_whose_link_the_user_replaced() {
     let fx = nvim(FOLD);

@@ -2,8 +2,9 @@
 //! directory whose repository copy holds only ordinary link sources, and
 //! that does not exist at the destination yet, is deployed as one symlink.
 //! A folded link that no longer qualifies is unfolded into a real
-//! directory, but only when every file it exposes is a source, so that no
-//! content written through the link disappears from view.
+//! directory, but only when every file it exposes is a source and the same
+//! run deploys every one of them again (see `plan`), so that no content
+//! seen through the link disappears from view.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
