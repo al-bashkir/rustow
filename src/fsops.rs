@@ -345,10 +345,9 @@ pub fn create_dirs(existing: &Path, missing: &[String], mode: u32) -> Result<Vec
 
 /// UTC time as `YYYYmmddTHHMMSSZ`.
 pub fn timestamp() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    format_utc(secs)
+    // A clock before 1970 gives the epoch.
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    format_utc(since.unwrap_or_default().as_secs())
 }
 
 fn format_utc(secs: u64) -> String {
