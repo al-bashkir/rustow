@@ -230,21 +230,25 @@ fn selected<'a>(
     let all = ctx.select(discovery, paths)?;
     for arg in paths {
         let one = ctx.select(discovery, std::slice::from_ref(arg))?;
-        if one.is_empty() || one.iter().any(deploys) {
-            continue;
+        if !one.is_empty() && !one.iter().any(deploys) {
+            return Err(nothing_deployed(arg, &one, selector));
         }
-        if one.iter().any(|s| selector.includes(&s.mode)) {
-            return Err(Error::Usage(format!(
-                "'{arg}' is not linked; in copy mode, `rustow link {arg}` links a plain file and `rustow file add {arg}` registers a copy"
-            )));
-        }
-        let modes: Vec<&str> = one.iter().map(|s| s.mode.label()).collect();
-        return Err(Error::Usage(format!(
-            "'{arg}' has no sources this command deploys (found: {}); use `rustow apply`",
-            modes.join(", ")
-        )));
     }
     Ok(all.into_iter().filter(deploys).collect())
+}
+
+/// The usage error for a path argument whose sources this command does not deploy.
+fn nothing_deployed(arg: &str, found: &[&Source], selector: Selector) -> Error {
+    if found.iter().any(|s| selector.includes(&s.mode)) {
+        return Error::Usage(format!(
+            "'{arg}' is not linked; in copy mode, `rustow link {arg}` links a plain file and `rustow file add {arg}` registers a copy"
+        ));
+    }
+    let modes: Vec<&str> = found.iter().map(|s| s.mode.label()).collect();
+    Error::Usage(format!(
+        "'{arg}' has no sources this command deploys (found: {}); use `rustow apply`",
+        modes.join(", ")
+    ))
 }
 
 /// Copy mode makes no new symlink unless `rustow link <path>` asks: a
