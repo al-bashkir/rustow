@@ -164,6 +164,34 @@ fn summary_lines_are_exact() {
         "0 changed, 2 unchanged, 1 conflicts, 1 errors",
         "{out:?}"
     );
+    let out = fx.run(&["apply"]);
+    assert_eq!(
+        summary(&out),
+        "conflicts and errors found, nothing written: 0 to change, 2 unchanged, 1 conflicts, 1 errors"
+    );
+    fs::remove_file(fx.home_path("new")).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(
+        summary(&out),
+        "errors found, nothing written: 1 to change, 2 unchanged, 1 errors"
+    );
+}
+
+/// `dry_run` says only whether -n was given; `aborted` marks a run the policy stopped.
+#[test]
+fn json_separates_dry_run_from_aborted_run() {
+    use serde_json::json;
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b");
+    fx.write_home(".bashrc", "mine");
+    let flags = |args: &[&str]| {
+        let v: serde_json::Value = serde_json::from_str(&fx.run(args).stdout).unwrap();
+        (v["dry_run"].clone(), v["aborted"].clone())
+    };
+    assert_eq!(flags(&["apply", "--json"]), (json!(false), json!(true)));
+    assert_eq!(flags(&["apply", "--json", "-n"]), (json!(true), json!(false)));
+    fs::remove_file(fx.home_path(".bashrc")).unwrap();
+    assert_eq!(flags(&["apply", "--json"]), (json!(false), json!(false)));
 }
 
 #[test]

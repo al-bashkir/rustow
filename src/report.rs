@@ -71,7 +71,12 @@ impl Printer {
                     })
                 })
                 .collect();
-            let out = json!({ "dry_run": run != RunKind::Applied, "items": list, "summary": summary_counts(items) });
+            let out = json!({
+                "dry_run": run == RunKind::DryRun,
+                "aborted": run == RunKind::Blocked,
+                "items": list,
+                "summary": summary_counts(items),
+            });
             println!("{out}");
             return;
         }
@@ -197,7 +202,16 @@ fn summary_line(items: &[ItemReport], run: RunKind) -> String {
     match run {
         RunKind::Applied => line,
         RunKind::DryRun => format!("dry run, nothing written: {line}"),
-        RunKind::Blocked => format!("conflicts found, nothing written: {line}"),
+        RunKind::Blocked => format!("{} found, nothing written: {line}", problems(&c)),
+    }
+}
+
+/// What stopped a blocked run.
+fn problems(c: &Counts) -> &'static str {
+    match (c.conflicts > 0, c.errors > 0) {
+        (true, true) => "conflicts and errors",
+        (false, true) => "errors",
+        _ => "conflicts",
     }
 }
 
