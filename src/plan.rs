@@ -215,6 +215,9 @@ pub struct Deploy {
     pub cache: Option<CacheWrite>,
     pub record: Record,
     pub detail: Option<String>,
+    /// Why the effective user cannot write the destination directory: the
+    /// item fails before any write, but `diff` still shows its content.
+    pub unwritable: Option<String>,
 }
 
 #[derive(Debug)]
@@ -468,7 +471,9 @@ fn not_redeployed<'a>(discovery: &'a Discovery, items: &[PlanItem], dir: &RelPat
 
 fn deploys_cleanly(step: &Step) -> bool {
     let conflict = |d: &Decision| matches!(d, Decision::Conflict(_));
-    matches!(step, Step::Deploy(d) if !conflict(&d.decision) && !d.cache.as_ref().is_some_and(|c| conflict(&c.decision)))
+    matches!(step, Step::Deploy(d) if !conflict(&d.decision)
+        && !d.cache.as_ref().is_some_and(|c| conflict(&c.decision))
+        && d.unwritable.is_none())
 }
 
 fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &State) -> Result<PlanItem> {
@@ -614,9 +619,9 @@ fn dest_dir<'a>(path: &'a Path, missing_dirs: &'a MissingDirs) -> &'a Path {
         .map_or_else(|| path.parent().unwrap_or(path), |(existing, _)| existing)
 }
 
-/// A decision that writes into a directory the effective user cannot
-/// write fails already in the plan, so a dry run predicts the failure.
-fn unwritable(path: &Path, missing_dirs: &MissingDirs, decision: Decision) -> Option<Step> {
+/// Why a decision that writes cannot write into the destination directory as
+/// the effective user. The plan carries it, so a dry run predicts the failure.
+fn unwritable(path: &Path, missing_dirs: &MissingDirs, decision: Decision) -> Option<String> {
     use nix::unistd::{AccessFlags, faccessat};
     let writes = match decision {
         Decision::Create | Decision::Update => true,
@@ -633,7 +638,7 @@ fn unwritable(path: &Path, missing_dirs: &MissingDirs, decision: Decision) -> Op
         context: format!("cannot write to directory {}", dir.display()),
         source: errno.into(),
     };
-    Some(Step::Failed(with_privilege_hint(err)))
+    Some(with_privilege_hint(err))
 }
 
 /// Reads the destination; a failed read becomes a `Failed` step.
@@ -726,9 +731,7 @@ fn deploy_step(
         }
         decision => decision,
     };
-    if let Some(step) = unwritable(&path, &missing_dirs, decision) {
-        return Ok(step);
-    }
+    let unwritable = unwritable(&path, &missing_dirs, decision);
     let detail = broken_link_detail(&path, &observed, decision);
     let file_mode = file_mode_for(&observed, &want);
     let file_owner = kept_owner(&observed, &want.desired);
@@ -752,6 +755,7 @@ fn deploy_step(
         cache,
         record: want.record,
         detail,
+        unwritable,
     })))
 }
 

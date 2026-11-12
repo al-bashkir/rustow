@@ -143,6 +143,9 @@ fn deploy_conflict(d: &Deploy) -> Option<(Conflict, String)> {
 }
 
 fn predict_deploy(d: &Deploy, policy: Policy) -> (Action, Option<String>) {
+    if let Some(why) = &d.unwritable {
+        return (Action::Fail, Some(why.clone()));
+    }
     if let Some((conflict, detail)) = deploy_conflict(d) {
         if conflict.resolvable() && matches!(policy, Policy::Backup | Policy::Overwrite) {
             return (Action::Replace, Some(detail));
@@ -491,6 +494,7 @@ mod tests {
             cache: None,
             record: record(),
             detail: None,
+            unwritable: None,
         };
         Plan {
             items: vec![PlanItem {

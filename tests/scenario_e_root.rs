@@ -505,3 +505,31 @@ fn old_root_plain_link_becomes_a_copy_after_file_add() {
     assert!(is_regular(&dest));
     assert_eq!(read(&dest), "plain\n");
 }
+
+/// `diff` only reads: a system directory the user cannot write does not
+/// hide the desired content. `status` and `apply` still report the error.
+#[test]
+fn diff_shows_content_for_an_unwritable_system_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP: root can write everywhere");
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".rustowroot/etc/qa.conf.tmpl", "x={{ 1 + 1 }}\n");
+    let etc = fx.root_path("etc");
+    fs::create_dir_all(&etc).unwrap();
+    fs::set_permissions(&etc, fs::Permissions::from_mode(0o555)).unwrap();
+    let diff = fx.run(&["diff"]);
+    let status = fx.run(&["status"]);
+    let apply = fx.run(&["apply"]);
+    fs::set_permissions(&etc, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(diff.code, 1, "{diff:?}");
+    assert!(diff.stdout.contains("+x=2"), "{diff:?}");
+    assert!(!diff.stderr.contains("cannot compute"), "{diff:?}");
+    assert!(status.stdout.contains("ERROR"), "{status:?}");
+    assert!(status.stdout.contains("cannot write to directory"), "{status:?}");
+    assert_eq!(apply.code, 4, "{apply:?}");
+    assert!(!fx.root_path("etc/qa.conf").exists());
+}

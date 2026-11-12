@@ -56,7 +56,11 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
 /// What `diff` shows for one item; `None` when the item does not differ.
 fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
     let (text, binary) = step_text(item, &printer.path(&item.dest), old)?;
-    let (status, detail) = classify_item(item, old);
+    let (status, detail) = match &item.step {
+        // `diff` only reads: a directory it cannot write does not hide the content.
+        Step::Deploy(d) => classify_deploy(d, &item.source.mode, old),
+        _ => classify_item(item, old),
+    };
     if text.is_empty() && status != "ERROR" {
         return Ok(None);
     }
@@ -306,6 +310,7 @@ fn row(item: &PlanItem, state: &State) -> Row {
 fn classify_item(item: &PlanItem, old: Option<&Record>) -> (&'static str, Option<String>) {
     match &item.step {
         Step::Failed(msg) => ("ERROR", Some(msg.clone())),
+        Step::Deploy(d) if d.unwritable.is_some() => ("ERROR", d.unwritable.clone()),
         Step::Blocked { conflict, detail } => ("CONFLICT", Some(format!("{}: {detail}", conflict.describe()))),
         Step::Unfold { .. } => ("OUTDATED", Some("folded directory will be unfolded".into())),
         Step::Deploy(d) => classify_deploy(d, &item.source.mode, old),
