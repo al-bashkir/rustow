@@ -71,7 +71,7 @@ rustow compares `cache_dir` and `state_dir` with the repository in canonical for
 
 rustow uses one symlink for the shallowest home directory when all these conditions are true:
 
-- The directory is not directly under the home target. `~/.config/nvim` can fold. `~/.config`, `~/.ssh`, `~/.gnupg` and `~/.local` never fold.
+- The directory is not directly under the home target. `~/.config/nvim` can fold. `~/.config`, `~/.ssh`, `~/.gnupg` and `~/.local` themselves never fold, but the directories below them can (see the warning below).
 - The repository directory holds only ordinary link sources, and each of them may fold: its [`[[file_rules]]`](#file_rules) value, or `fold_directories` when no rule covers it, is `true`.
 - It holds no reserved directory, such as `.git` or an in-repository `cache_dir` or `state_dir`. This is also true for a configured directory that does not exist yet.
 - No destination collision is on the directory or below it.
@@ -80,7 +80,7 @@ rustow uses one symlink for the shallowest home directory when all these conditi
 
 rustow never folds in `.rustowroot/`.
 
-Why the top level never folds: on a new machine, `~/.ssh`, `~/.gnupg` or `~/.config` often does not exist yet. A fold there would make ssh, GnuPG and every program that writes to `~/.config` write private files into the repository. The same risk applies to any folded directory: a program that writes a new file into it writes into the repository. Use `[[file_rules]]` to stop folding for a directory that programs write to.
+Why the top level never folds: on a new machine, `~/.ssh`, `~/.gnupg` or `~/.config` often does not exist yet. A fold there would make ssh, GnuPG and every program that writes to `~/.config` write private files into the repository. The same risk applies to any folded directory: a program that writes a new file into it writes into the repository. The top-level rule protects only the directories directly under the home target. The directories one level down can still fold on a new machine, for example `~/.local/share` (keyrings, shell history, editor state), `~/.config/gh` (`gh auth login` writes its token to `hosts.yml`) or `~/.config/Code`. Use `[[file_rules]]` with `fold_directories = false` for each directory that programs write to.
 
 A recorded folded link that no longer qualifies becomes a real directory. This happens when you add a template, a copy, an encrypted file or an ignored file, or when you turn folding off. rustow refuses to unfold when files under the directory are not sources, because they would disappear from the destination.
 
