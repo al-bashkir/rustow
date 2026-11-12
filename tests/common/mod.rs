@@ -361,18 +361,18 @@ impl Fixture {
 
     /// Writes OpenPGP ciphertext made by plain gpg to a repository path.
     pub fn gpg_encrypt(&self, rel: &str, plaintext: &str, home: &GpgHome) -> PathBuf {
+        self.gpg_encrypt_to(rel, plaintext, home, &[&home.fpr])
+    }
+
+    /// Like `gpg_encrypt`, to each of `fprs` (public keys in `home`).
+    pub fn gpg_encrypt_to(&self, rel: &str, plaintext: &str, home: &GpgHome, fprs: &[&str]) -> PathBuf {
         let path = self.repo.join(rel);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut child = home
             .gpg()
-            .args([
-                "--trust-model",
-                "always",
-                "--encrypt",
-                "--recipient",
-                &home.fpr,
-                "--output",
-            ])
+            .args(["--trust-model", "always", "--encrypt"])
+            .args(fprs.iter().flat_map(|f| ["--recipient", f]))
+            .arg("--output")
             .arg(&path)
             .stdin(std::process::Stdio::piped())
             .spawn()

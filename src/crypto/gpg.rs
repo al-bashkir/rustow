@@ -475,6 +475,22 @@ mod tests {
                 .contains("not trusted")
         );
         assert!(check_encrypt_status(&lines("[GNUPG:] BEGIN_ENCRYPTION 2 9"), true).is_err());
+        let e = check_encrypt_status(&lines(untrusted), false).unwrap_err();
+        assert!(e.starts_with("recipient ABCDEF rejected: key not trusted"), "{e}");
+        for extra in ["[GNUPG:] FAILURE encrypt 1", "[GNUPG:] ERROR keylist 1"] {
+            assert!(
+                check_encrypt_status(&lines(&format!("{ok}\n{extra}")), true).is_err(),
+                "{extra}"
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_status_rejects_one_failure_or_error_record() {
+        for extra in ["[GNUPG:] FAILURE decrypt 1", "[GNUPG:] ERROR keylist 1"] {
+            let e = check_decrypt_status(&lines(&format!("{GOOD}\n{extra}")), true).unwrap_err();
+            assert_eq!(e, "decryption failed", "{extra}");
+        }
     }
 
     #[test]

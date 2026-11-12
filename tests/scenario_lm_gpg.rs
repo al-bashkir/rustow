@@ -56,6 +56,57 @@ fn external_ciphertext_deploys_as_link_copy_and_template() {
     assert!(fx.ok(&["apply"]).stdout.contains("0 changed"), "idempotent");
 }
 
+/// A file shared with another person decrypts with our key alone: gpg
+/// reports NO_SECKEY for the other recipient and still decrypts.
+#[test]
+fn ciphertext_for_two_recipients_decrypts_with_one_secret_key() {
+    let Some((fx, home)) = setup("") else { return };
+    let other = fx.gpg_home("other", false);
+    home.import_public(&other);
+    fx.gpg_encrypt_to("shared.gpg", "shared\n", &home, &[&home.fpr, &other.fpr]);
+    fx.ok(&["apply"]);
+    assert_eq!(read(&fx.home_path("shared")), "shared\n");
+}
+
+/// A key that can only sign is refused before encryption, with the reason.
+#[test]
+fn recipient_without_an_encryption_key_is_refused() {
+    let Some((fx, home)) = setup("") else { return };
+    let out = home
+        .gpg()
+        .args(["--pinentry-mode", "loopback", "--passphrase", ""])
+        .args([
+            "--quick-gen-key",
+            "sign only <s@example.invalid>",
+            "default",
+            "sign",
+            "never",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let colons = home
+        .gpg()
+        .args(["--with-colons", "--list-keys", "s@example.invalid"])
+        .output()
+        .unwrap();
+    let colons = String::from_utf8(colons.stdout).unwrap();
+    let signer = colons
+        .lines()
+        .find(|l| l.starts_with("fpr:"))
+        .unwrap()
+        .split(':')
+        .nth(9)
+        .unwrap();
+    fx.gpg_config(&home, &[signer], "");
+    fx.write("p", "plain\n");
+    let out = fx.run(&["enc", "--backend", "gpg", "p"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("has no usable encryption subkey"), "{out:?}");
+    assert_eq!(read(&fx.repo.join("p")), "plain\n");
+    assert!(!fx.repo.join("p.gpg").exists());
+}
+
 #[test]
 fn edit_keeps_gpg_backend_when_default_is_age() {
     let Some((fx, home)) = setup("[encryption]\nbackend = \"age\"\n") else {
