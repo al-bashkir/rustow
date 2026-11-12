@@ -233,8 +233,8 @@ impl Gpg {
 
     /// Confirms a fingerprint names exactly one valid primary key in the
     /// local keyring with encryption capability. GPG then picks the newest
-    /// valid encryption subkey of that key.
-    pub fn resolve(&self, fingerprint: &str) -> Result<(), String> {
+    /// valid encryption subkey of that key. Returns the key ids that can encrypt.
+    pub fn resolve(&self, fingerprint: &str) -> Result<Vec<String>, String> {
         let run = self.run(&["--with-colons", "--list-keys", "--", fingerprint], b"")?;
         let text = String::from_utf8_lossy(&run.stdout);
         let keys = primary_keys(&text);
@@ -254,13 +254,18 @@ impl Gpg {
         if !caps.contains('E') || caps.contains('D') {
             return Err(format!("key {fingerprint} has no usable encryption subkey"));
         }
-        Ok(())
+        Ok(encryption_ids(&text))
     }
 
-    /// Number of recipients (ENC_TO records) without decrypting.
-    pub fn recipient_count(&self, ciphertext: &[u8]) -> Option<usize> {
+    /// Key ids of the recipients (ENC_TO records), read without decrypting.
+    pub fn recipient_ids(&self, ciphertext: &[u8]) -> Option<Vec<String>> {
         let run = self.run(&["--list-only", "--decrypt"], ciphertext).ok()?;
-        Some(records(&run.status).iter().filter(|(w, _)| *w == "ENC_TO").count())
+        let recs = records(&run.status);
+        let ids = recs
+            .iter()
+            .filter(|(w, _)| *w == "ENC_TO")
+            .filter_map(|(_, args)| args.first());
+        Some(ids.map(|id| id.to_ascii_uppercase()).collect())
     }
 
     fn explain(&self, error: String, run: &Run) -> String {
@@ -305,6 +310,19 @@ fn primary_keys(colons: &str) -> Vec<(String, String, String)> {
         }
     }
     out
+}
+
+/// Key ids of the primary keys and subkeys in `--with-colons` output that
+/// can encrypt now: usage `e`, and not revoked, expired or invalid.
+fn encryption_ids(colons: &str) -> Vec<String> {
+    colons
+        .lines()
+        .map(|line| line.split(':').collect::<Vec<_>>())
+        .filter(|f| matches!(f.first(), Some(&("pub" | "sub"))))
+        .filter(|f| f.get(11).is_some_and(|usage| usage.contains('e')))
+        .filter(|f| !matches!(f.get(1), Some(&("r" | "e" | "i"))))
+        .filter_map(|f| f.get(4).map(|id| id.to_ascii_uppercase()))
+        .collect()
 }
 
 /// A GPG home must be an existing directory of the current user that
@@ -410,6 +428,18 @@ mod tests {
                 .contains("not trusted")
         );
         assert!(check_encrypt_status(&lines("[GNUPG:] BEGIN_ENCRYPTION 2 9"), true).is_err());
+    }
+
+    #[test]
+    fn encryption_ids_skip_signing_and_unusable_keys() {
+        let colons = "pub:u:255:22:AAAA000000000001:1::::::scESC::\n\
+            fpr:::::::::0000000000000000000000000000AAAA000000000001:\n\
+            sub:u:255:18:bbbb000000000002:1::::::e::\n\
+            sub:r:255:18:CCCC000000000003:1::::::e::\n\
+            sub:e:255:18:DDDD000000000004:1::::::e::\n\
+            sub:u:255:22:EEEE000000000005:1::::::s::\n\
+            pub:u:1:1:FFFF000000000006:1::::::escESC::";
+        assert_eq!(encryption_ids(colons), ["BBBB000000000002", "FFFF000000000006"]);
     }
 
     #[test]

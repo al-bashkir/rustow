@@ -120,7 +120,7 @@ pub fn encrypt(backend: Backend, plaintext: &[u8], ctx: &Context) -> Result<Vec<
             age::encrypt(plaintext, &recipients).map_err(Error::Failed)
         }
         Backend::Gpg => {
-            let fingerprints = gpg_recipients(ctx)?;
+            let fingerprints: Vec<String> = gpg_recipients(ctx)?.into_iter().map(|(f, _)| f).collect();
             let gpg = gpg(ctx).map_err(Error::Failed)?;
             gpg.encrypt(plaintext, &fingerprints).map_err(Error::Failed)
         }
@@ -137,8 +137,9 @@ pub fn check_recipients(backend: Backend, ctx: &Context) -> Result<()> {
     }
 }
 
-/// The configured GPG fingerprints, each resolved in the local keyring.
-fn gpg_recipients(ctx: &Context) -> Result<Vec<String>> {
+/// The configured GPG fingerprints, each resolved in the local keyring,
+/// with the key ids that can encrypt for it.
+fn gpg_recipients(ctx: &Context) -> Result<Vec<(String, Vec<String>)>> {
     let configured = &ctx.config.encryption.gpg.recipients;
     if configured.is_empty() {
         return Err(Error::Config(
@@ -152,10 +153,10 @@ fn gpg_recipients(ctx: &Context) -> Result<Vec<String>> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::Config)?;
     let gpg = gpg(ctx).map_err(Error::Failed)?;
-    for f in &fingerprints {
-        gpg.resolve(f).map_err(Error::Failed)?;
-    }
-    Ok(fingerprints)
+    fingerprints
+        .into_iter()
+        .map(|f| gpg.resolve(&f).map(|ids| (f, ids)).map_err(Error::Failed))
+        .collect()
 }
 
 /// Decrypts fresh ciphertext and compares it with `plaintext` when a
@@ -218,13 +219,25 @@ pub fn recipients_id(backend: Backend, ctx: &Context) -> Hash {
 }
 
 /// Whether ciphertext was evidently made for another recipient set, when
-/// the format reveals it (number of age stanzas or OpenPGP ENC_TO records).
+/// the format reveals it. age stanzas show only the number of recipients;
+/// OpenPGP ENC_TO records show the key ids.
 pub fn recipients_differ(backend: Backend, ciphertext: &[u8], ctx: &Context) -> bool {
     match backend {
         Backend::Age => age::stanza_count(ciphertext) != ctx.config.encryption.recipients.len(),
-        Backend::Gpg => gpg(ctx)
-            .ok()
-            .and_then(|g| g.recipient_count(ciphertext))
-            .is_some_and(|n| n != ctx.config.encryption.gpg.recipients.len()),
+        Backend::Gpg => gpg_recipients_differ(ciphertext, ctx),
     }
+}
+
+/// True when an ENC_TO key id belongs to no configured key, or a
+/// configured key has no ENC_TO key id.
+fn gpg_recipients_differ(ciphertext: &[u8], ctx: &Context) -> bool {
+    let (Ok(gpg), Ok(keys)) = (gpg(ctx), gpg_recipients(ctx)) else {
+        return false;
+    };
+    let Some(enc_to) = gpg.recipient_ids(ciphertext) else {
+        return false;
+    };
+    let configured = |id: &String| keys.iter().any(|(_, ids)| ids.contains(id));
+    let used = |ids: &Vec<String>| ids.iter().any(|id| enc_to.contains(id));
+    !enc_to.iter().all(configured) || !keys.iter().all(|(_, ids)| used(ids))
 }

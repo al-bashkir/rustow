@@ -270,3 +270,29 @@ fn enc_edit_with_locked_key_prompts_only_when_interactive() {
     assert!(log.exists(), "--interactive allows pinentry");
     assert_eq!(home.decrypt(&ct), "v2\n");
 }
+
+/// Audit E5: without state, a swapped GPG recipient with the same count
+/// is found from the ENC_TO key ids, and the edit encrypts to the new key.
+#[test]
+fn edit_without_state_reencrypts_to_a_swapped_gpg_recipient() {
+    let Some((fx, home)) = setup("") else { return };
+    fx.write("s", "x\n");
+    fx.ok(&["enc", "--backend", "gpg", "s"]);
+    let ct = fx.repo.join("s.gpg");
+    let old = home.enc_to(&ct);
+    fs::remove_dir_all(&fx.state).unwrap();
+    let second = home.add_key("second");
+    fx.gpg_config(&home, &[&second], "");
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", "true")]);
+    assert_eq!(out.code, 0, "{out:?}");
+    let new = home.enc_to(&ct);
+    assert_eq!(new.len(), 1, "{out:?}");
+    assert_ne!(new, old, "still encrypted to the old key: {out:?}");
+    assert_eq!(home.decrypt(&ct), "x\n");
+    // The same recipients without state: nothing to rewrite.
+    fs::remove_dir_all(&fx.state).unwrap();
+    let before = fs::read(&ct).unwrap();
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", "true")]);
+    assert!(out.stdout.contains("unchanged"), "{out:?}");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+}

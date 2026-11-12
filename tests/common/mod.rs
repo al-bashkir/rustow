@@ -445,4 +445,20 @@ impl GpgHome {
         assert!(reload.status.success(), "{}", String::from_utf8_lossy(&reload.stderr));
         log
     }
+
+    /// Long key ids of the ENC_TO records of an OpenPGP file.
+    pub fn enc_to(&self, path: &Path) -> Vec<String> {
+        let out = self
+            .gpg()
+            .args(["--list-only", "--status-fd", "1", "--decrypt"])
+            .arg(path)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.strip_prefix("[GNUPG:] ENC_TO "))
+            .filter_map(|rest| rest.split(' ').next())
+            .map(str::to_owned)
+            .collect()
+    }
 }
