@@ -309,6 +309,21 @@ fn apply_reports_orphaned_destinations_and_keeps_them() {
     );
 }
 
+/// Orphans follow the path arguments. A file source replaced by a
+/// directory is still an orphan: only a fold record is known by its directory.
+#[test]
+fn orphans_follow_path_arguments_and_a_source_turned_directory() {
+    let fx = two();
+    fx.ok(&["apply"]);
+    fs::remove_file(fx.repo.join(".zshrc")).unwrap();
+    let out = fx.ok(&["apply", ".bashrc"]);
+    assert!(!out.stdout.contains(".zshrc"), "not selected: {out:?}");
+    fs::create_dir(fx.repo.join(".zshrc")).unwrap();
+    let out = fx.ok(&["apply"]);
+    let line = out.stdout.lines().find(|l| l.contains("~/.zshrc")).unwrap_or_default();
+    assert!(line.contains("orphaned"), "{out:?}");
+}
+
 /// Names that differ only in case are two files on a case-sensitive
 /// target and one file on a case-insensitive one (APFS by default). Linux
 /// covers only the first branch; macOS CI covers the second.
