@@ -132,11 +132,24 @@ fn enc_run(ctx: &mut Context, state: &mut State, e: EncArgs, p: &Printer) -> Res
     }
 }
 
+/// The script the shell sources: on each TAB it calls `rustow` (found on
+/// PATH, so it survives upgrades) with `RUSTOW_COMPLETE` set.
 fn completions(shell: clap_complete::Shell) -> Result<i32> {
-    use clap::CommandFactory;
+    let shells = clap_complete::env::Shells::builtins();
+    let name = clap::ValueEnum::to_possible_value(&shell).map(|v| v.get_name().to_owned());
+    let completer = name
+        .as_deref()
+        .and_then(|n| shells.completer(n))
+        .ok_or_else(|| Error::Usage(format!("no completion support for {shell}")))?;
     let mut script = Vec::new();
-    clap_complete::generate(shell, &mut Cli::command(), "rustow", &mut script);
+    completer
+        .write_registration(crate::complete::VAR, "rustow", "rustow", "rustow", &mut script)
+        .map_err(|e| Error::Failed(format!("write completion script: {e}")))?;
     crate::report::out(format_args!("{}", String::from_utf8_lossy(&script)));
+    if shell == clap_complete::Shell::Zsh {
+        // Autoloaded from fpath as `_rustow`, the body runs on the first TAB: complete it too.
+        outln!("if [ \"$funcstack[1]\" = \"_rustow\" ]; then\n    _clap_dynamic_completer_rustow \"$@\"\nfi");
+    }
     Ok(0)
 }
 

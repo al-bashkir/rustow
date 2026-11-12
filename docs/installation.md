@@ -81,3 +81,7 @@ rustow completions fish > ~/.config/fish/completions/rustow.fish
 ```
 
 The supported shells are `bash`, `zsh`, `fish`, `elvish` and `powershell`.
+
+The script calls `rustow` on each TAB, so `rustow` must be on your `PATH`. Write the script again after an upgrade. The Homebrew formula does this for you.
+
+A path argument completes repository paths, one directory at a time. Dotfiles show without a leading `.`. Ignored and reserved paths do not show. `enc` offers plaintext files, and `enc edit` offers `.age` and `.gpg` files. Completion finds the repository as a command does, with `$RUSTOW_REPO` or from the current directory. It does not see a `--repo` option on the command line.

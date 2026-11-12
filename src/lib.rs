@@ -8,6 +8,7 @@ macro_rules! outln {
 pub mod app;
 pub mod cache;
 pub mod cli;
+pub mod complete;
 pub mod config;
 pub mod crypto;
 pub mod diff;

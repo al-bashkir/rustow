@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
+use clap_complete::ArgValueCompleter;
 
 use crate::execute::Policy;
 
@@ -143,7 +144,7 @@ pub struct EncArgs {
     #[arg(long, value_enum)]
     pub backend: Option<crate::config::Backend>,
     /// Repository-relative plaintext source (a file named "edit" is written ./edit)
-    #[arg(value_name = "PATH", required = true)]
+    #[arg(value_name = "PATH", required = true, add = ArgValueCompleter::new(crate::complete::plaintext))]
     pub path: Option<String>,
 }
 
@@ -155,7 +156,7 @@ pub enum EncCommand {
         #[arg(long)]
         reencrypt: bool,
         /// Repository-relative encrypted source (*.age or *.gpg)
-        #[arg(value_name = "PATH")]
+        #[arg(value_name = "PATH", add = ArgValueCompleter::new(crate::complete::encrypted))]
         path: String,
     },
 }
@@ -187,13 +188,13 @@ pub struct UndeployArgs {
 #[derive(Debug, Default, Args)]
 pub struct Paths {
     /// Repository-relative files or directories (default: all)
-    #[arg(value_name = "PATH")]
+    #[arg(value_name = "PATH", add = ArgValueCompleter::new(crate::complete::any))]
     pub paths: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct RequiredPaths {
     /// Repository-relative source files
-    #[arg(value_name = "PATH", required = true)]
+    #[arg(value_name = "PATH", required = true, add = ArgValueCompleter::new(crate::complete::any))]
     pub paths: Vec<String>,
 }

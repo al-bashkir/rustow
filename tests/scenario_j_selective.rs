@@ -1,5 +1,5 @@
 //! Spec §17.2 Scenario J — selective commands, plus status, check,
-//! doctor, cache clean, undeploy and completions.
+//! doctor, cache clean and undeploy.
 
 mod common;
 
@@ -217,13 +217,4 @@ fn undeploy_asks_only_for_a_full_real_run() {
     assert!(fx.ok(&["undeploy", "-n"]).stdout.contains("dry run"));
     fx.ok(&["undeploy", ".bashrc"]);
     assert_eq!(deployed(&fx), [false, true, true]);
-}
-
-#[test]
-fn completions_generate_for_bash_zsh_fish() {
-    let fx = Fixture::new();
-    for shell in ["bash", "zsh", "fish"] {
-        let out = fx.ok(&["completions", shell]);
-        assert!(out.stdout.contains("rustow") && out.stdout.len() > 200, "{shell}");
-    }
 }

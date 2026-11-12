@@ -17,6 +17,7 @@ rustow has one planner and one executor. Every command that changes files builds
 | Module              | Role                                                   |
 | ------------------- | ------------------------------------------------------ |
 | `cli`               | Argument definitions (clap).                           |
+| `complete`          | Shell completion of repository paths.                  |
 | `app`               | Dispatch and preparation.                              |
 | `repo`              | `Context`, repository discovery, internal directories. |
 | `config` (+ `edit`) | Schema, validation, comment-preserving edits.          |
