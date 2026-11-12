@@ -5,7 +5,6 @@ mod common;
 
 use common::*;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 /// The reason an unregistered system file is skipped: the `file add` hint.
 fn reason(source: &str) -> String {
@@ -386,124 +385,6 @@ fn home_and_root_sources_for_one_file_collide() {
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stdout.contains("same destination"), "{out:?}");
     assert!(!target.join(".bashrc").exists());
-}
-
-/// Makes the deployed copy at `dest` look like the work of an older
-/// rustow, which linked system files: a symlink to `target`, recorded with
-/// the link mode `label`.
-fn simulate_old_link(fx: &Fixture, dest: &Path, target: &Path, label: &str) {
-    let file = fs::read_dir(fx.state.join("rustow"))
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|x| x == "json"))
-        .unwrap();
-    let mut state: serde_json::Value = serde_json::from_str(&read(&file)).unwrap();
-    let record = state["entries"][dest.to_str().unwrap()].as_object_mut().unwrap();
-    record.insert("mode".into(), label.into());
-    record.insert("link_target".into(), target.to_str().unwrap().into());
-    record.remove("meta");
-    fs::write(&file, serde_json::to_string_pretty(&state).unwrap()).unwrap();
-    fs::remove_file(dest).unwrap();
-    std::os::unix::fs::symlink(target, dest).unwrap();
-}
-
-/// A root template that an older rustow deployed as a symlink into the
-/// cache: deploys it once with a rule, then turns it into that old link.
-fn old_root_template_link(fx: &Fixture) -> (PathBuf, PathBuf) {
-    let source = ".rustowroot/etc/t.conf.tmpl";
-    fx.write(
-        ".rustow.toml",
-        &format!("version = 1\n[[template_rules]]\nsource = \"{source}\"\nmode = \"0644\"\n"),
-    );
-    fx.write(source, "rendered\n");
-    fx.ok(&["apply"]);
-    let dest = fx.root_path("etc/t.conf");
-    let cache = walk(&fx.repo.join(".rustowcache/rendered"));
-    assert_eq!(cache.len(), 1, "{cache:?}");
-    fx.write(".rustow.toml", "version = 1\n");
-    simulate_old_link(fx, &dest, &cache[0], "template+link");
-    assert!(is_symlink(&dest));
-    (dest, cache[0].clone())
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            out.extend(walk(&p));
-        } else {
-            out.push(p);
-        }
-    }
-    out
-}
-
-#[test]
-fn old_root_template_link_becomes_a_copy() {
-    let fx = Fixture::new();
-    let (dest, _) = old_root_template_link(&fx);
-    let out = fx.run(&["status"]);
-    assert_eq!(out.code, 1, "{out:?}");
-    assert!(out.stdout.contains("OUTDATED"), "{out:?}");
-    let out = fx.ok(&["apply"]);
-    assert!(out.stdout.contains("update"), "{out:?}");
-    assert!(is_regular(&dest));
-    assert_eq!(mode(&dest), 0o644);
-    assert_eq!(read(&dest), "rendered\n");
-    assert!(fx.ok(&["apply"]).stdout.contains("0 changed"));
-}
-
-/// An edit made through the old link lives in the cache entry. It must
-/// survive the switch to a copy: a conflict first, then `--backup` saves it.
-#[test]
-fn old_root_template_link_with_an_edited_cache_entry_is_a_conflict() {
-    let fx = Fixture::new();
-    let (dest, cache) = old_root_template_link(&fx);
-    fs::write(&cache, "EDIT\n").unwrap();
-    let out = fx.run(&["apply"]);
-    assert_eq!(out.code, 3, "{out:?}");
-    assert!(
-        out.stdout.contains("conflict") && out.stdout.contains("cache entry"),
-        "{out:?}"
-    );
-    assert!(is_symlink(&dest), "nothing changed");
-    assert_eq!(read(&cache), "EDIT\n");
-    fx.ok(&["apply", "--backup"]);
-    assert!(is_regular(&dest));
-    assert_eq!(read(&dest), "rendered\n");
-    let backups = walk(&fx.state.join("rustow/backups"));
-    assert!(
-        backups.iter().any(|b| read(b) == "EDIT\n"),
-        "the edit is saved: {backups:?}"
-    );
-}
-
-/// An older rustow linked an unregistered system file to its source. It
-/// becomes a copy after `rustow file add`; until then nothing changes.
-#[test]
-fn old_root_plain_link_becomes_a_copy_after_file_add() {
-    let fx = Fixture::new();
-    let source = ".rustowroot/etc/p.conf";
-    fx.write(
-        ".rustow.toml",
-        &format!("version = 1\n[[files]]\nsource = \"{source}\"\n"),
-    );
-    let abs = fx.write(source, "plain\n");
-    fx.ok(&["apply"]);
-    let dest = fx.root_path("etc/p.conf");
-    fx.write(".rustow.toml", "version = 1\n");
-    simulate_old_link(&fx, &dest, &abs, "link");
-    let out = fx.ok(&["apply"]);
-    assert!(out.stderr.contains(&warning(source)), "{out:?}");
-    assert!(!out.stdout.contains("orphaned"), "the source still exists: {out:?}");
-    assert!(is_symlink(&dest));
-    fx.ok(&["file", "add", source]);
-    let out = fx.ok(&["apply"]);
-    assert!(out.stdout.contains("update"), "{out:?}");
-    assert!(is_regular(&dest));
-    assert_eq!(read(&dest), "plain\n");
 }
 
 /// `diff` only reads: a system directory the user cannot write does not

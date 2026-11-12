@@ -30,14 +30,6 @@ A system file never deploys as a symlink. A symlink into a private cache is unus
 
 The [trust rule](security.md#trust-rule) checks symlinks. System files are copies, so it does not apply to them.
 
-## Old symlinks
-
-An older rustow deployed some system files as symlinks. rustow replaces such a symlink with a copy:
-
-- A template symlink becomes a copy on the next `apply`.
-- An ordinary or encrypted symlink becomes a copy after `rustow file add`. Until then, rustow skips the source with a warning, and the symlink stays. It is not reported as orphaned.
-- If you edited the file through the old symlink, you edited the cache entry. Then `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--backup` saves your edit under `<state_dir>/backups/<repo-id>/<time>/cache/<dest>`. `--force` discards it.
-
 ## Cache of other users
 
 The cache inside the repository belongs to the repository owner. When another user (normally root) runs rustow, it uses a private cache in its own state directory (`<state_dir>/cache`) and prints a notice. Root and user runs never share or block one cache.
