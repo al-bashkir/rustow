@@ -8,6 +8,26 @@
 
 age needs no extra program. rustow includes it.
 
+## Download a release
+
+Each [GitHub release](https://github.com/al-bashkir/rustow/releases) has archives for these targets:
+
+- `x86_64-unknown-linux-musl` (static)
+- `aarch64-unknown-linux-musl` (static)
+- `aarch64-apple-darwin`
+
+Each archive holds the `rustow` binary, `README.md` and `LICENSE`. `SHA256SUMS` holds the checksums of the archives. Check the archive, then put the binary on your `PATH`:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+tar xzf rustow-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+install rustow-v0.1.0-x86_64-unknown-linux-musl/rustow ~/.local/bin/
+```
+
+On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS`.
+
+The Linux binaries use musl. musl does not load NSS modules, so it can fail to find users and groups from LDAP or SSSD. If an owner in your configuration comes from there, build from source.
+
 ## Build and install
 
 ```sh

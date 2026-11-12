@@ -13,6 +13,10 @@ cargo build --release
 
 CI (`.github/workflows/ci.yml`) runs these on Linux and macOS. It also runs `cargo audit`.
 
+Format Markdown with `dprint fmt`. The configuration is in `dprint.json`. CI does not check it.
+
+To release, set `version` in `Cargo.toml`, commit, then push a tag `v<version>`. `.github/workflows/release.yml` runs CI, stops if the tag and the version differ, builds the binaries and publishes a GitHub release.
+
 ## Layout
 
 - `src/`: the code. See `docs/architecture.md` for the modules.
