@@ -215,6 +215,39 @@ fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
     );
 }
 
+/// A dry run predicts what the real run cannot write: a destination below
+/// a directory the user cannot write fails in the plan, with the directory
+/// named and the privilege hint, and the real run tries nothing there.
+#[test]
+fn unwritable_target_directory_fails_in_the_plan_and_the_dry_run() {
+    use std::os::unix::fs::PermissionsExt;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP: root can write everywhere");
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".ro/x", "x");
+    fx.write(".ro/new/y", "y");
+    fx.write(".ok", "ok");
+    let ro = fx.home_path(".ro");
+    fs::create_dir(&ro).unwrap();
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o555)).unwrap();
+    let out = fx.run(&["apply", "--dry-run"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    let named = format!("directory {}:", ro.display());
+    for src in ["<- .ro/x", "<- .ro/new/y"] {
+        let line = out.stdout.lines().find(|l| l.contains(src)).unwrap_or_default();
+        assert!(line.contains("error") && line.contains(&named), "{out:?}");
+        assert!(line.contains("privileges"), "{out:?}");
+    }
+    let out = fx.run(&["apply", "--on-conflict", "skip"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(!out.stdout.contains("changed while"), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".ok")));
+    assert_eq!(fs::read_dir(&ro).unwrap().count(), 0, "nothing tried in ~/.ro");
+    fs::set_permissions(&ro, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// Names that differ only in case are two files on a case-sensitive
 /// target and one file on a case-insensitive one (APFS by default). Linux
 /// covers only the first branch; macOS CI covers the second.

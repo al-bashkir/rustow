@@ -583,13 +583,41 @@ fn check_link_trust(
             "`rustow file add`",
         ),
     };
-    let dir = missing_dirs
-        .as_ref()
-        .map_or_else(|| path.parent().unwrap_or(path), |(existing, _)| existing);
+    let dir = dest_dir(path, missing_dirs);
     Ok(fsops::trust_cache(&target, fsops::owner_of(dir)?).err().map(|why| {
         let detail = format!("{what}: {why}; copy it instead with {fix}");
         blocked(Conflict::Untrusted, detail)
     }))
+}
+
+/// The directory a destination is written into: its parent, or the
+/// deepest existing ancestor while directories are still missing.
+fn dest_dir<'a>(path: &'a Path, missing_dirs: &'a MissingDirs) -> &'a Path {
+    missing_dirs
+        .as_ref()
+        .map_or_else(|| path.parent().unwrap_or(path), |(existing, _)| existing)
+}
+
+/// A decision that writes into a directory the effective user cannot
+/// write fails already in the plan, so a dry run predicts the failure.
+fn unwritable(path: &Path, missing_dirs: &MissingDirs, decision: Decision) -> Option<Step> {
+    use nix::unistd::{AccessFlags, faccessat};
+    let writes = match decision {
+        Decision::Create | Decision::Update => true,
+        Decision::Conflict(c) => c.resolvable(),
+        _ => false,
+    };
+    if !writes {
+        return None;
+    }
+    let dir = dest_dir(path, missing_dirs);
+    let access = AccessFlags::W_OK | AccessFlags::X_OK;
+    let errno = faccessat(nix::fcntl::AT_FDCWD, dir, access, nix::fcntl::AtFlags::AT_EACCESS).err()?;
+    let err = Error::Io {
+        context: format!("cannot write to directory {}", dir.display()),
+        source: errno.into(),
+    };
+    Some(Step::Failed(with_privilege_hint(err)))
 }
 
 /// Reads the destination; a failed read becomes a `Failed` step.
@@ -667,6 +695,9 @@ fn deploy_step(
     observed: Observed,
 ) -> Result<Step> {
     let decision = decide(&want.desired, &observed, recorded(record));
+    if let Some(step) = unwritable(&path, &missing_dirs, decision) {
+        return Ok(step);
+    }
     let detail = broken_link_detail(&path, &observed, decision);
     let file_mode = file_mode_for(&observed, &want);
     let file_owner = kept_owner(&observed, &want.desired);
