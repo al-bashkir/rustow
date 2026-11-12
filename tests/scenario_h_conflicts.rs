@@ -400,3 +400,36 @@ fn names_that_differ_only_in_case_collide_only_on_a_case_insensitive_target() {
         assert_eq!(read(&fx.home_path("x")), "lower\n");
     }
 }
+
+/// A link rustow recorded and the user then retargeted or replaced is
+/// MODIFIED, not unmanaged; it is still never replaced without a policy.
+#[test]
+fn changed_managed_link_is_modified() {
+    let fx = two();
+    fx.ok(&["apply"]);
+    fx.write_home("other", "x\n");
+    fs::remove_file(fx.home_path(".bashrc")).unwrap();
+    std::os::unix::fs::symlink("other", fx.home_path(".bashrc")).unwrap();
+    fs::remove_file(fx.home_path(".zshrc")).unwrap();
+    fx.write_home(".zshrc", "mine\n");
+
+    let status = fx.run(&["status"]);
+    let line = |out: &Out, dest: &str| {
+        out.stdout
+            .lines()
+            .find(|l| l.contains(dest))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(line(&status, "~/.bashrc").contains("MODIFIED"), "{status:?}");
+    assert!(line(&status, "~/.zshrc").contains("MODIFIED"), "{status:?}");
+
+    let apply = fx.run(&["apply"]);
+    assert_eq!(apply.code, 3, "{apply:?}");
+    assert!(
+        line(&apply, "~/.bashrc").contains("modified since rustow last applied"),
+        "{apply:?}"
+    );
+    assert_eq!(link_text(&fx.home_path(".bashrc")), std::path::PathBuf::from("other"));
+    assert_eq!(read(&fx.home_path(".zshrc")), "mine\n");
+}

@@ -116,8 +116,7 @@ fn decide_symlink(want: &Path, observed: &Observed, recorded: Recorded) -> Decis
         Observed::Symlink(actual) => symlink_over_link(want, actual, recorded),
         Observed::File { hash, .. } => match recorded {
             Recorded::Copy(ours) if ours == hash => Decision::Conflict(Conflict::FileToSymlink),
-            Recorded::Copy(_) => Decision::Conflict(Conflict::Modified),
-            _ => Decision::Conflict(Conflict::Unmanaged),
+            _ => in_the_way(recorded),
         },
         // `decide` handles the other kinds before it gets here.
         _ => Decision::Conflict(Conflict::Special),
@@ -129,8 +128,17 @@ fn symlink_over_link(want: &Path, actual: &Path, recorded: Recorded) -> Decision
         _ if actual == want && recorded == Recorded::Link(want) => Decision::UpToDate,
         _ if actual == want => Decision::Adopt,
         Recorded::Link(ours) if ours == actual => Decision::Update,
-        _ => Decision::Conflict(Conflict::Unmanaged),
+        _ => in_the_way(recorded),
     }
+}
+
+/// Something other than rustow's last applied object is at the path: rustow's
+/// own object that someone changed when it is recorded, else a foreign one.
+fn in_the_way(recorded: Recorded) -> Decision {
+    Decision::Conflict(match recorded {
+        Recorded::None => Conflict::Unmanaged,
+        Recorded::Link(_) | Recorded::Copy(_) => Conflict::Modified,
+    })
 }
 
 /// Rules for a desired regular file over a symlink or a regular file.
@@ -138,7 +146,7 @@ fn decide_file(want: &Hash, meta: &FileMeta, observed: &Observed, recorded: Reco
     match observed {
         Observed::Symlink(actual) => match recorded {
             Recorded::Link(ours) if ours == actual => Decision::Update,
-            _ => Decision::Conflict(Conflict::Unmanaged),
+            _ => in_the_way(recorded),
         },
         Observed::File { hash, mode, uid, gid } if hash == want => {
             file_same_content(want, meta.matches(*mode, *uid, *gid), recorded)
@@ -161,8 +169,7 @@ fn file_same_content(want: &Hash, meta_ok: bool, recorded: Recorded) -> Decision
 fn file_other_content(hash: &Hash, recorded: Recorded) -> Decision {
     match recorded {
         Recorded::Copy(ours) if ours == hash => Decision::Update,
-        Recorded::Copy(_) => Decision::Conflict(Conflict::Modified),
-        _ => Decision::Conflict(Conflict::Unmanaged),
+        _ => in_the_way(recorded),
     }
 }
 
@@ -1123,7 +1130,7 @@ mod tests {
         );
         assert_eq!(
             decide(&want_link("dot/x"), &link("elsewhere"), Recorded::Link(&old)),
-            Conflict(super::Conflict::Unmanaged)
+            Conflict(super::Conflict::Modified)
         );
         assert_eq!(
             decide(&want_link("dot/x"), &link("dot/old"), Recorded::None),
@@ -1153,7 +1160,7 @@ mod tests {
         assert_eq!(decide(&want_file("a"), &link("dot/x"), Recorded::Link(&t)), Update);
         assert_eq!(
             decide(&want_file("a"), &link("other"), Recorded::Link(&t)),
-            Conflict(super::Conflict::Unmanaged)
+            Conflict(super::Conflict::Modified)
         );
         assert_eq!(
             decide(&want_file("a"), &link("dot/x"), Recorded::None),
