@@ -117,9 +117,29 @@ pub fn remove_file(text: &str, source: &RelPath) -> Result<Option<String>> {
     let mut doc = parse_doc(text)?;
     match doc.get_mut("files") {
         Some(Item::ArrayOfTables(tables)) => {
-            tables.retain(|t| names(t.get("source").and_then(Item::as_value)).as_ref() != Some(source));
+            let removed = |t: &Table| names(t.get("source").and_then(Item::as_value)).as_ref() == Some(source);
+            // Text above a removed header (comments) moves to the next kept entry.
+            let mut carried = String::new();
+            for table in tables.iter_mut() {
+                let prefix = table
+                    .decor()
+                    .prefix()
+                    .and_then(|p| p.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                if removed(table) {
+                    carried.push_str(&prefix);
+                } else if !carried.is_empty() {
+                    table.decor_mut().set_prefix(std::mem::take(&mut carried) + &prefix);
+                }
+            }
+            tables.retain(|t| !removed(t));
             if tables.is_empty() {
                 doc.remove("files");
+            }
+            if !carried.trim().is_empty() {
+                let trailing = doc.trailing().as_str().unwrap_or_default();
+                doc.set_trailing(format!("{trailing}{carried}"));
             }
         }
         Some(Item::Value(Value::Array(array))) => {

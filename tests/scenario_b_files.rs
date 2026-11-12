@@ -328,3 +328,30 @@ fn file_apply_rejects_non_registered_path() {
     let out = fx.run(&["file", "apply", ".bashrc"]);
     assert_eq!(out.code, 2, "{out:?}");
 }
+
+/// A comment above a removed `[[files]]` header may head the entries that
+/// follow it; `file remove` keeps it, also when no entry is left.
+#[test]
+fn file_remove_keeps_comments_above_the_entry() {
+    let fx = Fixture::new();
+    let config =
+        "version = 1\n\n# group: work files\n[[files]]\nsource = \"a\"\n\n# b note\n[[files]]\nsource = \"b\"\n";
+    fx.write(".rustow.toml", config);
+    fx.write("a", "a");
+    fx.write("b", "b");
+    fx.ok(&["file", "remove", "a"]);
+    let once = read(&fx.repo.join(".rustow.toml"));
+    assert!(
+        once.contains("# group: work files") && once.contains("# b note"),
+        "{once}"
+    );
+    assert!(!once.contains("\"a\""), "{once}");
+    fx.ok(&["file", "remove", "b"]);
+    let twice = read(&fx.repo.join(".rustow.toml"));
+    assert!(
+        twice.contains("# group: work files") && twice.contains("# b note"),
+        "{twice}"
+    );
+    assert!(!twice.contains("[[files]]"), "{twice}");
+    fx.ok(&["check"]);
+}
