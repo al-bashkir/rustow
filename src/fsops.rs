@@ -299,8 +299,8 @@ pub fn parent_state(scope_root: &Path, dest: &RelPath) -> Result<ParentState> {
     Ok(ParentState::Ready(cur))
 }
 
-/// Resolves a symlinked ancestor to a directory owned by the current user
-/// or root that others cannot write (unless sticky and root-owned).
+/// Resolves a symlinked ancestor to a directory that passes `check_dir` for
+/// the current user: the same owner and group rule as a link target's chain.
 fn safe_dir_target(link: &Path) -> std::result::Result<PathBuf, String> {
     let real = fs::canonicalize(link).map_err(|e| format!("symlink does not resolve: {e}"))?;
     let m = fs::metadata(&real).map_err(|e| e.to_string())?;
@@ -310,15 +310,14 @@ fn safe_dir_target(link: &Path) -> std::result::Result<PathBuf, String> {
             real.display()
         ));
     }
-    let trusted_owner = m.uid() == geteuid().as_raw() || m.uid() == 0;
-    let others_write = m.mode() & 0o022 != 0;
-    let sticky_root = m.mode() & 0o1000 != 0 && m.uid() == 0;
-    if !trusted_owner || (others_write && !sticky_root) {
-        return Err(format!(
-            "symlink points to {}, which is owned by another user or writable by others",
-            real.display()
-        ));
-    }
+    let me = geteuid().as_raw();
+    let dir = Owned {
+        path: real.clone(),
+        uid: m.uid(),
+        gid: m.gid(),
+        mode: m.mode(),
+    };
+    check_dir(&dir, me, private_gid_of(me)).map_err(|why| format!("symlink target is not safe: {why}"))?;
     Ok(real)
 }
 

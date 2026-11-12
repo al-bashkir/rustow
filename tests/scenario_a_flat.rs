@@ -148,6 +148,32 @@ fn ancestor_symlink_dir_is_followed_when_safe() {
     assert!(is_symlink(&fx.home_path(".config")), "the user's symlink is kept");
 }
 
+/// umask 002 with user-private groups: a group-writable symlinked ancestor
+/// follows the same group rule as a link target's chain.
+#[test]
+fn group_writable_ancestor_symlink_follows_the_private_group_rule() {
+    use nix::unistd::{Group, User, geteuid};
+    use std::os::unix::fs::PermissionsExt;
+    let fx = flat();
+    let user = User::from_uid(geteuid()).unwrap().expect("test user");
+    let group = Group::from_gid(user.gid).unwrap().expect("primary group");
+    let private = group.name == user.name && group.mem.iter().all(|m| *m == user.name);
+    let shared = fx.base.join("shared");
+    fs::create_dir_all(&shared).unwrap();
+    std::os::unix::fs::chown(&shared, None, Some(user.gid.as_raw())).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o775)).unwrap();
+    std::os::unix::fs::symlink(&shared, fx.home_path(".config")).unwrap();
+    let out = fx.run(&["apply"]);
+    if private {
+        assert_eq!(out.code, 0, "{out:?}");
+        assert!(is_symlink(&shared.join("nvim/init.lua")));
+    } else {
+        assert_eq!(out.code, 3, "{out:?}");
+        assert!(out.stdout.contains("chmod g-w"), "{out:?}");
+        assert!(!shared.join("nvim").exists());
+    }
+}
+
 #[test]
 fn unsafe_ancestor_symlink_blocks() {
     let fx = flat();
