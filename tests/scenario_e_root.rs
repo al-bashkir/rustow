@@ -107,13 +107,17 @@ fn status_and_check_report_a_skipped_root_file() {
     fx.write(source, "x\n");
     fx.ok(&["apply"]);
     let row = format!("  SKIPPED {source}: {}", reason(source));
-    for args in [&["status"][..], &["status", ".rustowroot/"]] {
+    for (args, summary) in [
+        (&["status"][..], "1 ok, 1 skipped, 0 need attention"),
+        (&["status", ".rustowroot/"], "0 ok, 1 skipped, 0 need attention"),
+    ] {
         let out = fx.ok(args);
         assert!(out.stdout.contains(&row), "{args:?}: {out:?}");
-        assert!(out.stdout.contains("0 need attention"), "{args:?}: {out:?}");
+        assert!(out.stdout.lines().any(|l| l == summary), "{args:?}: {out:?}");
     }
     let out = fx.ok(&["status", ".bashrc"]);
     assert!(!out.stdout.contains("SKIPPED"), "outside the selection: {out:?}");
+    assert!(out.stdout.lines().any(|l| l == "1 ok, 0 need attention"), "{out:?}");
     let out = fx.ok(&["status", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
     let skipped: Vec<&serde_json::Value> = v["items"]

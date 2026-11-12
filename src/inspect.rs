@@ -278,7 +278,17 @@ fn print_rows(rows: &[Row], attention: usize, printer: &Printer) {
         println!("{:>9} {dest}{}{mode}{detail}", r.status, r.source);
     }
     if !printer.quiet {
-        println!("{} ok, {attention} need attention", rows.len() - attention);
+        println!("{}", summary(rows, attention));
+    }
+}
+
+/// "N ok, N need attention"; skipped sources are counted apart, when any.
+fn summary(rows: &[Row], attention: usize) -> String {
+    let skipped = rows.iter().filter(|r| r.status == "SKIPPED").count();
+    let ok = rows.len() - attention - skipped;
+    match skipped {
+        0 => format!("{ok} ok, {attention} need attention"),
+        n => format!("{ok} ok, {n} skipped, {attention} need attention"),
     }
 }
 

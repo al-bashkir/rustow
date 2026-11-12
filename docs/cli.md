@@ -130,7 +130,7 @@ When rustow cannot write the state file, these commands still print the item rep
 
 ## status
 
-States: LINKED, COPIED, TEMPLATED (clean); MISSING, OUTDATED, MODIFIED, CONFLICT, UNMANAGED, ERROR (rustow cannot compute the desired state, or cannot write the destination directory), ORPHANED (recorded, source removed; the detail is "source removed; `rustow undeploy <source>` removes it"), SKIPPED (a [skipped source](#skipped-sources) in the selection; the detail is the reason), IGNORED (with `--ignored`). Clean rows are hidden unless `-v`. SKIPPED and IGNORED rows always show, and they do not need attention. Exit 0 when clean, 1 when attention is needed. JSON output never contains content.
+States: LINKED, COPIED, TEMPLATED (clean); MISSING, OUTDATED, MODIFIED, CONFLICT, UNMANAGED, ERROR (rustow cannot compute the desired state, or cannot write the destination directory), ORPHANED (recorded, source removed; the detail is "source removed; `rustow undeploy <source>` removes it"), SKIPPED (a [skipped source](#skipped-sources) in the selection; the detail is the reason), IGNORED (with `--ignored`). Clean rows are hidden unless `-v`. SKIPPED and IGNORED rows always show, and they do not need attention. The summary counts skipped sources apart, for example "1 ok, 1 skipped, 0 need attention". Exit 0 when clean, 1 when attention is needed. JSON output never contains content.
 
 MODIFIED means that the destination, or the cache entry behind rustow's link, changed since rustow last applied it. When the desired content changed too, `status` shows CONFLICT: "source and destination both changed since rustow last applied it".
 
