@@ -12,11 +12,10 @@ use crate::fsops;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Printer};
-use crate::source::{Discovery, Mode, classify, classify_unscoped, discover};
+use crate::source::{Discovery, classify, discover};
 
 pub fn add(ctx: &Context, printer: &Printer, paths: &[String], dry_run: bool) -> Result<i32> {
-    // Unscoped: an unregistered system file is a deploy error, but here it is what gets registered.
-    let discovery = discover(&ctx.root, &ctx.ignore, &ctx.config, classify_unscoped)?;
+    let discovery = discover_registered(ctx, paths)?;
     let (mut text, mode) = read_config(ctx)?;
     let mut changes = Vec::new();
     for arg in paths {
@@ -25,28 +24,37 @@ pub fn add(ctx: &Context, printer: &Printer, paths: &[String], dry_run: bool) ->
     finish(ctx, printer, &text, mode, &changes, dry_run)
 }
 
-/// Registers one source in the configuration text.
+/// The normal discovery, as if each argument that is a regular file
+/// (with no symlink on its path) were registered. Such an argument is
+/// then a copy source, or a skipped file with the reason it cannot be one.
+fn discover_registered(ctx: &Context, paths: &[String]) -> Result<Discovery> {
+    let mut config = ctx.config.clone();
+    for arg in paths {
+        let rel = RelPath::parse(arg)?;
+        let abs = ctx.root.join(rel.as_path());
+        if abs.is_file() && abs.canonicalize().is_ok_and(|real| real == abs) {
+            config.files.insert(rel);
+        }
+    }
+    discover(&ctx.root, &ctx.ignore, &config)
+}
+
+/// Registers one source in the configuration text. `discovery` comes
+/// from `discover_registered`, so a selected file is a copy source.
 fn register(ctx: &Context, discovery: &Discovery, text: &mut String, arg: &str) -> Result<Change> {
     let rel = RelPath::parse(arg)?;
     let selected = ctx.select(discovery, std::slice::from_ref(&arg.to_owned()))?;
-    let Some(source) = selected.iter().find(|s| s.path == rel) else {
+    if !selected.iter().any(|s| s.path == rel) {
         return Err(Error::Usage(format!(
             "'{rel}' is a directory; `rustow file add` takes files"
         )));
-    };
-    let registered = || Change::new(rel.as_str(), "ok", Some("already registered".into()));
-    match source.mode {
-        Mode::Link | Mode::DecryptLink(_) => match edit::add_file(text, &rel)? {
-            Some(updated) => {
-                *text = updated;
-                Ok(Change::new(rel.as_str(), "register", None))
-            }
-            None => Ok(registered()),
-        },
-        Mode::FileCopy | Mode::DecryptCopy(_) => Ok(registered()),
-        Mode::TemplateLink(_) | Mode::TemplateCopy(..) => Err(Error::Usage(format!(
-            "'{rel}' is a template; templates are copied by giving them [[template_rules]] metadata"
-        ))),
+    }
+    match edit::add_file(text, &rel)? {
+        Some(updated) => {
+            *text = updated;
+            Ok(Change::new(rel.as_str(), "register", None))
+        }
+        None => Ok(Change::new(rel.as_str(), "ok", Some("already registered".into()))),
     }
 }
 

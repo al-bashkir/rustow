@@ -165,7 +165,7 @@ impl std::fmt::Display for Collision {
 /// Walks the repository and classifies every non-ignored file with
 /// `classify`. A file that cannot deploy, and a registration or template
 /// rule that names no deployable file, go to `skipped`.
-pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, classify: Classifier) -> Result<Discovery> {
+pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config) -> Result<Discovery> {
     let mut out = Discovery::default();
     let mut walker = walkdir::WalkDir::new(repo)
         .min_depth(1)
@@ -175,7 +175,7 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, classify: Classifier
     while let Some(entry) = walker.next() {
         let entry = entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
         let rel = repo_relative(repo, entry.path())?;
-        if visit_entry(rel, entry.file_type(), ignore, cfg, classify, &mut out) {
+        if visit_entry(rel, entry.file_type(), ignore, cfg, &mut out) {
             walker.skip_current_dir();
         }
     }
@@ -186,14 +186,7 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, classify: Classifier
 }
 
 /// Sorts one walked entry into sources, skipped files or ignored paths. True when the walker must skip the directory.
-fn visit_entry(
-    rel: RelPath,
-    file_type: std::fs::FileType,
-    ignore: &Ignore,
-    cfg: &Config,
-    classify: Classifier,
-    out: &mut Discovery,
-) -> bool {
+fn visit_entry(rel: RelPath, file_type: std::fs::FileType, ignore: &Ignore, cfg: &Config, out: &mut Discovery) -> bool {
     if ignore.is_ignored(&rel, file_type.is_dir()) {
         if !ignore.is_reserved(&rel, file_type.is_dir()) {
             out.ignored.push(rel);
@@ -277,21 +270,10 @@ fn unmatched_entry(repo: &Path, ignore: &Ignore, path: &RelPath) -> &'static str
     }
 }
 
-/// How discovery classifies each file: `classify` or `classify_unscoped`.
-pub type Classifier = fn(&RelPath, &Config) -> std::result::Result<Source, String>;
-
 /// Classifies one deployable repository file (spec §5 steps 3–8), with
 /// the scope rule applied: the mode it deploys with. The error is the
 /// reason the file is skipped.
 pub fn classify(path: &RelPath, cfg: &Config) -> std::result::Result<Source, String> {
-    let source = classify_unscoped(path, cfg)?;
-    let mode = scoped_mode(source.scope, source.mode, path)?;
-    Ok(Source { mode, ..source })
-}
-
-/// The mode from the suffixes and the configuration, before the scope
-/// rule. `rustow file add` uses it to register an unregistered system file.
-pub fn classify_unscoped(path: &RelPath, cfg: &Config) -> std::result::Result<Source, String> {
     let (scope, inner) = split_scope(path).map_err(|e| e.to_string())?;
     let (backend, template, name) = split_suffixes(inner.file_name(), &cfg.template_extension)?;
     let mode = select_mode(path, cfg, backend, template)?;
@@ -299,7 +281,7 @@ pub fn classify_unscoped(path: &RelPath, cfg: &Config) -> std::result::Result<So
         path: path.clone(),
         scope,
         dest: inner.with_file_name(name),
-        mode,
+        mode: scoped_mode(scope, mode, path)?,
     })
 }
 
@@ -472,7 +454,7 @@ mod tests {
 
     fn run(dir: &tempfile::TempDir, c: &Config) -> Result<Discovery> {
         let ig = Ignore::load(dir.path(), vec![]).unwrap();
-        discover(dir.path(), &ig, c, classify)
+        discover(dir.path(), &ig, c)
     }
 
     fn paths(d: &Discovery) -> Vec<&str> {
@@ -524,10 +506,6 @@ mod tests {
             assert_eq!(
                 classify(&rel(p), &c).unwrap_err(),
                 format!("system files deploy only as copies; register it with `rustow file add {p}`")
-            );
-            assert!(
-                !classify_unscoped(&rel(p), &c).unwrap().mode.is_copy(),
-                "file add sees the link mode"
             );
         }
     }

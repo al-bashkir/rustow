@@ -83,12 +83,18 @@ fn file_add_rejects_ineligible_sources() {
     fx.write("a.bak", "x");
     fx.write(".rustowignore", "*.bak\n");
     fx.write("dir/f", "x");
+    fx.write("n.age.gpg", "x");
+    std::os::unix::fs::symlink("dir/f", fx.repo.join("lnk")).unwrap();
+    std::os::unix::fs::symlink("dir", fx.repo.join("ld")).unwrap();
     for (path, word) in [
         (".gitconfig.tmpl", "template"),
         ("a.bak", "ignored"),
         (".rustowignore", "reserved"),
         ("missing", "does not match"),
         ("dir", "directory"),
+        ("n.age.gpg", "nested encryption suffixes"),
+        ("lnk", "is a symbolic link"),
+        ("ld/f", "does not match"),
     ] {
         let out = fx.run(&["file", "add", path]);
         assert_eq!(out.code, 2, "{path}: {out:?}");

@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore};
 use crate::paths::{RelPath, Scope, expand_tilde};
-use crate::source::{Discovery, Skipped, Source, classify, discover};
+use crate::source::{Discovery, Skipped, Source, discover};
 
 /// Values from the command line that select the repository and targets.
 #[derive(Debug, Clone, Default)]
@@ -111,7 +111,7 @@ impl Context {
     }
 
     pub fn discover(&self) -> Result<Discovery> {
-        discover(&self.root, &self.ignore, &self.config, classify)
+        discover(&self.root, &self.ignore, &self.config)
     }
 
     pub fn target_root(&self, scope: Scope) -> &Path {
