@@ -232,7 +232,10 @@ fn home_link_into_writable_source_tree_is_refused() {
     assert!(!fx.home_path(".config/app/x.conf").exists());
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
     fx.ok(&["apply"]);
-    assert!(is_symlink(&fx.home_path(".config/app")), "folded once the directory is safe");
+    assert!(
+        is_symlink(&fx.home_path(".config/app")),
+        "folded once the directory is safe"
+    );
 }
 
 /// With umask 002, a repository is group-writable. That is trusted only

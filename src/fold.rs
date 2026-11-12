@@ -79,7 +79,11 @@ pub fn fold_allowed(rules: &BTreeMap<RelPath, bool>, default: bool, path: &RelPa
 fn foldable(ctx: &Context, source: &Source) -> bool {
     is_home(source)
         && source.mode == Mode::Link
-        && fold_allowed(&ctx.config.file_rules, ctx.config.defaults.fold_directories, &source.path)
+        && fold_allowed(
+            &ctx.config.file_rules,
+            ctx.config.defaults.fold_directories,
+            &source.path,
+        )
 }
 
 /// Directories above the selected link sources that can be one symlink; the outermost wins.
@@ -96,11 +100,7 @@ fn fold_candidates(
         .filter(|s| foldable(ctx, s))
         .map(|s| &s.path)
         .collect();
-    let chosen: BTreeSet<&RelPath> = selected
-        .iter()
-        .filter(|s| foldable(ctx, s))
-        .map(|s| &s.path)
-        .collect();
+    let chosen: BTreeSet<&RelPath> = selected.iter().filter(|s| foldable(ctx, s)).map(|s| &s.path).collect();
     let mut candidates: Vec<RelPath> = chosen
         .iter()
         .flat_map(|p| ancestors(p))
@@ -253,7 +253,11 @@ mod tests {
 
     #[test]
     fn nearest_rule_wins_else_default() {
-        let r = rules(&[(".config/nvim", false), (".config/nvim/lua", true), (".config/a/b.txt", false)]);
+        let r = rules(&[
+            (".config/nvim", false),
+            (".config/nvim/lua", true),
+            (".config/a/b.txt", false),
+        ]);
         assert!(!fold_allowed(&r, true, &rel(".config/nvim/init.lua")));
         assert!(fold_allowed(&r, true, &rel(".config/nvim/lua/x.lua")));
         assert!(!fold_allowed(&r, true, &rel(".config/a/b.txt")));

@@ -693,7 +693,10 @@ group = "root"
         )
         .unwrap();
         assert_eq!(c.file_rules.get(&RelPath::parse(".config/nvim").unwrap()), Some(&false));
-        assert_eq!(c.file_rules.get(&RelPath::parse(".config/a/b.txt").unwrap()), Some(&true));
+        assert_eq!(
+            c.file_rules.get(&RelPath::parse(".config/a/b.txt").unwrap()),
+            Some(&true)
+        );
     }
 
     #[test]

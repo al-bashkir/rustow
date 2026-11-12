@@ -270,7 +270,10 @@ fn owner_value(stmt: &Stmt, already: bool, id_key: &str, name_key: &str) -> Resu
         let MetaValue::Number(n) = stmt.value else {
             return Err(format!("meta.{id_key} needs a whole number"));
         };
-        return n.parse().map(Owner::Id).map_err(|_| format!("meta.{id_key} {n} is too large"));
+        return n
+            .parse()
+            .map(Owner::Id)
+            .map_err(|_| format!("meta.{id_key} {n} is too large"));
     }
     parse_owner(name_key, text_value(stmt)?)
 }
@@ -453,7 +456,10 @@ mod tests {
             ("{%- meta.uid == 1 %}\n", "line 1: "),
             ("{%- meta.uid = \"root\" %}\n", "line 1: "),
             ("{%- meta.user = 7 %}\n", "line 1: "),
-            ("{%- meta.os == \"linux\" %}\n{%- meta.uid = 1 %}\n{%- meta.user = \"me\" %}\n", "line 3: "),
+            (
+                "{%- meta.os == \"linux\" %}\n{%- meta.uid = 1 %}\n{%- meta.user = \"me\" %}\n",
+                "line 3: ",
+            ),
             ("{%- meta.gid = 1 %}\n{%- meta.group = \"g\" %}\n", "line 2: "),
             ("{%- meta.mode = \"0600\" %}\n{%- meta.mode = \"0644\" %}\n", "line 2: "),
             ("{%- meta.os == \"linux\" %}\n{%- meta.os == \"macos\" %}\n", "line 2: "),
@@ -471,7 +477,12 @@ mod tests {
             render_plain("t", "{%- meta.os == \"linux\" %}\ne={{ vars.editor }}\n", &c).unwrap(),
             "e=nvim\n"
         );
-        let e = render_plain("t", "{%- meta.os == \"linux\" %}\n{%- meta.uid = 1 %}\n{{ missing }}\n", &c).unwrap_err();
+        let e = render_plain(
+            "t",
+            "{%- meta.os == \"linux\" %}\n{%- meta.uid = 1 %}\n{{ missing }}\n",
+            &c,
+        )
+        .unwrap_err();
         assert!(e.contains("line 3"), "{e}");
     }
 
@@ -479,7 +490,10 @@ mod tests {
     fn host_matches_the_context() {
         let h = Host::current();
         let c = ctx();
-        assert_eq!((c["os"].as_str(), c["hostname"].as_str()), (Some(h.os.as_str()), Some(h.hostname.as_str())));
+        assert_eq!(
+            (c["os"].as_str(), c["hostname"].as_str()),
+            (Some(h.os.as_str()), Some(h.hostname.as_str()))
+        );
         assert_eq!(c["username"].as_str(), Some(h.username.as_str()));
     }
 }
