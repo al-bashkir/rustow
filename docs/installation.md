@@ -16,7 +16,7 @@ Each [GitHub release](https://github.com/al-bashkir/rustow/releases) has archive
 - `aarch64-unknown-linux-musl` (static)
 - `aarch64-apple-darwin`
 
-Each archive holds the `rustow` binary, `README.md` and `LICENSE`. `SHA256SUMS` holds the checksums of the archives. Check the archive, then put the binary on your `PATH`:
+Each archive holds the `rustow` binary, `README.md`, `LICENSE` and a `completions/` directory with `rustow.bash`, `_rustow` (zsh) and `rustow.fish`. See [shell completions](#shell-completions). `SHA256SUMS` holds the checksums of the archives. Check the archive, then put the binary on your `PATH`:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS

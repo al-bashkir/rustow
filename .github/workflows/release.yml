@@ -35,8 +35,13 @@ jobs:
       - name: Package
         run: |
           name="rustow-$GITHUB_REF_NAME-${{ matrix.target }}"
-          mkdir "$name"
-          cp "target/${{ matrix.target }}/release/rustow" README.md LICENSE "$name/"
+          bin="target/${{ matrix.target }}/release/rustow"
+          mkdir -p "$name/completions"
+          cp "$bin" README.md LICENSE "$name/"
+          # Each target builds on its own platform, so the binary runs here.
+          "$bin" completions bash > "$name/completions/rustow.bash"
+          "$bin" completions zsh > "$name/completions/_rustow"
+          "$bin" completions fish > "$name/completions/rustow.fish"
           tar czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v7
         with:
