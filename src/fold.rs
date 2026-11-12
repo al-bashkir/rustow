@@ -196,17 +196,16 @@ fn dest_allows_fold(ctx: &Context, dir: &RelPath, record: Option<&Record>) -> Re
     }
 }
 
-/// Every non-directory entry below `dir` is one of `allowed`, and no
-/// reserved directory (cache, state, `.git`) lies below it, even one that
-/// does not exist yet: the fold would expose it.
+/// No entry below `dir` is reserved (cache, state, `.git`), not even a
+/// cache or state directory that does not exist yet, and every
+/// non-directory entry is one of `allowed`: the fold would expose them.
 fn holds_only(ctx: &Context, dir: &RelPath, allowed: &BTreeSet<&RelPath>) -> Result<bool> {
     if ctx.ignore.holds_internal(dir) {
         return Ok(false);
     }
-    Ok(entries_below(ctx, dir)?.iter().all(|(p, is_dir)| match is_dir {
-        true => !ctx.ignore.is_reserved(p, true),
-        false => allowed.contains(p),
-    }))
+    Ok(entries_below(ctx, dir)?
+        .iter()
+        .all(|(p, is_dir)| !ctx.ignore.is_reserved(p, *is_dir) && (*is_dir || allowed.contains(p))))
 }
 
 /// Repository-relative paths of all entries below `dir` (symlinks and
