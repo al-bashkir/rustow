@@ -420,3 +420,33 @@ fn check_reports_unknown_owner_in_files_entry() {
     assert_eq!(fx.run(&["apply"]).code, 4);
     assert!(!fx.home_path(SRC).exists());
 }
+
+/// A deployed copy whose source is removed is orphaned, as a link or a
+/// template is: the registration still names it, but it is not a source.
+#[test]
+fn removed_source_of_a_registered_copy_is_orphaned() {
+    for config in ["", "version = 1\n[[files]]\nsource = \".d\"\n"] {
+        let fx = Fixture::new();
+        fx.write(".d", "d\n");
+        match config {
+            "" => drop(fx.ok(&["file", "add", ".d"])),
+            text => drop(fx.write("rustow.toml", text)),
+        }
+        fx.ok(&["apply"]);
+        fs::remove_file(fx.repo.join(".d")).unwrap();
+        let status = fx.run(&["status"]);
+        assert_eq!(status.code, 1, "{config:?}\n{status:?}");
+        assert!(
+            status.stdout.contains("ORPHANED ~/.d  <- .d (copy): source removed"),
+            "{status:?}"
+        );
+        assert!(
+            status.stdout.contains("does not exist"),
+            "the warning row stays: {status:?}"
+        );
+        let apply = fx.ok(&["apply"]);
+        assert!(apply.stdout.contains("orphaned ~/.d  <- .d (copy)"), "{apply:?}");
+        assert!(apply.stderr.contains("warning: .d: "), "{apply:?}");
+        assert_eq!(read(&fx.home_path(".d")), "d\n", "rustow removes nothing");
+    }
+}

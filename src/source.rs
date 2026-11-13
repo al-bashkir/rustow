@@ -138,12 +138,32 @@ pub struct Skipped {
     pub path: RelPath,
     /// Why it cannot deploy, without the path.
     pub reason: String,
+    pub kind: SkipKind,
+}
+
+/// Whether the source of a skipped path is there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SkipKind {
+    /// A path in the repository that cannot deploy: it still counts as a
+    /// source, so a recorded destination is not orphaned.
+    Present,
+    /// A configuration entry or registration whose source does not exist.
+    Missing,
 }
 
 const META_ERROR: &str = "template meta block, ";
 const META_CONFLICT: &str = "set metadata either in the template meta block or in [[template_rules]], not both";
 
 impl Skipped {
+    /// A path in the repository that cannot deploy.
+    pub fn new(path: RelPath, reason: String) -> Skipped {
+        Skipped {
+            path,
+            reason,
+            kind: SkipKind::Present,
+        }
+    }
+
     /// A mistake in a template's meta block (or its clash with a rule):
     /// `check` reports it as a problem, not only as a warning.
     pub fn is_meta_problem(&self) -> bool {
@@ -231,10 +251,7 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Resu
 fn unreadable(repo: &Path, e: walkdir::Error) -> Result<Skipped> {
     let why = e.io_error().map_or_else(|| e.to_string(), ToString::to_string);
     match e.path().filter(|p| *p != repo) {
-        Some(path) => Ok(Skipped {
-            path: repo_relative(repo, path)?,
-            reason: format!("cannot read: {why}"),
-        }),
+        Some(path) => Ok(Skipped::new(repo_relative(repo, path)?, format!("cannot read: {why}"))),
         None => Err(Error::Failed(format!("scan repository {}: {why}", repo.display()))),
     }
 }
@@ -245,10 +262,8 @@ fn check_file_rules(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Discover
         .keys()
         .filter_map(|path| {
             let why = file_rule_problem(repo, ignore, found, path)?;
-            Some(Skipped {
-                path: path.clone(),
-                reason: format!("{} [[file_rules]] entry {why}", crate::config::CONFIG_FILE),
-            })
+            let reason = format!("{} [[file_rules]] entry {why}", crate::config::CONFIG_FILE);
+            Some(Skipped::new(path.clone(), reason))
         })
         .collect()
 }
@@ -309,8 +324,8 @@ fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Disco
     };
     match placed {
         Placed::Deploy(s) => out.sources.push(s),
-        Placed::Inactive(reason) => out.inactive.push(Skipped { path, reason }),
-        Placed::Skip(reason) => out.skipped.push(Skipped { path, reason }),
+        Placed::Inactive(reason) => out.inactive.push(Skipped::new(path, reason)),
+        Placed::Skip(reason) => out.skipped.push(Skipped::new(path, reason)),
     }
 }
 
@@ -353,7 +368,7 @@ fn visit_entry(rel: RelPath, file_type: std::fs::FileType, ignore: &Ignore, cfg:
     };
     match classified {
         Ok(source) => out.sources.push(source),
-        Err(reason) => out.skipped.push(Skipped { path: rel, reason }),
+        Err(reason) => out.skipped.push(Skipped::new(rel, reason)),
     }
     false
 }
@@ -405,23 +420,30 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
     entries
         // A path that a matching [[global_rules]] entry ignores is not for this host: no warning.
         .filter(|(_, path)| !known.contains(path) && ignore.ignoring_rule(path, false).is_none())
-        .map(|(entry, path)| Skipped {
-            path: path.clone(),
-            reason: format!("{entry} {}", unmatched_entry(repo, ignore, path)),
+        .map(|(entry, path)| {
+            let (kind, why) = unmatched_entry(repo, ignore, path);
+            Skipped {
+                path: path.clone(),
+                reason: format!("{entry} {why}"),
+                kind,
+            }
         })
         .collect()
 }
 
 /// Why a configuration entry names no deployable file.
-fn unmatched_entry(repo: &Path, ignore: &Ignore, path: &RelPath) -> &'static str {
+fn unmatched_entry(repo: &Path, ignore: &Ignore, path: &RelPath) -> (SkipKind, &'static str) {
     if ignore.is_reserved(path, false) {
-        "is reserved and can never be deployed"
+        (SkipKind::Present, "is reserved and can never be deployed")
     } else if ignore.is_ignored(path, false) {
-        "is ignored by .rustowignore"
+        (SkipKind::Present, "is ignored by .rustowignore")
     } else if repo.join(path.as_path()).is_dir() {
-        "is a directory, not a file"
+        (SkipKind::Present, "is a directory, not a file")
     } else {
-        "does not exist (remove the entry, e.g. with `rustow file remove`)"
+        (
+            SkipKind::Missing,
+            "does not exist (remove the entry, e.g. with `rustow file remove`)",
+        )
     }
 }
 

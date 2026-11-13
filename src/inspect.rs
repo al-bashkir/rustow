@@ -16,7 +16,7 @@ use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::Printer;
-use crate::source::{Discovery, Mode, Selector, Skipped, check_collisions, shown_label};
+use crate::source::{Discovery, Mode, Selector, SkipKind, Skipped, check_collisions, shown_label};
 use crate::state::{Record, State};
 use crate::template;
 
@@ -386,8 +386,9 @@ fn orphans<'a>(
         .filter(|a| !matches!(a.as_str(), "." | "./"))
         .map(|a| RelPath::parse(a))
         .collect::<Result<_>>()?;
+    let present = discovery.skipped.iter().filter(|s| s.kind == SkipKind::Present);
     let paths: HashSet<&RelPath> = (discovery.sources.iter().map(|s| &s.path))
-        .chain(discovery.skipped.iter().map(|s| &s.path))
+        .chain(present.map(|s| &s.path))
         .collect();
     let mut found = Vec::new();
     for (dest, record) in &state.entries {
