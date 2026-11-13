@@ -664,6 +664,25 @@ fn sudo_from_the_current_directory_never_runs() {
     assert_eq!(s.calls(), 0, "{out:?}");
 }
 
+/// An empty `RUSTOW_SUDO` counts as unset: rustow runs `sudo` from PATH.
+#[test]
+fn an_empty_rustow_sudo_runs_sudo() {
+    let s = Sudo::new(FAKE);
+    let bin = s.fx.base.join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::copy(&s.script, bin.join("sudo")).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let env = [
+        ("RUSTOW_SUDO", ""),
+        ("PATH", path.as_str()),
+        ("FAKE_SUDO_LOG", s.log.to_str().unwrap()),
+        ("FAKE_SUDO_UNLOCK", s.etc.to_str().unwrap()),
+    ];
+    let out = s.fx.run_env(&["apply"], &env);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(s.calls(), 1, "{out:?}");
+}
+
 /// A system file that you cannot read (for example mode 0640, owner root)
 /// is compared with the state. Here the test user owns it with mode 0000,
 /// so the fake helper cannot read it either: it is root's view of the

@@ -2,7 +2,8 @@
 //! and the cache stay the user's. A system file that the user cannot write
 //! (`Deploy::sudo`) goes to `sudo rustow __sudo-helper`, once per run.
 //! sudo asks for the password on the terminal.
-//! `RUSTOW_SUDO` names another program (`doas`, or a fake in the tests).
+//! `RUSTOW_SUDO` names another program (`doas`, or a fake in the tests);
+//! an empty one counts as unset.
 //!
 //! The protocol is lock-step frames. The helper first prints `READY` on
 //! stdout; rustow sends nothing before that line, so without it no job ran.
@@ -247,9 +248,12 @@ fn receive(from: &mut impl BufRead) -> Option<Done> {
     }
 }
 
-/// `RUSTOW_SUDO`, else `sudo`: its name for messages, and the path to start.
+/// `RUSTOW_SUDO`, else `sudo` (also for an empty one, as for the XDG
+/// variables): its name for messages, and the path to start.
 fn sudo_program() -> Result<(String, PathBuf)> {
-    let name = std::env::var_os("RUSTOW_SUDO").unwrap_or_else(|| "sudo".into());
+    let name = std::env::var_os("RUSTOW_SUDO")
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "sudo".into());
     let shown = PathBuf::from(&name).display().to_string();
     match crate::fsops::find_program(&name) {
         Some(path) => Ok((shown, path)),
