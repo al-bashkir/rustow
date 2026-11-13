@@ -178,6 +178,14 @@ impl Fixture {
         output(cmd)
     }
 
+    /// Starts rustow and returns at once; stdout and stderr are piped.
+    pub fn spawn(&self, args: &[&str]) -> std::process::Child {
+        let mut cmd = self.command(args, &[]);
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        cmd.spawn().expect("run rustow")
+    }
+
     /// Like `run`, with the umask of rustow set to `mask`.
     pub fn run_umask(&self, mask: nix::sys::stat::Mode, args: &[&str]) -> Out {
         use std::os::unix::process::CommandExt;

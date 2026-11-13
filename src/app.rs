@@ -1,7 +1,7 @@
 //! Command dispatch: builds the context and runs one command.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, OnceLock};
 
 use crate::cli::{
     CacheCommand, Cli, Command, EncArgs, EncCommand, FileCommand, Global, Paths, StateCommand, StatusArgs,
@@ -268,6 +268,17 @@ fn lock(ctx: &Context, printer: &Printer, dry_run: bool) -> Result<Option<Lock>>
     Ok(Some(lock))
 }
 
+/// `lock` for a run that changes destinations. With `interruptible`, from
+/// the lock on (also while rustow plans), a first signal stops the run
+/// before its next change (`interrupt_flag`).
+fn lock_run(ctx: &Context, printer: &Printer, dry_run: bool, interruptible: bool) -> Result<Option<Lock>> {
+    let held = lock(ctx, printer, dry_run)?;
+    if held.is_some() && interruptible {
+        interrupt_flag()?;
+    }
+    Ok(held)
+}
+
 /// A plan with the context and state it was made from.
 pub struct Prepared {
     pub ctx: Context,
@@ -288,7 +299,7 @@ fn prepare(
     locked: bool,
 ) -> Result<Prepared> {
     let mut ctx = open(g, env, printer)?;
-    let lock = lock(&ctx, printer, !locked)?;
+    let lock = lock_run(&ctx, printer, !locked, true)?;
     let mut state = ctx.load_state()?;
     let discovery = ctx.discover()?;
     let sources = selected(&ctx, &discovery, &state, paths, selector)?;
@@ -463,7 +474,7 @@ fn undeploy(
 ) -> Result<i32> {
     let abort = removal_policy(g, selector)? == Policy::Abort;
     let ctx = open(g, env, printer)?;
-    let held = lock(&ctx, printer, g.dry_run)?;
+    let held = lock_run(&ctx, printer, g.dry_run, !ask)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let (removals, elsewhere) = plan::plan_removal(&ctx, paths, selector, &state)?;
     printer.warn(&elsewhere);
@@ -554,16 +565,21 @@ fn is_yes(answer: &str) -> bool {
 }
 
 /// The first SIGINT/SIGTERM/SIGHUP asks the executor (or `enc edit`) to
-/// stop; a second one terminates at once.
+/// stop; a second one terminates at once. The first call installs the
+/// handlers; each later call returns the same flag.
 pub(crate) fn interrupt_flag() -> Result<Arc<AtomicBool>> {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    if let Some(stop) = STOP.get() {
+        return Ok(Arc::clone(stop));
+    }
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [SIGINT, SIGTERM, SIGHUP] {
         signal_hook::flag::register_conditional_shutdown(sig, 130, Arc::clone(&stop))
             .and_then(|_| signal_hook::flag::register(sig, Arc::clone(&stop)))
             .map_err(|e| Error::Failed(format!("install signal handler: {e}")))?;
     }
-    Ok(stop)
+    Ok(Arc::clone(STOP.get_or_init(|| stop)))
 }
 
 #[cfg(test)]

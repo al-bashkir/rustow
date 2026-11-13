@@ -214,3 +214,38 @@ fn an_item_that_backs_up_nothing_leaves_no_backup_directory() {
         .collect();
     assert!(runs.is_empty(), "{runs:?}");
 }
+
+/// From the lock on, a first signal stops the run before its first change,
+/// also while rustow still plans: exit 4, nothing written, no journal left.
+#[test]
+fn a_signal_while_rustow_plans_changes_nothing_and_leaves_no_journal() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    // About one second of rendering in a debug build, within the evaluation limit.
+    fx.write(
+        ".slow.tmpl",
+        "{% for a in range(1600) %}{% for b in range(1600) %}{% endfor %}{% endfor %}\n",
+    );
+    let child = fx.spawn(&["apply"]);
+    let journal = |fx: &Fixture| {
+        (fs::read_dir(fx.state.join("rustow")).into_iter().flatten())
+            .any(|e| e.unwrap().path().extension().is_some_and(|x| x == "pending"))
+    };
+    let start = std::time::Instant::now();
+    while !journal(&fx) {
+        assert!(start.elapsed().as_secs() < 10, "rustow took no lock");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    use rustix::process::{Pid, Signal, kill_process};
+    kill_process(Pid::from_child(&child), Signal::TERM).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(4), "{out:?}");
+    assert!(
+        stdout.contains("interrupted before this item; nothing changed"),
+        "{stdout}"
+    );
+    assert!(!fx.home_path(".bashrc").exists(), "nothing written");
+    assert!(!journal(&fx), "no journal left");
+}
