@@ -261,7 +261,15 @@ fn sudo_program() -> Result<(String, PathBuf)> {
 
 /// The helper side: serves the frames of stdin. It reads stdin without a
 /// buffer of its own, so that a header read takes no content byte with it.
+/// It catches SIGINT, SIGTERM and SIGHUP before its ready line: sudo passes
+/// a Ctrl-C on, and a job must not stop half done. rustow stops after the
+/// job at hand and closes stdin, and that ends the helper.
 pub fn serve() -> Result<i32> {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    for sig in [SIGINT, SIGTERM, SIGHUP] {
+        signal_hook::flag::register(sig, std::sync::Arc::new(AtomicBool::new(false)))
+            .map_err(|e| Error::Failed(format!("install signal handler: {e}")))?;
+    }
     let stdin = std::io::stdin()
         .as_fd()
         .try_clone_to_owned()

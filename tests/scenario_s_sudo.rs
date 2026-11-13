@@ -834,3 +834,32 @@ fn a_conflict_that_the_helper_finds_is_a_conflict() {
     );
     assert_eq!(s.fx.state_json()["entries"][&key], before, "the old record stays");
 }
+
+/// A Ctrl-C at the terminal reaches the helper too (sudo passes it on).
+/// After its ready line, the helper finishes its work and stops only at
+/// the end of its input, which rustow closes after the job at hand.
+#[test]
+fn the_helper_outlives_an_interrupt_and_ends_with_its_input() {
+    use rustix::process::{Pid, Signal, kill_process};
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_rustow"))
+        .arg("__sudo-helper")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut ready = String::new();
+    BufReader::new(helper.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready, format!("{READY}\n"));
+
+    for sig in [Signal::INT, Signal::TERM, Signal::HUP] {
+        kill_process(Pid::from_child(&helper), sig).unwrap();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(helper.try_wait().unwrap().is_none(), "the helper still runs");
+    drop(helper.stdin.take());
+    assert!(helper.wait().unwrap().success());
+}
