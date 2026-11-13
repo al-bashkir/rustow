@@ -154,6 +154,32 @@ fn removal_honors_abort_and_refuses_backup_and_force() {
 }
 
 #[test]
+fn records_under_another_target_are_reported_and_kept() {
+    let fx = two();
+    fx.ok(&["apply", ".bashrc"]);
+    let t2 = fx.base.join("t2");
+    fs::create_dir(&t2).unwrap();
+    let t2 = t2.to_str().unwrap();
+    fx.ok(&["--target", t2, "apply"]);
+    let hint = format!(
+        "{}, which is not under the current target; `rustow --target {} undeploy .bashrc` removes it",
+        fx.home_path(".bashrc").display(),
+        fx.home.display()
+    );
+    let status = fx.run(&["--target", t2, "status"]);
+    assert_eq!(status.code, 0, "{status:?}");
+    assert!(status.stderr.contains(&hint), "{status:?}");
+    let json = fx.run(&["--target", t2, "--json", "unlink", "--dry-run"]);
+    assert!(json.stdout.contains(&hint), "{json:?}");
+    let out = fx.run(&["--target", t2, "undeploy", "-y"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stderr.contains(&hint), "{out:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")), "outside the current target: kept");
+    fx.ok(&["--target", fx.home.to_str().unwrap(), "undeploy", ".bashrc"]);
+    assert!(!is_symlink(&fx.home_path(".bashrc")));
+}
+
+#[test]
 fn unlink_removes_created_empty_dirs_only() {
     let fx = Fixture::new();
     fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");

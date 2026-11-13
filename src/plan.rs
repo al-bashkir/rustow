@@ -18,7 +18,9 @@ use crate::fsops::{self, DirId, FileMeta, Observed, ParentState};
 use crate::hash::Hash;
 use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
-use crate::source::{Discovery, Mode, Selector, Source, check_collisions, collision_key, shown_label};
+use crate::source::{
+    Discovery, Mode, Selector, SkipKind, Skipped, Source, check_collisions, collision_key, shown_label,
+};
 use crate::state::{Record, State};
 use crate::{cache, crypto, fold, template};
 
@@ -1331,28 +1333,78 @@ pub enum Verdict {
 
 /// Plans removal of recorded destinations whose source matches `args`
 /// (repository-relative prefixes; all when empty) and whose mode the
-/// selector covers. Sources that no longer exist are included.
-pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &State) -> Result<Vec<Removal>> {
+/// selector covers. Sources that no longer exist are included. A selected
+/// record under another target is not removed: it comes back as a warning.
+pub fn plan_removal(
+    ctx: &Context,
+    args: &[String],
+    selector: Selector,
+    state: &State,
+) -> Result<(Vec<Removal>, Vec<Skipped>)> {
     let prefixes = parse_prefixes(ctx, args)?;
+    let elsewhere = under_other_targets(ctx, &prefixes, selector, state);
     let mut out = Vec::new();
     for (dest, record) in &state.entries {
-        let wanted = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
         let Ok(rel) = dest.strip_prefix(ctx.target_root(record.scope)) else {
             continue;
         };
-        if !wanted || !selector.includes_label(&record.mode) {
-            continue;
+        if selects(&prefixes, selector, record) {
+            out.push(removal(ctx, dest, record, rel, &state.created_dirs));
         }
-        out.push(removal(ctx, dest, record, rel, &state.created_dirs));
     }
-    if out.is_empty() && !prefixes.is_empty() {
+    if out.is_empty() && elsewhere.is_empty() && !prefixes.is_empty() {
         let list: Vec<&str> = prefixes.iter().map(RelPath::as_str).collect();
         return Err(Error::Usage(format!(
             "nothing deployed by rustow matches {}",
             list.join(", ")
         )));
     }
-    Ok(out)
+    Ok((out, elsewhere))
+}
+
+/// A warning for each record that `args` select (all when empty) and whose
+/// destination is not under the current target of its scope: with these
+/// targets, no command shows or removes it.
+pub fn other_targets(ctx: &Context, args: &[String], state: &State) -> Result<Vec<Skipped>> {
+    Ok(under_other_targets(
+        ctx,
+        &parse_prefixes(ctx, args)?,
+        Selector::All,
+        state,
+    ))
+}
+
+fn under_other_targets(ctx: &Context, prefixes: &[RelPath], selector: Selector, state: &State) -> Vec<Skipped> {
+    (state.entries.iter())
+        .filter(|(dest, r)| !dest.starts_with(ctx.target_root(r.scope)) && selects(prefixes, selector, r))
+        .map(|(dest, r)| other_target(dest, r))
+        .collect()
+}
+
+/// The record is at or below one of `prefixes` (all when empty), in a mode of `selector`.
+fn selects(prefixes: &[RelPath], selector: Selector, record: &Record) -> bool {
+    (prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p)))
+        && selector.includes_label(&record.mode)
+}
+
+/// The warning for a record under another target, with the command that
+/// removes it. That target is `dest` without the components of the
+/// destination below its target, as many as the source has below its scope.
+fn other_target(dest: &Path, record: &Record) -> Skipped {
+    let (flag, below) = match record.scope {
+        Scope::Home => ("--target", record.source.components().count()),
+        Scope::Root => ("--root-target", record.source.components().count() - 1),
+    };
+    let target = (dest.ancestors().nth(below)).map_or_else(|| "<target>".into(), |t| t.display().to_string());
+    Skipped {
+        path: record.source.clone(),
+        reason: format!(
+            "deployed to {}, which is not under the current target; `rustow {flag} {target} undeploy {}` removes it",
+            dest.display(),
+            record.source
+        ),
+        kind: SkipKind::NoSource,
+    }
 }
 
 /// The removal of the recorded destination `dest` (`rel` below its target
@@ -1442,6 +1494,39 @@ fn observe_recorded(
 mod tests {
     use super::*;
     use Decision::*;
+
+    #[test]
+    fn a_record_under_another_target_names_that_target() {
+        let record = |path: &str, scope| {
+            let path = RelPath::parse(path).unwrap();
+            let source = Source {
+                dest: path.clone(),
+                path,
+                scope,
+                mode: Mode::Link,
+            };
+            base_record(&source, Hash::of(b""))
+        };
+        let home = other_target(Path::new("/old/.config/a/x"), &record(".config/a/x.tmpl", Scope::Home));
+        assert!(
+            home.reason.contains("`rustow --target /old undeploy .config/a/x.tmpl`"),
+            "{}",
+            home.reason
+        );
+        let root = other_target(Path::new("/r/etc/x"), &record("rustowroot/etc/x", Scope::Root));
+        assert!(
+            root.reason
+                .contains("`rustow --root-target /r undeploy rustowroot/etc/x`"),
+            "{}",
+            root.reason
+        );
+        let short = other_target(Path::new("/x"), &record("a/b", Scope::Home));
+        assert!(
+            short.reason.contains("--target <target> undeploy a/b"),
+            "{}",
+            short.reason
+        );
+    }
 
     #[test]
     fn new_directories_are_private_only_for_home_secrets() {

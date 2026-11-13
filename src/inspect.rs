@@ -324,7 +324,7 @@ pub fn status(
             .iter()
             .map(|r| json!({ "source": r.source, "dest": r.dest, "mode": r.mode, "status": r.status, "detail": r.detail }))
             .collect();
-        outln!("{}", json!({ "items": items }));
+        outln!("{}", json!({ "items": items, "warnings": printer.warnings }));
     } else {
         print_rows(&rows, attention, printer);
     }

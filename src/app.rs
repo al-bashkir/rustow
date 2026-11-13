@@ -142,6 +142,7 @@ fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: 
 
 fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<i32> {
     let s = prepare(g, env, p, &a.paths.paths, Selector::All, false)?;
+    p.warn(&plan::other_targets(&s.ctx, &a.paths.paths, &s.state)?);
     inspect::status(&s.ctx, &s.plan, &s.discovery, &s.state, &a.paths.paths, a.ignored, p)
 }
 
@@ -457,7 +458,8 @@ fn undeploy(
     let ctx = open(g, env, printer)?;
     let held = lock(&ctx, printer, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
-    let removals = plan::plan_removal(&ctx, paths, selector, &state)?;
+    let (removals, elsewhere) = plan::plan_removal(&ctx, paths, selector, &state)?;
+    printer.warn(&elsewhere);
     let predicted = execute::predict_removal(&removals);
     if let Some(code) = removes_nothing(g.dry_run, (abort, ask), printer, &predicted)? {
         return Ok(code);
