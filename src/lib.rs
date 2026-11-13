@@ -24,6 +24,7 @@ pub mod ignore;
 pub mod init;
 pub mod inspect;
 pub mod paths;
+pub mod pending;
 pub mod plan;
 pub mod repo;
 pub mod report;

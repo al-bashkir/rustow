@@ -45,6 +45,7 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
             format!("running as uid {uid}{}", if uid == 0 { " (root)" } else { "" }),
         ),
     ];
+    checks.extend(temp_files(ctx));
     checks.extend(encryption_checks(ctx));
     checks.push(match crate::fsops::find_program("gpg") {
         Some(path) => check("ok", "gpg", path.display().to_string()),
@@ -105,6 +106,16 @@ fn writable(name: &'static str, dir: &Path, level: &'static str) -> Check {
                 dir.display()
             ),
         ),
+    }
+}
+
+/// The temporary files that an interrupted run left (the journal lists them).
+fn temp_files(ctx: &Context) -> Vec<Check> {
+    let journal = ctx.state_dir.join(format!("{}.pending", ctx.repo_id));
+    match crate::pending::report(&journal) {
+        Ok(left) if left.is_empty() => vec![check("ok", "temp files", "none left by an interrupted run")],
+        Ok(left) => left.into_iter().map(|line| check("warn", "temp file", line)).collect(),
+        Err(e) => vec![check("warn", "temp files", e.to_string())],
     }
 }
 

@@ -17,7 +17,7 @@ use crate::hash::Hash;
 use crate::paths::RelPath;
 
 mod dir;
-pub use dir::{Dir, DirId, Walked, open_planned, open_ready};
+pub use dir::{Dir, DirId, Walked, journal_to, open_planned, open_ready, temp_name};
 
 /// Name prefix of every temporary file rustow creates. Names with it are
 /// reserved at any depth, so a file left by a crash is never deployed.
@@ -137,6 +137,21 @@ pub fn hash_file(path: &Path) -> Result<(Hash, u64)> {
 /// Replaces `dest` with `bytes` (`Dir::write`) in the directory of `dest`,
 /// walked for the current user. A symlink at `dest` is replaced, not followed.
 pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+    write_path(dest, bytes, (mode, uid, gid), true)
+}
+
+/// Writes the new file `dest` (mode `mode`) as `write_atomic` does, but
+/// never over anything there.
+pub fn write_new(dest: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    write_path(dest, bytes, (mode, None, None), false)
+}
+
+fn write_path(
+    dest: &Path,
+    bytes: &[u8],
+    (mode, uid, gid): (u32, Option<u32>, Option<u32>),
+    replace: bool,
+) -> Result<()> {
     let dest = std::path::absolute(dest).ctx(|| format!("write {}", dest.display()))?;
     let (parent, name) = split(&dest)?;
     let meta = FileMeta {
@@ -145,15 +160,17 @@ pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid:
         gid,
     };
     let want = (&Hash::of(bytes), bytes.len() as u64);
-    open_ready(parent, geteuid().as_raw())?.write(name, &mut &bytes[..], want, meta, true)
+    let dir = open_ready(parent, geteuid().as_raw())?;
+    dir.write(name, &temp_name(&[parent])?, &mut &bytes[..], want, meta, replace)
 }
 
 /// Moves the file or symlink `name` of `dir` to `backup`, whose parent is
 /// created private and walked for `me`; never over an existing backup.
-pub fn backup(dir: &Dir, name: &OsStr, backup: &Path, me: u32) -> Result<()> {
+/// `temp` names the copy across filesystems.
+pub fn backup(dir: &Dir, name: &OsStr, backup: &Path, me: u32, temp: &str) -> Result<()> {
     let (to, to_name) = split(backup)?;
     ensure_private_dir(to)?;
-    dir.move_to(name, &open_ready(to, me)?, to_name)
+    dir.move_to(name, &open_ready(to, me)?, to_name, temp)
 }
 
 /// Removes each of `dirs`, deepest first, while it is an empty directory,
@@ -507,6 +524,9 @@ mod tests {
         OsStr::new(s)
     }
 
+    /// A temporary name for the tests; no journal is set.
+    const T: &str = ".rustow-tmp-test";
+
     /// `Dir::write` of `bytes` with `mode`.
     fn put(dir: &Dir, name: &str, bytes: &[u8], mode: u32, replace: bool) -> Result<()> {
         let meta = FileMeta {
@@ -514,7 +534,7 @@ mod tests {
             ..FileMeta::default()
         };
         let want = (&Hash::of(bytes), bytes.len() as u64);
-        dir.write(OsStr::new(name), &mut &bytes[..], want, meta, replace)
+        dir.write(OsStr::new(name), T, &mut &bytes[..], want, meta, replace)
     }
 
     #[test]
@@ -530,9 +550,9 @@ mod tests {
             "{e}"
         );
         assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
-        dir.symlink(name("l"), Path::new("t"), false).unwrap();
-        assert!(dir.symlink(name("l"), Path::new("u"), false).is_err());
-        assert!(dir.symlink(name("f"), Path::new("u"), false).is_err());
+        dir.symlink(name("l"), T, Path::new("t"), false).unwrap();
+        assert!(dir.symlink(name("l"), T, Path::new("u"), false).is_err());
+        assert!(dir.symlink(name("f"), T, Path::new("u"), false).is_err());
         assert_eq!(fs::read_link(d.join("l")).unwrap(), PathBuf::from("t"));
         assert_eq!(fs::read_dir(&d).unwrap().count(), 2, "no temporary file left");
     }
@@ -549,11 +569,11 @@ mod tests {
     fn symlink_replace_replaces_symlink_but_not_directory() {
         let (_t, d) = tmp();
         let dir = open(&d);
-        dir.symlink(name("l"), Path::new("a"), true).unwrap();
-        dir.symlink(name("l"), Path::new("b"), true).unwrap();
+        dir.symlink(name("l"), T, Path::new("a"), true).unwrap();
+        dir.symlink(name("l"), T, Path::new("b"), true).unwrap();
         assert_eq!(fs::read_link(d.join("l")).unwrap(), PathBuf::from("b"));
         fs::create_dir(d.join("dir")).unwrap();
-        assert!(dir.symlink(name("dir"), Path::new("b"), true).is_err());
+        assert!(dir.symlink(name("dir"), T, Path::new("b"), true).is_err());
         assert!(d.join("dir").is_dir());
         assert_eq!(fs::read_dir(&d).unwrap().count(), 2);
     }
@@ -580,8 +600,8 @@ mod tests {
         let (dir, me) = (open(&d), geteuid().as_raw());
         fs::write(d.join("f"), b"data").unwrap();
         symlink("t", d.join("l")).unwrap();
-        backup(&dir, name("f"), &d.join("bk/a/f"), me).unwrap();
-        backup(&dir, name("l"), &d.join("bk/a/l"), me).unwrap();
+        backup(&dir, name("f"), &d.join("bk/a/f"), me, T).unwrap();
+        backup(&dir, name("l"), &d.join("bk/a/l"), me, T).unwrap();
         assert!(!d.join("f").exists());
         assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
         assert_eq!(fs::read_link(d.join("bk/a/l")).unwrap(), PathBuf::from("t"));
@@ -589,7 +609,7 @@ mod tests {
         assert_eq!(mode_of(&d.join("bk/a")), 0o700);
         // Never overwrite an existing backup.
         fs::write(d.join("f"), b"again").unwrap();
-        let e = backup(&dir, name("f"), &d.join("bk/a/f"), me).unwrap_err();
+        let e = backup(&dir, name("f"), &d.join("bk/a/f"), me, T).unwrap_err();
         assert!(e.to_string().ends_with("bk/a/f already exists"), "{e}");
         assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
     }
@@ -875,8 +895,8 @@ mod tests {
         fs::set_permissions(src.path().join("f"), fs::Permissions::from_mode(0o640)).unwrap();
         symlink("t", src.path().join("l")).unwrap();
         let (from, me) = (open(src.path()), geteuid().as_raw());
-        backup(&from, name("f"), &dst.path().join("bk/f"), me).unwrap();
-        backup(&from, name("l"), &dst.path().join("bk/l"), me).unwrap();
+        backup(&from, name("f"), &dst.path().join("bk/f"), me, T).unwrap();
+        backup(&from, name("l"), &dst.path().join("bk/l"), me, T).unwrap();
         assert!(!src.path().join("f").exists() && fs::symlink_metadata(src.path().join("l")).is_err());
         assert_eq!(fs::read(dst.path().join("bk/f")).unwrap(), b"data");
         assert_eq!(mode_of(&dst.path().join("bk/f")), 0o640);

@@ -68,7 +68,7 @@ pub fn encrypt_source(
     let rel = RelPath::parse(arg)?;
     let abs = ctx.root.join(rel.as_path());
     let sealed = seal_source(ctx, &rel, &abs, backend)?;
-    publish_new(&sealed.out, &sealed.ciphertext, sealed.mode)?;
+    fsops::write_new(&sealed.out, &sealed.ciphertext, sealed.mode)?;
     let migration = migrate_config(ctx, &rel, &sealed)?;
     retire_plaintext(&rel, &abs, &sealed, &migration)?;
     let mut migrated = migration.new.is_some();
@@ -221,25 +221,6 @@ fn suffix_backend(rel: &RelPath) -> Option<Backend> {
     [Backend::Age, Backend::Gpg]
         .into_iter()
         .find(|b| rel.file_name().ends_with(b.suffix()))
-}
-
-/// Writes a new file without ever replacing an existing one.
-fn publish_new(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| Error::Failed(format!("{} has no parent", path.display())))?;
-    let what = || format!("write {}", path.display());
-    let mut tmp = tempfile::Builder::new()
-        .prefix(fsops::TEMP_PREFIX)
-        .tempfile_in(dir)
-        .ctx(what)?;
-    tmp.write_all(bytes).ctx(what)?;
-    tmp.as_file()
-        .set_permissions(fs::Permissions::from_mode(mode))
-        .ctx(what)?;
-    tmp.as_file().sync_all().ctx(what)?;
-    tmp.persist_noclobber(path).map_err(|e| e.error).ctx(what)?;
-    Ok(())
 }
 
 /// An encrypted source opened for editing.

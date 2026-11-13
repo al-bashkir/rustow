@@ -28,6 +28,7 @@ rustow has one planner and one executor. Every command that changes files builds
 | `execute`           | Predict, execute, remove.                              |
 | `fsops`             | Safe file operations (temp file, rename, ancestors).   |
 | `state`             | Per-repository JSON state and lock.                    |
+| `pending`           | Journal of temporary files; cleanup after a crash.     |
 | `transfer`          | `state export/import` of the registrations.            |
 | `sudo`              | The sudo helper: client (`call`) and helper (`serve`). |
 | `cache`             | Rendered and decrypted entries, edit workspaces.       |
@@ -72,6 +73,10 @@ The executor and the sudo helper get the directory with `fsops::open_planned(pat
 ## Content
 
 The plan keeps the content of a regular file as `plan::Content`. A plain copy (`Content::Source`) holds only the path and the length of the repository file; `Desired::File` holds its hash. Rendered and decrypted content (`Content::Generated`) stays in memory from the plan to the write. `Hash::copy` streams bytes through one 64 KiB buffer that is zeroed afterwards, and gives the same hash as `Hash::of`. The planner hashes links and copies with it (`fsops::hash_file`), and `Dir::inspect` hashes destinations with it. `Deploy::open_content` opens the content when the item writes it; a source with another length fails. `Dir::write` streams it into the temporary file and checks the hash before the rename: other content fails with "content changed while rustow was running". The sudo client streams the same reader into the frame, and the helper streams the frame into `Dir::write`. `diff` reads content only when the hashes differ, and at most 1 MiB on each side.
+
+## Temporary files
+
+Every temporary name comes from `fsops::temp_name(dirs)`, and the caller passes it to `Dir::write`, `Dir::symlink` or `Dir::move_to`. `app::lock` takes the lock and starts the journal (`Lock::start_journal`, `pending::Pending`): `<state_dir>/<repo-id>.pending`, one JSON path per line. While it runs, `temp_name` appends the path in each of `dirs` and syncs the journal before it returns the name. The executor gets the name of an item from `execute::temp_for` (the destination directory, and the backup directory for a conflict that goes to a backup). For the sudo helper, the client does this before the helper starts and sends the name in `Job::Write`. `Pending::start` first removes the leftovers of an interrupted run through a walked directory, or gives the `sudo rm -- <path>` notice for a file in a directory that the user cannot write; an entry stays until its file is gone. Dropping the `Lock` drops the journal first: it keeps only the entries whose files are still there, and removes an empty journal. `doctor` lists the leftovers with `pending::report`.
 
 ## Input and output
 

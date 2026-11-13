@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::execute::{self, Policy};
-use crate::fsops::{DirId, Observed};
+use crate::fsops::{DirId, Observed, TEMP_PREFIX};
 use crate::hash::Hash;
 use crate::plan::{Deploy, with_privilege_hint};
 
@@ -40,8 +40,14 @@ const MAX_HEADER: usize = 1 << 20;
 #[derive(Serialize, Deserialize)]
 pub enum Job<D> {
     /// The planned deploy and the conflict policy, with the backup path
-    /// the user's run chose. The content follows the header.
-    Write { deploy: D, policy: Policy, backup: PathBuf },
+    /// and the temporary name (journaled) that the user's run chose. The
+    /// content follows the header.
+    Write {
+        deploy: D,
+        policy: Policy,
+        backup: PathBuf,
+        temp: String,
+    },
     /// A recorded file that must still look like `observed` in its planned
     /// directory `dir_id`, and the directories above it that rustow
     /// created (removed when empty).
@@ -259,15 +265,29 @@ fn read_header(input: &mut impl Read) -> Result<Option<Header<Job<Deploy>>>> {
 }
 
 /// Runs one job with the executor's own code, walking with the trust rule
-/// of the header's user; a relative path is refused. A write streams its
-/// content from `body`.
+/// of the header's user. A relative path, or a temporary name that is not
+/// one name with `TEMP_PREFIX`, is refused. A write streams its content
+/// from `body`.
 fn run(header: Header<Job<Deploy>>, body: &mut dyn Read) -> Done {
     let user = header.user;
-    let mut done = Done::failed("the sudo helper takes absolute paths only".into());
+    let mut done = Done::failed("the sudo helper takes absolute paths and temporary names only".into());
     let result = match header.job {
-        Job::Write { deploy, policy, backup } if deploy.path.is_absolute() && backup.is_absolute() => {
-            let content = (body, header.len);
-            execute::write_dest(&deploy, content, policy, &backup, user, &mut done.created_dirs)
+        Job::Write {
+            deploy,
+            policy,
+            backup,
+            temp,
+        } if deploy.path.is_absolute()
+            && backup.is_absolute()
+            && temp.starts_with(TEMP_PREFIX)
+            && !temp.contains('/') =>
+        {
+            let new = execute::NewFile {
+                from: body,
+                len: header.len,
+                temp: &temp,
+            };
+            execute::write_dest(&deploy, new, policy, &backup, user, &mut done.created_dirs)
         }
         Job::Remove {
             path,
@@ -376,6 +396,7 @@ mod tests {
             deploy: &deploy,
             policy: Policy::Abort,
             backup: d.join("bk"),
+            temp: format!("{TEMP_PREFIX}test"),
         };
         let mut input = Vec::new();
         frame(&mut input, &job);
@@ -402,6 +423,7 @@ mod tests {
             deploy: &deploy,
             policy: Policy::Abort,
             backup: "relative".into(),
+            temp: format!("{TEMP_PREFIX}test"),
         };
         frame(&mut input, &job);
         fs::write(d.join("a"), "a").unwrap();
@@ -414,7 +436,13 @@ mod tests {
             .map(|l| serde_json::from_slice(l).unwrap())
             .collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].result.as_ref().unwrap_err().contains("absolute paths only"));
+        assert!(
+            lines[0]
+                .result
+                .as_ref()
+                .unwrap_err()
+                .contains("absolute paths and temporary names only")
+        );
         assert!(lines[1].result.is_ok() && !d.join("a").exists());
     }
 }

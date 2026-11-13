@@ -5,11 +5,12 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File, Permissions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use nix::errno::Errno;
 use nix::fcntl::{AT_FDCWD, AtFlags, OFlag, openat, readlinkat, renameat};
@@ -288,33 +289,33 @@ impl Dir {
         Ok((file, meta))
     }
 
-    /// Writes `want.1` bytes from `from` to `name` through a new temporary
-    /// file in this directory: private (0600) from creation, streamed
-    /// (`Hash::copy`), then owner and mode of `meta`, and fsync, then
-    /// renamed to `name`. Content with another hash than `want.0` fails
-    /// with "content changed while rustow was running", and short content
-    /// fails too: the temporary file goes, `name` stays as it was.
-    /// `replace` replaces a file or symlink at `name` (never a directory);
-    /// otherwise anything there fails it.
+    /// Writes `want.1` bytes from `from` to `name` through the new
+    /// temporary file `temp` (from `temp_name`) in this directory: private
+    /// (0600) from creation, streamed (`Hash::copy`), then owner and mode
+    /// of `meta`, and fsync, then renamed to `name`. Content with another
+    /// hash than `want.0` fails with "content changed while rustow was
+    /// running", and short content fails too: the temporary file goes,
+    /// `name` stays as it was. `replace` replaces a file or symlink at
+    /// `name` (never a directory); otherwise anything there fails it.
     pub fn write(
         &self,
         name: &OsStr,
+        temp: &str,
         from: &mut dyn Read,
         want: (&Hash, u64),
         meta: FileMeta,
         replace: bool,
     ) -> Result<()> {
         let dest = self.entry(name);
-        let temp = temp_name();
         let flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-        let fd = sys(openat(&self.fd, temp.as_str(), flags, Mode::from_bits_truncate(0o600)))
+        let fd = sys(openat(&self.fd, temp, flags, Mode::from_bits_truncate(0o600)))
             .ctx(|| format!("write {}", dest.display()))?;
         let done = fill(File::from(fd), &dest, from, want, meta).and_then(|()| {
-            self.publish(OsStr::new(&temp), name, replace)
+            self.publish(OsStr::new(temp), name, replace)
                 .ctx(|| format!("replace {}", dest.display()))
         });
         if done.is_err() {
-            let _ = unlinkat(&self.fd, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+            let _ = unlinkat(&self.fd, temp, UnlinkatFlags::NoRemoveDir);
         }
         done?;
         self.sync();
@@ -329,17 +330,16 @@ impl Dir {
     }
 
     /// Creates the symlink `name` with `text`. `replace` replaces a file or
-    /// symlink there atomically (never a directory); otherwise anything
-    /// there fails it.
-    pub fn symlink(&self, name: &OsStr, text: &Path, replace: bool) -> Result<()> {
+    /// symlink there atomically (never a directory), through the temporary
+    /// name `temp`; otherwise anything there fails it.
+    pub fn symlink(&self, name: &OsStr, temp: &str, text: &Path, replace: bool) -> Result<()> {
         let made = match replace {
             false => sys(symlinkat(text, &self.fd, name)),
             true => {
-                let temp = temp_name();
-                let swapped = sys(symlinkat(text, &self.fd, temp.as_str()))
-                    .and_then(|()| sys(renameat(&self.fd, temp.as_str(), &self.fd, name)));
+                let swapped =
+                    sys(symlinkat(text, &self.fd, temp)).and_then(|()| sys(renameat(&self.fd, temp, &self.fd, name)));
                 if swapped.is_err() {
-                    let _ = unlinkat(&self.fd, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+                    let _ = unlinkat(&self.fd, temp, UnlinkatFlags::NoRemoveDir);
                 }
                 swapped
             }
@@ -431,10 +431,10 @@ impl Dir {
     }
 
     /// Moves the file or symlink `name` to `to_name` in `to`, never over
-    /// anything there. Across filesystems it copies into a temporary file
-    /// in `to`, renames that to `to_name`, then removes `name`: a copy that
-    /// fails leaves no partial file at `to_name`, and `name` stays.
-    pub fn move_to(&self, name: &OsStr, to: &Dir, to_name: &OsStr) -> Result<()> {
+    /// anything there. Across filesystems it copies into the temporary file
+    /// `temp` in `to`, renames that to `to_name`, then removes `name`: a
+    /// copy that fails leaves no partial file at `to_name`, and `name` stays.
+    pub fn move_to(&self, name: &OsStr, to: &Dir, to_name: &OsStr, temp: &str) -> Result<()> {
         let (from, dest) = (self.entry(name), to.entry(to_name));
         let what = || format!("back up {} to {}", from.display(), dest.display());
         match rename_noreplace(&self.fd, name, &to.fd, to_name) {
@@ -442,7 +442,7 @@ impl Dir {
                 return Err(Error::Failed(format!("backup {} already exists", dest.display())));
             }
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => self
-                .copy_through_temp(name, to, to_name)
+                .copy_through_temp(name, to, to_name, OsStr::new(temp))
                 .and_then(|()| sys(unlinkat(&self.fd, name, UnlinkatFlags::NoRemoveDir)))
                 .ctx(what)?,
             other => other.ctx(what)?,
@@ -452,14 +452,13 @@ impl Dir {
         Ok(())
     }
 
-    /// `copy_to` a temporary file in `to`, then a no-replace rename to `to_name`.
-    fn copy_through_temp(&self, name: &OsStr, to: &Dir, to_name: &OsStr) -> io::Result<()> {
-        let temp = temp_name();
+    /// `copy_to` the temporary file `temp` in `to`, then a no-replace rename to `to_name`.
+    fn copy_through_temp(&self, name: &OsStr, to: &Dir, to_name: &OsStr, temp: &OsStr) -> io::Result<()> {
         let copied = self
-            .copy_to(name, to, OsStr::new(&temp))
-            .and_then(|()| rename_noreplace(&to.fd, OsStr::new(&temp), &to.fd, to_name));
+            .copy_to(name, to, temp)
+            .and_then(|()| rename_noreplace(&to.fd, temp, &to.fd, to_name));
         if copied.is_err() {
-            let _ = unlinkat(&to.fd, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+            let _ = unlinkat(&to.fd, temp, UnlinkatFlags::NoRemoveDir);
         }
         copied
     }
@@ -555,9 +554,41 @@ fn rename_noreplace(from_dir: &OwnedFd, from: &OsStr, to_dir: &OwnedFd, to: &OsS
     }
 }
 
+/// The journal of the command that holds the repository lock (see
+/// `pending`): `temp_name` appends each new temporary path to it.
+static JOURNAL: Mutex<Option<File>> = Mutex::new(None);
+
+/// Sends the paths that `temp_name` gives to `journal` from now on (`None`
+/// stops it); returns the journal before.
+pub fn journal_to(journal: Option<File>) -> Option<File> {
+    std::mem::replace(&mut *JOURNAL.lock().unwrap_or_else(PoisonError::into_inner), journal)
+}
+
+/// A new name for a temporary file in each of `dirs`. When a journal is
+/// set, each path goes into it, synced, before the caller creates the
+/// file: a run that dies leaves a record of every temporary file it made.
+pub fn temp_name(dirs: &[&Path]) -> Result<String> {
+    let name = new_name();
+    let mut journal = JOURNAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(file) = journal.as_mut().filter(|_| !dirs.is_empty()) else {
+        return Ok(name);
+    };
+    let mut lines = Vec::new();
+    for dir in dirs {
+        let path = dir.join(&name);
+        serde_json::to_writer(&mut lines, &path)
+            .map_err(|e| Error::Failed(format!("journal {}: {e}", path.display())))?;
+        lines.push(b'\n');
+    }
+    file.write_all(&lines)
+        .and_then(|()| file.sync_data())
+        .ctx(|| format!("journal {}", dirs[0].join(&name).display()))?;
+    Ok(name)
+}
+
 /// A new name for a temporary file: `TEMP_PREFIX`, the process id, the
 /// time and a counter, so two calls never give the same name.
-fn temp_name() -> String {
+fn new_name() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -599,7 +630,7 @@ mod tests {
     /// The counter alone keeps two names apart, also when the clock does not move.
     #[test]
     fn temp_names_are_reserved_and_count_up() {
-        let (a, b) = (temp_name(), temp_name());
+        let (a, b) = (new_name(), new_name());
         assert!(a.starts_with(TEMP_PREFIX) && b.starts_with(TEMP_PREFIX), "{a} {b}");
         let count = |n: &str| n.rsplit('-').next().unwrap().parse::<u64>().unwrap();
         assert!(count(&b) > count(&a), "{a} {b}");

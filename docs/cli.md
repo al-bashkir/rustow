@@ -154,7 +154,17 @@ When the source and the destination both changed, `diff` prints "<dest>: conflic
 
 `check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2. It prints a warning for each [skipped source](#skipped-sources). A warning is not a problem and does not change the exit code. Exception: a mistake in a template [meta block](templates.md#meta-block) is a problem. `check --json` prints `sources`, `problems` and `warnings`.
 
-`doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
+`doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, temporary files that an interrupted run left, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
+
+## Temporary files of an interrupted run
+
+rustow writes each file through a temporary file (`.rustow-tmp-…`) in the same directory. While a command holds the repository lock, rustow first adds the path of each temporary file to `<state_dir>/<repo-id>.pending`, and syncs it. A run that ends normally has no temporary file left and removes that journal. A run that dies (killed, power loss) can leave temporary files. rustow never deploys them: their names are reserved.
+
+- The next command that changes files (it takes the lock) removes each leftover that the journal lists, and prints "note: removed <path>: a temporary file that an interrupted run left".
+- A leftover that you cannot remove (for example a file of the sudo helper in `/etc`) stays, and so does its line in the journal. rustow prints the command that removes it: "<path>: a temporary file that an interrupted run left; remove it with `sudo rm -- <path>`". rustow never runs sudo only to clean up.
+- `doctor` shows a "temp file" warning for each leftover, with the same advice.
+- When rustow cannot start the journal (for example, the state directory is read-only), it prints "warning: …; the temporary files of this run are not journaled" and goes on.
+- `init` and `state export` do not take the lock, so they journal nothing. `enc` keeps the plaintext under a temporary name while it checks it; that file is not journaled, because it can be your only copy.
 
 ## unlink and undeploy
 

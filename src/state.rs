@@ -15,6 +15,7 @@ use crate::error::{Error, IoContext, Result};
 use crate::fsops::{self, FileMeta};
 use crate::hash::Hash;
 use crate::paths::{RelPath, Scope};
+use crate::pending::Pending;
 
 /// The state format this rustow writes. Raise it only for a change that
 /// needs a step in `MIGRATIONS`: a new field with a default needs none.
@@ -174,6 +175,9 @@ fn parse_versioned(bytes: &[u8], steps: &[Migration]) -> std::result::Result<Sta
 
 /// Exclusive per-repository lock, held while a command changes anything.
 pub struct Lock {
+    /// The journal of temporary files. It is the first field, so it ends
+    /// (on drop) before the lock is released.
+    journal: Option<Pending>,
     _file: File,
     pub path: PathBuf,
     /// Device and inode of the locked file.
@@ -185,6 +189,15 @@ impl Lock {
     /// can then lock a new file there and run at the same time.
     pub fn replaced(&self) -> bool {
         file_id(&self.path).ok() != Some(self.id)
+    }
+
+    /// Starts the journal of temporary files, `<repo-id>.pending` next to
+    /// the lock (see `pending`). Returns the notices about the leftovers
+    /// of an interrupted run.
+    pub fn start_journal(&mut self) -> Result<Vec<String>> {
+        let (journal, notices) = Pending::start(self.path.with_extension("pending"))?;
+        self.journal = Some(journal);
+        Ok(notices)
     }
 }
 
@@ -230,6 +243,7 @@ fn lock_file(path: &Path) -> Result<Lock> {
     }
     let meta = file.metadata().ctx(|| format!("lock {}", path.display()))?;
     Ok(Lock {
+        journal: None,
         _file: file,
         path: path.to_path_buf(),
         id: (meta.dev(), meta.ino()),

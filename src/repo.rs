@@ -456,7 +456,7 @@ fn is_own_entry(name: &str) -> bool {
     let repo_id = |stem: &str| stem.len() == 16 && stem.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     matches!(name, "rendered" | "decrypted" | "edit" | "backups" | "cache")
         || name.starts_with(crate::fsops::TEMP_PREFIX)
-        || [".json", ".lock"]
+        || [".json", ".lock", ".pending"]
             .iter()
             .any(|ext| name.strip_suffix(ext).is_some_and(repo_id))
 }
@@ -663,6 +663,7 @@ mod tests {
             "cache",
             "0123456789abcdef.json",
             "0123456789abcdef.lock",
+            "0123456789abcdef.pending",
             ".rustow-tmp-Ab12Cd",
         ] {
             assert!(is_own_entry(name), "{name}");

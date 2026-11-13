@@ -46,6 +46,12 @@ The state records a destination whose source is gone. `status` and the deploy co
 - State file error after the report: rustow wrote the items in the report, but it could not save the state. Fix the state directory, then run `rustow apply` again. It adopts correct destinations.
 - Interrupted: rustow stopped between items. Run again.
 
+## Leftover temporary files
+
+"note: removed <path>: a temporary file that an interrupted run left": an earlier run died while it wrote a file. rustow removed the partial file. Nothing else to do.
+
+"<path>: a temporary file that an interrupted run left; remove it with `sudo rm -- <path>`": you cannot remove that file, for example because the sudo helper wrote it as root. Run the command in the message. `doctor` shows the same line until the file is gone. See [temporary files](cli.md#temporary-files-of-an-interrupted-run).
+
 ## Exit code 2: configuration
 
 Read the message. A TOML error gives the line, the column and the key path: `rustow.toml: line L, column C, key <path>: <message>`. Common causes: missing `version = 1`, an unknown key, a bad mode string, a template `mode` without owner read (0400).

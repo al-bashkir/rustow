@@ -247,22 +247,26 @@ fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Optio
 
 /// Writes the queued destinations through one sudo helper call, then
 /// records each success and reports each failure.
+/// Each job's temporary name is in the journal before the helper starts.
 fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mut [ItemReport]) {
-    let deploys: Vec<(usize, &PlanItem, &Deploy)> = queued
-        .iter()
-        .filter_map(|(index, item)| match &item.step {
-            Step::Deploy(d) => Some((*index, item, &**d)),
-            _ => None,
-        })
-        .collect();
-    let jobs: Vec<Job<&Deploy>> = deploys
-        .iter()
-        .map(|(_, item, d)| Job::Write {
-            deploy: *d,
-            policy: run.policy,
-            backup: backup_path(run, item, false),
-        })
-        .collect();
+    let (mut deploys, mut jobs) = (Vec::new(), Vec::new());
+    for (index, item) in queued {
+        let Step::Deploy(d) = &item.step else { continue };
+        let backup = backup_path(run, item, false);
+        match temp_for(d, run.policy, &backup) {
+            Ok(temp) => {
+                let policy = run.policy;
+                jobs.push(Job::Write {
+                    deploy: &**d,
+                    policy,
+                    backup,
+                    temp,
+                });
+                deploys.push((*index, item, &**d));
+            }
+            Err(e) => sudo_report(&mut out[*index], Err(e.to_string()), || {}),
+        }
+    }
     let results = sudo_batch(&jobs, run.stop, state);
     for ((index, item, d), result) in deploys.into_iter().zip(results) {
         sudo_report(&mut out[index], result, || {
@@ -304,14 +308,45 @@ fn sudo_report(report: &mut ItemReport, result: std::result::Result<Option<Strin
 /// The cache entry first, so that a link to it never dangles; then the destination.
 fn apply(d: &Deploy, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
     let cached = apply_cache(d, item, run)?;
-    let (mut from, len) = d.open_content()?;
-    let mut created = Vec::new();
     let backup = backup_path(run, item, false);
-    let written = write_dest(d, (&mut from, len), run.policy, &backup, me(), &mut created);
+    let temp = temp_for(d, run.policy, &backup)?;
+    let (mut from, len) = d.open_content()?;
+    let new = NewFile {
+        from: &mut from,
+        len,
+        temp: &temp,
+    };
+    let mut created = Vec::new();
+    let written = write_dest(d, new, run.policy, &backup, me(), &mut created);
     state.created_dirs.extend(created);
     let extra = written?;
     state.entries.insert(item.dest.clone(), d.record.clone());
     Ok(extra.or(cached))
+}
+
+/// The new file of a deploy: `len` bytes from `from` (`Deploy::open_content`),
+/// written through the temporary name `temp` (`temp_for`). The same name
+/// serves the copy of a backup across filesystems.
+pub struct NewFile<'a> {
+    pub from: &'a mut dyn Read,
+    pub len: u64,
+    pub temp: &'a str,
+}
+
+/// A temporary name for the change of `d` (`fsops::temp_name`), journaled
+/// in each directory where the change may create it: the destination's
+/// for a new file or a replaced object, and the backup's for a conflict
+/// that goes to `backup`.
+pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
+    let file = matches!(d.desired, Desired::File { .. });
+    let conflict = matches!(d.decision, Decision::Conflict(_));
+    let here = d.decision == Decision::Update || (file && (conflict || d.decision == Decision::Create));
+    let away = conflict && policy == Policy::Backup;
+    let dirs: Vec<&Path> = [(here, d.path.parent()), (away, backup.parent())]
+        .into_iter()
+        .filter_map(|(on, dir)| dir.filter(|_| on))
+        .collect();
+    fsops::temp_name(&dirs)
 }
 
 /// The effective user: whose trust rule the walks of this run apply.
@@ -324,20 +359,19 @@ fn me() -> u32 {
 /// directories in it, then makes the planned change and checks it, all
 /// through the open directory. When the item fails, it removes the empty
 /// directories it created, deepest first. `created` gets the created
-/// directories that remain. `content` is the reader and length of the new
-/// file (`Deploy::open_content`); the write checks it against the planned
+/// directories that remain. The write checks `new` against the planned
 /// hash. The sudo helper runs it as root, with `me` the user who made the
-/// plan and the content from its input.
+/// plan, and the content and temporary name from its input.
 pub fn write_dest(
     d: &Deploy,
-    content: (&mut dyn Read, u64),
+    mut new: NewFile,
     policy: Policy,
     backup: &Path,
     me: u32,
     created: &mut Vec<PathBuf>,
 ) -> Result<Option<String>> {
     let mut made = Vec::new();
-    let done = write_in(d, content, policy, backup, me, &mut made);
+    let done = write_in(d, &mut new, policy, backup, me, &mut made);
     if done.is_err() {
         let gone = fsops::remove_empty(made.iter().rev().map(PathBuf::as_path), me);
         made.truncate(made.len() - gone.len());
@@ -349,7 +383,7 @@ pub fn write_dest(
 /// `write_dest` without the cleanup; `made` gets each directory it creates.
 fn write_in(
     d: &Deploy,
-    content: (&mut dyn Read, u64),
+    new: &mut NewFile,
     policy: Policy,
     backup: &Path,
     me: u32,
@@ -361,7 +395,7 @@ fn write_in(
         None => (parent, &[][..]),
     };
     let dir = make_dirs(fsops::open_planned(base, d.dir_id, me)?, missing, d.dir_mode, me, made)?;
-    let detail = apply_dest(&dir, name, d, content, policy, backup)?;
+    let detail = apply_dest(&dir, name, d, new, policy, backup)?;
     verify(&dir, name, d)?;
     Ok(detail)
 }
@@ -388,16 +422,19 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     let (parent, name) = fsops::split(&cache.path)?;
     let dir = fsops::private_tree(run.cache_dir, parent)?;
     recheck(&dir, name, &cache.path, &cache.observed)?;
-    let mut detail = None;
-    if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
-        detail = Some(backup(&dir, name, &backup_path(run, item, true))?);
-    }
+    let to = backup_path(run, item, true);
+    let away = matches!(cache.decision, Decision::Conflict(_)) && run.policy == Policy::Backup;
+    let dirs: Vec<&Path> = std::iter::once(dir.path.as_path())
+        .chain(to.parent().filter(|_| away))
+        .collect();
+    let temp = fsops::temp_name(&dirs)?;
+    let detail = away.then(|| backup(&dir, name, &to, &temp)).transpose()?;
     let meta = FileMeta {
         mode: Some(0o600),
         ..FileMeta::default()
     };
     let want = (&cache.hash, cache.content.size());
-    dir.write(name, &mut cache.content.open()?, want, meta, true)?;
+    dir.write(name, &temp, &mut cache.content.open()?, want, meta, true)?;
     Ok(detail)
 }
 
@@ -407,23 +444,23 @@ fn apply_dest(
     dir: &Dir,
     name: &OsStr,
     d: &Deploy,
-    content: (&mut dyn Read, u64),
+    new: &mut NewFile,
     policy: Policy,
     backup: &Path,
 ) -> Result<Option<String>> {
     match d.decision {
-        Decision::Create => put(dir, name, d, content, false).map(|()| None),
-        Decision::Update => update(dir, name, d, content).map(|()| None),
-        Decision::Conflict(_) => replace_conflicting(dir, name, d, content, policy, backup),
+        Decision::Create => put(dir, name, d, new, false).map(|()| None),
+        Decision::Update => update(dir, name, d, new).map(|()| None),
+        Decision::Conflict(_) => replace_conflicting(dir, name, d, new, policy, backup),
         Decision::FixMetadata => fix_metadata(dir, name, d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
 }
 
 /// Replaces rustow's own unchanged object at the destination.
-fn update(dir: &Dir, name: &OsStr, d: &Deploy, content: (&mut dyn Read, u64)) -> Result<()> {
+fn update(dir: &Dir, name: &OsStr, d: &Deploy, new: &mut NewFile) -> Result<()> {
     recheck(dir, name, &d.path, &d.observed)?;
-    put(dir, name, d, content, true)
+    put(dir, name, d, new, true)
 }
 
 /// Moves away (backup) or removes the conflicting object, then creates.
@@ -431,28 +468,28 @@ fn replace_conflicting(
     dir: &Dir,
     name: &OsStr,
     d: &Deploy,
-    content: (&mut dyn Read, u64),
+    new: &mut NewFile,
     policy: Policy,
     backup: &Path,
 ) -> Result<Option<String>> {
     recheck(dir, name, &d.path, &d.observed)?;
-    let detail = clear_conflict(dir, name, policy, backup)?;
-    put(dir, name, d, content, false)?;
+    let detail = clear_conflict(dir, name, policy, backup, new.temp)?;
+    put(dir, name, d, new, false)?;
     Ok(detail)
 }
 
 /// Writes the desired symlink or file. `replace` replaces rustow's own
 /// object there; otherwise anything that appeared since planning fails it.
-fn put(dir: &Dir, name: &OsStr, d: &Deploy, (from, len): (&mut dyn Read, u64), replace: bool) -> Result<()> {
+fn put(dir: &Dir, name: &OsStr, d: &Deploy, new: &mut NewFile, replace: bool) -> Result<()> {
     match &d.desired {
-        Desired::Symlink(text) => dir.symlink(name, text, replace),
+        Desired::Symlink(text) => dir.symlink(name, new.temp, text, replace),
         Desired::File { hash, meta } => {
             let meta = FileMeta {
                 mode: meta.mode.or(Some(d.file_mode)),
                 uid: d.file_owner.0,
                 gid: d.file_owner.1,
             };
-            dir.write(name, from, (hash, len), meta, replace)
+            dir.write(name, new.temp, new.from, (hash, new.len), meta, replace)
         }
     }
 }
@@ -466,16 +503,16 @@ fn fix_metadata(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
 }
 
 /// Moves the conflicting destination to the backup dir, or removes it.
-fn clear_conflict(dir: &Dir, name: &OsStr, policy: Policy, to: &Path) -> Result<Option<String>> {
+fn clear_conflict(dir: &Dir, name: &OsStr, policy: Policy, to: &Path, temp: &str) -> Result<Option<String>> {
     if policy == Policy::Backup {
-        return backup(dir, name, to).map(Some);
+        return backup(dir, name, to, temp).map(Some);
     }
     dir.remove(name)?;
     Ok(None)
 }
 
-fn backup(dir: &Dir, name: &OsStr, to: &Path) -> Result<String> {
-    fsops::backup(dir, name, to, me())?;
+fn backup(dir: &Dir, name: &OsStr, to: &Path, temp: &str) -> Result<String> {
+    fsops::backup(dir, name, to, me(), temp)?;
     Ok(format!("backup saved to {}", to.display()))
 }
 
@@ -804,7 +841,13 @@ pub(crate) mod tests {
         };
         let write = |d: &Deploy, created: &mut Vec<PathBuf>| {
             let (mut from, len) = d.open_content().unwrap();
-            write_dest(d, (&mut from, len), Policy::Abort, base, me, created)
+            let temp = temp_for(d, Policy::Abort, base).unwrap();
+            let new = NewFile {
+                from: &mut from,
+                len,
+                temp: &temp,
+            };
+            write_dest(d, new, Policy::Abort, base, me, created)
         };
         // The owner is not set, so the check after the write fails; the file stays.
         let mut created = Vec::new();
@@ -831,7 +874,12 @@ pub(crate) mod tests {
         let mut d = create(&dir.path().join("a"), file, Some(b"changed"));
         let me = nix::unistd::geteuid().as_raw();
         let (mut from, len) = d.open_content().unwrap();
-        let e = write_dest(&d, (&mut from, len), Policy::Abort, dir.path(), me, &mut Vec::new()).unwrap_err();
+        let new = NewFile {
+            from: &mut from,
+            len,
+            temp: ".rustow-tmp-test",
+        };
+        let e = write_dest(&d, new, Policy::Abort, dir.path(), me, &mut Vec::new()).unwrap_err();
         assert!(
             e.to_string()
                 .ends_with("a: content changed while rustow was running; left unchanged"),

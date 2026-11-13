@@ -103,7 +103,7 @@ fn file_edit(
     edit: fn(&mut Context, &Printer, &[String], bool) -> Result<i32>,
 ) -> Result<i32> {
     let mut ctx = open(g, env, p)?;
-    let _lock = lock(&ctx, g.dry_run)?;
+    let _lock = lock(&ctx, p, g.dry_run)?;
     edit(&mut ctx, p, paths, g.dry_run)
 }
 
@@ -142,7 +142,7 @@ fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<
 
 fn cache_clean(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
     let ctx = open(g, env, p)?;
-    let _lock = lock(&ctx, g.dry_run)?;
+    let _lock = lock(&ctx, p, g.dry_run)?;
     let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let changes = crate::cache::clean(&ctx, &state, g.dry_run)?;
     p.changes(None, &changes, g.dry_run);
@@ -157,7 +157,7 @@ fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Resul
         )),
         StateCommand::Export { file } => crate::transfer::export(&ctx, file.as_deref()),
         StateCommand::Import { file } => {
-            let _lock = lock(&ctx, g.dry_run)?;
+            let _lock = lock(&ctx, p, g.dry_run)?;
             crate::transfer::import(&mut ctx, p, &file, g.dry_run)
         }
     }
@@ -170,7 +170,7 @@ fn enc_cmd(g: &Global, env: &Env, p: &mut Printer, e: EncArgs) -> Result<i32> {
         ));
     }
     let mut ctx = open(g, env, p)?;
-    let held = lock(&ctx, false)?;
+    let held = lock(&ctx, p, false)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let code = enc_run(&mut ctx, &mut state, e, p)?;
     save(&ctx, &state, held.as_ref())?;
@@ -237,13 +237,23 @@ fn open(g: &Global, env: &Env, printer: &mut Printer) -> Result<Context> {
     Ok(ctx)
 }
 
-/// The repository lock, unless nothing will be written.
-fn lock(ctx: &Context, dry_run: bool) -> Result<Option<Lock>> {
+/// The repository lock, unless nothing will be written. It starts the
+/// journal of temporary files, which first cleans up after an interrupted
+/// run; a notice tells about each leftover. A journal that cannot start
+/// (for example, a read-only state directory) only gives a warning.
+fn lock(ctx: &Context, printer: &Printer, dry_run: bool) -> Result<Option<Lock>> {
     if dry_run {
-        Ok(None)
-    } else {
-        state::lock(&ctx.state_dir, &ctx.repo_id).map(Some)
+        return Ok(None);
     }
+    let mut lock = state::lock(&ctx.state_dir, &ctx.repo_id)?;
+    match lock.start_journal() {
+        Ok(notices) => notices.iter().for_each(|n| printer.notice(n)),
+        Err(e) => eprintln!(
+            "warning: {}; the temporary files of this run are not journaled",
+            crate::report::shown(&e.to_string())
+        ),
+    }
+    Ok(Some(lock))
 }
 
 /// A plan with the context and state it was made from.
@@ -266,7 +276,7 @@ fn prepare(
     locked: bool,
 ) -> Result<Prepared> {
     let mut ctx = open(g, env, printer)?;
-    let lock = lock(&ctx, !locked)?;
+    let lock = lock(&ctx, printer, !locked)?;
     let mut state = ctx.load_state()?;
     let discovery = ctx.discover()?;
     let sources = selected(&ctx, &discovery, &state, paths, selector)?;
@@ -422,7 +432,7 @@ fn undeploy(
     ask: bool,
 ) -> Result<i32> {
     let ctx = open(g, env, printer)?;
-    let held = lock(&ctx, g.dry_run)?;
+    let held = lock(&ctx, printer, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let removals = plan::plan_removal(&ctx, paths, selector, &state)?;
     let predicted = execute::predict_removal(&removals);

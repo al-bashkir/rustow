@@ -20,6 +20,7 @@ Run rustow as yourself. Your HOME, your state, your keys and your cache stay in 
 - A home file never uses sudo. A home destination that you cannot write fails with "…; elevated privileges may be required".
 - `RUSTOW_SUDO` names another program, for example `doas`. rustow runs `$RUSTOW_SUDO -- <rustow> __sudo-helper`. A name without a `/` (also the default `sudo`) is looked up in the absolute directories of `PATH` only.
 - A backup (`--backup`) of a system file that the helper replaced is owned by root.
+- rustow chooses the name of each temporary file of the helper and journals it before the helper starts. When the helper dies in the middle of a file, the next run prints the command that removes the temporary file, for example "remove it with `sudo rm -- /etc/.rustow-tmp-…`". See [temporary files](cli.md#temporary-files-of-an-interrupted-run).
 - Anyone who may run `sudo rustow` may write any file as root: do not allow rustow in sudoers without a password unless you mean that.
 
 An unreadable destination is an error for that item, with a privilege hint. rustow does not use sudo to read it.
