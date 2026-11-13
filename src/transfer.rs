@@ -105,8 +105,7 @@ fn check_paths(ctx: &Context, state: &State, regs: &Registrations) -> Result<()>
 
 /// Takes over the state of the repository that was at `old` before a move:
 /// sets the root, moves its cache entries to this repository id, saves it
-/// as this repository's state, and keeps the old file as
-/// `backups/<old-id>/state-adopted.json`. `apply` then updates the links.
+/// as this repository's state (`take_over`). `apply` then updates the links.
 pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Result<i32> {
     let (old, old_id) = adoptable(ctx, old)?;
     let mut state = State::load(&ctx.state_dir, &old_id, &old)?;
@@ -116,19 +115,7 @@ pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Res
         record.cache_path = record.cache_path.take().map(moved);
     }
     if !dry_run {
-        move_cache(ctx, &old_id)?;
-        state.save(&ctx.state_dir, &ctx.repo_id)?;
-        let (file, backups) = (
-            State::file(&ctx.state_dir, &old_id),
-            ctx.state_dir.join("backups").join(&old_id),
-        );
-        fsops::ensure_private_dir(&backups)?;
-        let kept = backups.join("state-adopted.json");
-        fs::rename(&file, &kept).ctx(|| format!("move {} to {}", file.display(), kept.display()))?;
-        // The old lock goes too, unless a run still holds it.
-        if let Ok(lock) = crate::state::lock(&ctx.state_dir, &old_id) {
-            fs::remove_file(&lock.path).ctx(|| format!("remove {}", lock.path.display()))?;
-        }
+        take_over(ctx, &state, &old_id)?;
     }
     let detail = format!("{} records", state.entries.len());
     printer.changes(
@@ -137,6 +124,26 @@ pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Res
         dry_run,
     );
     Ok(0)
+}
+
+/// Writes the adopted `state`: moves the cache entries of `old_id`, saves
+/// the state of this repository, keeps the old file as
+/// `backups/<old-id>/state-adopted.json` and removes the old lock file,
+/// unless a run still holds it.
+fn take_over(ctx: &Context, state: &State, old_id: &str) -> Result<()> {
+    move_cache(ctx, old_id)?;
+    state.save(&ctx.state_dir, &ctx.repo_id)?;
+    let (file, backups) = (
+        State::file(&ctx.state_dir, old_id),
+        ctx.state_dir.join("backups").join(old_id),
+    );
+    fsops::ensure_private_dir(&backups)?;
+    let kept = backups.join("state-adopted.json");
+    fs::rename(&file, &kept).ctx(|| format!("move {} to {}", file.display(), kept.display()))?;
+    if let Ok(lock) = crate::state::lock(&ctx.state_dir, old_id) {
+        fs::remove_file(&lock.path).ctx(|| format!("remove {}", lock.path.display()))?;
+    }
+    Ok(())
 }
 
 /// `old` in the form that the state records, and its repository id, when
