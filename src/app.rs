@@ -134,7 +134,7 @@ fn template_list(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 }
 
 fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
-    let prepared = prepare(open(g, env, p)?, p, paths, selector, false)?;
+    let prepared = prepare(open(g, env, p)?, p, paths, selector, (false, true))?;
     p.warn(prepared.ctx.skipped(&prepared.discovery, paths)?);
     p.warn(&prepared.discovery.rule_warnings);
     inspect::diff(&prepared.plan, &prepared.state, p)
@@ -143,7 +143,8 @@ fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: 
 fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<i32> {
     let mut ctx = open(g, env, p)?;
     ctx.ignored_args = a.ignored;
-    let s = prepare(ctx, p, &a.paths.paths, Selector::All, false)?;
+    // `status` needs only hashes: each plaintext goes once it is hashed.
+    let s = prepare(ctx, p, &a.paths.paths, Selector::All, (false, false))?;
     p.warn(&plan::other_targets(&s.ctx, &a.paths.paths, &s.state)?);
     inspect::status(&s.ctx, &s.plan, &s.discovery, &s.state, &a.paths.paths, a.ignored, p)
 }
@@ -296,13 +297,14 @@ pub struct Prepared {
 }
 
 /// State and plan for the sources a command selects in `ctx` (from
-/// `open`). Takes the repository lock first when `locked`.
+/// `open`). Takes the repository lock first when `locked`. The plan keeps
+/// rendered and decrypted content only with `keep_content`.
 fn prepare(
     mut ctx: Context,
     printer: &Printer,
     paths: &[String],
     selector: Selector,
-    locked: bool,
+    (locked, keep_content): (bool, bool),
 ) -> Result<Prepared> {
     let lock = lock_run(&ctx, printer, !locked, true)?;
     let mut state = ctx.load_state()?;
@@ -314,7 +316,7 @@ fn prepare(
         let links = sources.iter().map(|s| (s.path.clone(), Registration::Link));
         state.registrations.extend(links);
     }
-    let plan = plan::build(&ctx, &discovery, &sources, &state)?;
+    let plan = plan::build(&ctx, &discovery, &sources, &state, keep_content)?;
     Ok(Prepared {
         ctx,
         state,
@@ -411,7 +413,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         discovery,
         plan,
         _lock: held,
-    } = prepare(open(g, env, printer)?, printer, paths, selector, !g.dry_run)?;
+    } = prepare(open(g, env, printer)?, printer, paths, selector, (!g.dry_run, true))?;
     printer.warn(ctx.skipped(&discovery, paths)?);
     printer.warn(&discovery.rule_warnings);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;

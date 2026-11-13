@@ -477,6 +477,29 @@ fn edit_holds_the_lock_while_the_editor_is_open() {
     assert!(!fx.home_path("s").exists());
 }
 
+/// `status` and `diff` only read: they run while `enc edit` holds the lock.
+#[test]
+fn status_and_diff_run_while_the_lock_is_held() {
+    let (fx, key) = keyed();
+    fx.age_encrypt("s.age", "v1\n", &[&key]);
+    let log = fx.base.join("read.log").display().to_string();
+    let editor = fx.editor(
+        "ed",
+        &format!(
+            "for c in status diff; do '{}' --root-target '{}' $c >> '{log}' 2>&1; echo \"$c exit $?\" >> '{log}'; done",
+            env!("CARGO_BIN_EXE_rustow"),
+            fx.root.display()
+        ),
+    );
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    let log = read(std::path::Path::new(&log));
+    assert!(
+        log.contains("MISSING") && log.contains("status exit 1\n") && log.ends_with("diff exit 1\n"),
+        "{log}"
+    );
+}
+
 /// A second signal exits at once, as in other commands; `cache clean`
 /// then removes the workspace that holds the plaintext.
 #[test]
