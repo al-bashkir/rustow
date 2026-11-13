@@ -18,7 +18,7 @@ minijinja = { version = "3.1.0", features = ["fuel", "serde"] }
 nix = { version = "0.31.3", features = ["fs", "hostname", "user"] }
 rpassword = "7.5.5"
 # renameat_with(NOREPLACE): nix has renameat2 only on Linux with glibc
-rustix = { version = "1.1.6", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

@@ -754,24 +754,32 @@ fn removal_needs_sudo(
 
 /// The sudo rule: a system file that must change goes through the sudo
 /// helper when the user cannot write its directory, or when it must belong
-/// to another user or group. A home file never does: it keeps `unwritable`.
+/// to another user or to a group that the user is not a member of (an
+/// owner may give its file any of its own groups). A home file never does:
+/// it keeps `unwritable`.
 fn needs_sudo(
     scope: Scope,
     decision: Decision,
     unwritable: Option<String>,
     owner: (Option<u32>, Option<u32>),
 ) -> (Option<String>, bool) {
-    use nix::unistd::getegid;
     let changes = match decision {
         Decision::Create | Decision::Update | Decision::FixMetadata => true,
         Decision::Conflict(c) => c.resolvable(),
         Decision::UpToDate | Decision::Adopt => false,
     };
-    let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| g != getegid().as_raw());
+    let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| !my_group(g));
     match scope {
         Scope::Root if changes && (unwritable.is_some() || foreign) => (None, true),
         _ => (unwritable, false),
     }
+}
+
+/// True when `gid` is the effective group or a supplementary group of
+/// this process: the groups that `chown` lets a file owner choose.
+fn my_group(gid: u32) -> bool {
+    gid == nix::unistd::getegid().as_raw()
+        || rustix::process::getgroups().is_ok_and(|groups| groups.iter().any(|g| g.as_raw() == gid))
 }
 
 /// Reads the destination; a failed read becomes a `Failed` step.
@@ -1296,7 +1304,8 @@ mod tests {
             Some(nix::unistd::getegid().as_raw()),
         );
         let other = (Some(me.0.unwrap() + 1), me.1);
-        let other_group = (me.0, Some(me.1.unwrap() + 1));
+        let not_mine = (me.1.unwrap() + 1..).find(|g| !my_group(*g));
+        let other_group = (me.0, not_mine);
         assert_eq!(needs_sudo(Scope::Root, Create, why(), (None, None)), (None, true));
         assert_eq!(needs_sudo(Scope::Root, Update, None, other), (None, true));
         assert_eq!(needs_sudo(Scope::Root, FixMetadata, None, other_group), (None, true));

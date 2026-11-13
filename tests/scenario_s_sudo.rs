@@ -316,6 +316,44 @@ fn the_backup_directories_of_a_system_file_are_made_by_the_user() {
     assert_eq!(s.calls(), 1, "a home file never uses sudo");
 }
 
+/// A file owner may give its file any of its own groups, so a `group`
+/// that the user is a member of needs no sudo in a directory that the
+/// user can write: the primary group and, when the user has one, a
+/// supplementary group.
+#[test]
+fn a_group_of_your_own_needs_no_sudo() {
+    use nix::unistd::{Gid, Group, getegid};
+    let s = Sudo::new(FAKE);
+    let mut gids = vec![getegid()];
+    let others = rustix::process::getgroups().unwrap().into_iter().map(|g| g.as_raw());
+    match others.map(Gid::from_raw).find(|g| *g != getegid()) {
+        Some(gid) => gids.push(gid),
+        None => eprintln!("SKIP: the user has no supplementary group; only the primary group is tested"),
+    }
+    let names: Vec<String> = gids
+        .iter()
+        .filter_map(|g| Group::from_gid(*g).ok().flatten().map(|g| g.name))
+        .collect();
+    let mut config = String::from("version = 1\n");
+    for (i, name) in names.iter().enumerate() {
+        config.push_str(&format!(
+            "[[files]]\nsource = \"rustowroot/srv/g{i}.conf\"\ngroup = \"{name}\"\n"
+        ));
+        s.fx.write(&format!("rustowroot/srv/g{i}.conf"), "g\n");
+    }
+    s.fx.write("rustow.toml", &config);
+    fs::create_dir(s.fx.root_path("srv")).unwrap();
+
+    let out = s.run(&["apply", "rustowroot/srv"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(!out.stdout.contains("via sudo"), "{out:?}");
+    assert_eq!(s.calls(), 0, "{out:?}");
+    for (i, gid) in gids.iter().enumerate().take(names.len()) {
+        let meta = fs::metadata(s.fx.root_path(&format!("srv/g{i}.conf"))).unwrap();
+        assert_eq!(std::os::unix::fs::MetadataExt::gid(&meta), gid.as_raw());
+    }
+}
+
 /// Every path below `dir`.
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
