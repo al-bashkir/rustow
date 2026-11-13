@@ -1,10 +1,11 @@
 //! age backend (Rust-native `age` crate, X25519 recipients only).
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::str::FromStr;
 
+use age::armor::ArmoredReader;
 use age::secrecy::SecretString;
 use age::{Callbacks, DecryptError, Identity, Recipient, x25519};
 use zeroize::Zeroizing;
@@ -35,9 +36,10 @@ pub fn encrypt(plaintext: &[u8], recipients: &[x25519::Recipient]) -> Result<Vec
     Ok(out)
 }
 
-/// Decrypts and authenticates the whole input before returning anything.
+/// Decrypts and authenticates the whole input (binary or armored) before
+/// returning anything.
 pub fn decrypt(ciphertext: &[u8], identities: &[Box<dyn Identity>]) -> Result<Zeroizing<Vec<u8>>, Failure> {
-    let decryptor = age::Decryptor::new(ciphertext).map_err(failure)?;
+    let decryptor = age::Decryptor::new_buffered(ArmoredReader::new(ciphertext)).map_err(failure)?;
     if decryptor.is_scrypt() {
         return Err(Failure::Corrupt(
             "passphrase-only (scrypt) age files are not supported; encrypt to recipients".into(),
@@ -65,10 +67,11 @@ fn failure(e: DecryptError) -> Failure {
     }
 }
 
-/// Number of X25519 recipient stanzas in an age header.
+/// Number of X25519 recipient stanzas in an age header (binary or armored).
 pub fn stanza_count(ciphertext: &[u8]) -> usize {
-    ciphertext
-        .split(|b| *b == b'\n')
+    ArmoredReader::new(ciphertext)
+        .split(b'\n')
+        .map_while(std::io::Result::ok)
         .take_while(|line| !line.starts_with(b"---"))
         .filter(|line| line.starts_with(b"-> X25519 "))
         .count()
@@ -112,12 +115,12 @@ pub fn load_identities(files: &[&Path], interactive: bool) -> Result<Vec<Box<dyn
     for path in files {
         let shown = path.display().to_string();
         let bytes = Zeroizing::new(std::fs::read(path).map_err(|e| format!("age identity file {shown}: {e}"))?);
-        if bytes.starts_with(b"age-encryption.org/v1") {
+        if bytes.starts_with(b"age-encryption.org/v1") || bytes.starts_with(b"-----BEGIN AGE ENCRYPTED FILE-----") {
             let prompt = Prompt {
                 interactive,
                 file: shown.clone(),
             };
-            let reader = std::io::Cursor::new(bytes.to_vec());
+            let reader = ArmoredReader::new(std::io::Cursor::new(bytes.to_vec()));
             let id = age::encrypted::Identity::from_buffer(reader, Some(shown.clone()), prompt, None)
                 .map_err(|e| format!("age identity file {shown}: {e}"))?
                 .ok_or_else(|| format!("age identity file {shown} is not a passphrase-protected identity"))?;

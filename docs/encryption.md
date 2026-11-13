@@ -23,6 +23,7 @@ identity_files = ["~/.config/rustow/age/identity.txt"]
 - The identity file must be outside the repository and the cache.
 - A passphrase-protected identity file asks for its passphrase on the terminal only with the global `--interactive` flag. See [Interactive and unattended runs](#interactive-and-unattended-runs).
 - rustow rejects scrypt-only age files.
+- rustow reads binary age files and armored age files (`age -a`, which start with `-----BEGIN AGE ENCRYPTED FILE-----`). This applies to `.age` sources and to passphrase-protected identity files. `enc` and `enc edit` write binary age files.
 - A failure message tells "no configured age identity can decrypt it" apart from "not valid age ciphertext".
 
 ## GnuPG
@@ -125,6 +126,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - If the encryption or the verification fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.
 - If content and recipients are unchanged, rustow does not rewrite the file.
+- When rustow rewrites an armored `.age` file, the new file is binary.
 - rustow finds a recipient change from the last encryption that the state file records for this ciphertext. Without such a record, GnuPG compares the key ids in the ciphertext with the configured keys, so rustow encrypts again also when you replace one key with another. age shows only the number of recipients, so rustow finds only a changed count. After you replace an age recipient, use `--reencrypt`. `--reencrypt` always forces a rewrite.
 - It never deploys.
 

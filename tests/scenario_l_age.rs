@@ -62,9 +62,23 @@ fn enc_with_only_a_non_matching_identity_is_not_verified() {
 /// new ciphertext is fine, so `enc` keeps it and says why it is not verified.
 #[test]
 fn enc_with_a_locked_identity_is_not_verified() {
+    locked_identity_is_not_verified(false);
+}
+
+/// An armored passphrase-protected identity (`age -p -a`) is locked too.
+#[test]
+fn enc_with_an_armored_locked_identity_is_not_verified() {
+    locked_identity_is_not_verified(true);
+}
+
+fn locked_identity_is_not_verified(armored: bool) {
     let fx = Fixture::new();
     let key = fx.age_key("main");
-    fx.age_config(&[&key], &[&fx.age_key_locked(&key)], "");
+    let locked = fx.age_key_locked(&key);
+    if armored {
+        fx.age_armor(&locked.identity);
+    }
+    fx.age_config(&[&key], &[&locked], "");
     fx.write("token", "t0k3n\n");
     let out = fx.run(&["enc", "token"]);
     assert_eq!(out.code, 0, "{out:?}");
@@ -75,6 +89,9 @@ fn enc_with_a_locked_identity_is_not_verified() {
     );
     assert!(!fx.repo.join("token").exists());
     assert_eq!(fx.age_decrypt(&fx.repo.join("token.age"), &key), "t0k3n\n");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("rerun with --interactive"), "{out:?}");
 }
 
 /// An edit that re-encrypts to recipients that no identity here matches
@@ -232,6 +249,24 @@ fn edit_unchanged_does_not_rewrite() {
     assert!(out.stdout.lines().any(|l| l == "0 changed, 1 unchanged"), "{out:?}");
     assert_eq!(fs::read(fx.repo.join("s.age")).unwrap(), before);
     let _ = key;
+}
+
+/// `enc edit` reads armored ciphertext (`age -a`) and writes binary
+/// ciphertext back. An unchanged edit leaves the armored file as it is.
+#[test]
+fn edit_of_an_armored_source_writes_binary_ciphertext() {
+    let (fx, key) = keyed();
+    let ct = fx.age_encrypt("s.age", "v1\n", &[&key]);
+    fx.age_armor(&ct);
+    let armored = fs::read(&ct).unwrap();
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", "true")]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(fs::read(&ct).unwrap(), armored, "unchanged: not rewritten");
+    let editor = fx.editor("ed", "printf 'v2\\n' > \"$1\"");
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(fs::read(&ct).unwrap().starts_with(b"age-encryption.org/v1"));
+    assert_eq!(fx.age_decrypt(&ct, &key), "v2\n");
 }
 
 /// The state record of the ciphertext shows a swapped recipient that the

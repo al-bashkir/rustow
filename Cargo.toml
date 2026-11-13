@@ -10,7 +10,7 @@ categories = ["command-line-utilities", "config"]
 keywords = ["dotfiles", "stow", "symlink", "templates", "age"]
 
 [dependencies]
-age = "0.12.1"
+age = { version = "0.12.1", features = ["armor"] }
 clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = { version = "4.6.11", features = ["unstable-dynamic"] }
 ignore = "0.4.34"

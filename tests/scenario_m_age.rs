@@ -50,6 +50,20 @@ fn registered_ciphertext_deploys_private_regular_file() {
     assert_eq!(read(&dest), "edited\n");
 }
 
+/// Armored ciphertext (`age -a`) deploys as binary ciphertext does.
+#[test]
+fn armored_ciphertext_deploys_as_link_and_copy() {
+    let (fx, key) = keyed("[[files]]\nsource = \"copied.age\"\n");
+    fx.age_armor(&fx.age_encrypt("linked.age", "linked secret\n", &[&key]));
+    fx.age_armor(&fx.age_encrypt("copied.age", "copied secret\n", &[&key]));
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(is_symlink(&fx.home_path("linked")));
+    assert_eq!(read(&fx.home_path("linked")), "linked secret\n");
+    assert!(is_regular(&fx.home_path("copied")));
+    assert_eq!(read(&fx.home_path("copied")), "copied secret\n");
+}
+
 #[test]
 fn file_add_accepts_ciphertext_and_link_skips_it() {
     let (fx, key) = keyed("");

@@ -311,6 +311,16 @@ impl Fixture {
         path
     }
 
+    /// Rewrites the age file at `path` with ASCII armor (as `age -a` makes it).
+    pub fn age_armor(&self, path: &Path) {
+        use std::io::Write;
+        let mut out = Vec::new();
+        let mut w = age::armor::ArmoredWriter::wrap_output(&mut out, age::armor::Format::AsciiArmor).unwrap();
+        w.write_all(&fs::read(path).unwrap()).unwrap();
+        w.finish().unwrap();
+        fs::write(path, out).unwrap();
+    }
+
     /// Decrypts an age file with one key.
     pub fn age_decrypt(&self, path: &Path, key: &AgeKey) -> String {
         use std::io::Read;
