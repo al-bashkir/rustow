@@ -6,7 +6,7 @@ fn main() {
         .var(rustow::complete::VAR)
         .complete();
     let cli = rustow::cli::Cli::parse();
-    let code = match rustow::app::run(cli) {
+    let code = match rustow::app::catch_file_size_signal().and_then(|()| rustow::app::run(cli)) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("rustow: error: {}", rustow::report::shown(&err.to_string()));

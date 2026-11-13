@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::error::{Error, Result};
 use crate::fsops::{self, Dir, DirId, FileMeta, Observed};
 use crate::paths::RelPath;
-use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
+use crate::plan::{CacheWrite, Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
 use crate::sudo::Job;
 
@@ -339,13 +339,16 @@ pub struct NewFile<'a> {
 /// that goes to `backup`.
 pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
     let file = matches!(d.desired, Desired::File { .. });
-    let conflict = matches!(d.decision, Decision::Conflict(_));
-    let here = d.decision == Decision::Update || (file && (conflict || d.decision == Decision::Create));
-    let away = conflict && policy == Policy::Backup;
-    let dirs: Vec<&Path> = [(here, d.path.parent()), (away, backup.parent())]
-        .into_iter()
-        .filter_map(|(on, dir)| dir.filter(|_| on))
-        .collect();
+    let replaces = matches!(d.decision, Decision::Create | Decision::Conflict(_));
+    let here = d.decision == Decision::Update || (file && replaces);
+    temp_in(d.path.parent().filter(|_| here), d.decision, policy, backup)
+}
+
+/// A temporary name (`fsops::temp_name`), journaled in `dir`, and in the
+/// directory of `backup` when `decision` is a conflict that goes to a backup.
+fn temp_in(dir: Option<&Path>, decision: Decision, policy: Policy, backup: &Path) -> Result<String> {
+    let away = matches!(decision, Decision::Conflict(_)) && policy == Policy::Backup;
+    let dirs: Vec<&Path> = dir.into_iter().chain(backup.parent().filter(|_| away)).collect();
     fsops::temp_name(&dirs)
 }
 
@@ -423,19 +426,22 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     let dir = fsops::private_tree(run.cache_dir, parent)?;
     recheck(&dir, name, &cache.path, &cache.observed)?;
     let to = backup_path(run, item, true);
-    let away = matches!(cache.decision, Decision::Conflict(_)) && run.policy == Policy::Backup;
-    let dirs: Vec<&Path> = std::iter::once(dir.path.as_path())
-        .chain(to.parent().filter(|_| away))
-        .collect();
-    let temp = fsops::temp_name(&dirs)?;
-    let detail = away.then(|| backup(&dir, name, &to, &temp)).transpose()?;
+    let temp = temp_in(Some(&dir.path), cache.decision, run.policy, &to)?;
+    let mut detail = None;
+    if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
+        detail = Some(backup(&dir, name, &to, &temp)?);
+    }
+    write_cache(&dir, name, &temp, cache).map(|()| detail)
+}
+
+/// Writes the cache entry `name` in `dir` (mode 0600) through `temp`.
+fn write_cache(dir: &Dir, name: &OsStr, temp: &str, cache: &CacheWrite) -> Result<()> {
     let meta = FileMeta {
         mode: Some(0o600),
         ..FileMeta::default()
     };
     let want = (&cache.hash, cache.content.size());
-    dir.write(name, &temp, &mut cache.content.open()?, want, meta, true)?;
-    Ok(detail)
+    dir.write(name, temp, &mut cache.content.open()?, want, meta, true)
 }
 
 /// Performs the planned decision on `name` in `dir` (the caller already

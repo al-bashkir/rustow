@@ -20,10 +20,6 @@ use crate::{files, fsops, inspect};
 
 /// Runs the parsed command and returns the process exit code.
 pub fn run(cli: Cli) -> Result<i32> {
-    // Past the file size limit (`ulimit -f`), a write then fails with
-    // "File too large" instead of a signal that kills rustow mid-write.
-    signal_hook::flag::register(signal_hook::consts::SIGXFSZ, Arc::new(AtomicBool::new(false)))
-        .map_err(|e| Error::Failed(format!("install signal handler: {e}")))?;
     let env = Env::from_process()?;
     refuse_sudo(&cli, env.sudo_user.as_deref())?;
     let g = &cli.global;
@@ -50,6 +46,15 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Completions { shell } => completions(shell),
         Command::SudoHelper => crate::sudo::serve(),
     }
+}
+
+/// Catches SIGXFSZ: past the file size limit (`ulimit -f`), a write then
+/// fails with "File too large" instead of a signal that kills rustow in
+/// the middle of a write. `main` calls it before `run`, also for the helper.
+pub fn catch_file_size_signal() -> Result<()> {
+    signal_hook::flag::register(signal_hook::consts::SIGXFSZ, Arc::new(AtomicBool::new(false)))
+        .map(drop)
+        .map_err(|e| Error::Failed(format!("install signal handler: {e}")))
 }
 
 /// Under `sudo`, HOME and the state directory are root's: rustow would put

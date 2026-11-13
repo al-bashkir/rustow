@@ -951,28 +951,39 @@ fn broken_link_detail(path: &Path, observed: &Observed, decision: Decision) -> O
 /// is read whole.
 fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want, String> {
     let source_abs = ctx.root.join(source.path.as_path());
-    let failed = |e: Error| e.to_string();
     match &source.mode {
-        Mode::Link => {
-            // A folded directory has no content of its own.
-            let hash = match source_abs.is_dir() {
-                true => Hash::of(b""),
-                false => fsops::hash_file(&source_abs).map_err(failed)?.0,
-            };
-            Ok(want_link(path, &source_abs, base_record(source, hash)))
-        }
+        Mode::Link => Ok(want_link(
+            path,
+            &source_abs,
+            base_record(source, link_hash(&source_abs)?),
+        )),
         Mode::FileCopy(meta) => want_file_copy(source, source_abs, meta),
         Mode::DecryptLink(backend) | Mode::DecryptCopy(backend, _) => {
-            let bytes = fsops::read_file(&source_abs).map_err(failed)?;
+            let (bytes, record) = read_source(source, &source_abs)?;
             let plaintext = crypto::decrypt(*backend, &source.path, &bytes, ctx)?;
-            transformed(ctx, source, path, plaintext, base_record(source, Hash::of(&bytes)))
+            transformed(ctx, source, path, plaintext, record)
         }
         Mode::TemplateLink(backend) | Mode::TemplateCopy(backend, _) => {
-            let bytes = fsops::read_file(&source_abs).map_err(failed)?;
-            let record = base_record(source, Hash::of(&bytes));
+            let (bytes, record) = read_source(source, &source_abs)?;
             want_template(ctx, source, path, *backend, bytes, record)
         }
     }
+}
+
+/// The hash of a link's source (streamed). A folded directory has no
+/// content of its own.
+fn link_hash(abs: &Path) -> std::result::Result<Hash, String> {
+    match abs.is_dir() {
+        true => Ok(Hash::of(b"")),
+        false => fsops::hash_file(abs).map(|(hash, _)| hash).map_err(|e| e.to_string()),
+    }
+}
+
+/// The whole source that is decrypted or rendered, and its base record.
+fn read_source(source: &Source, abs: &Path) -> std::result::Result<(Vec<u8>, Record), String> {
+    let bytes = fsops::read_file(abs).map_err(|e| e.to_string())?;
+    let record = base_record(source, Hash::of(&bytes));
+    Ok((bytes, record))
 }
 
 /// The record of a source before any mode-specific field is filled in.
