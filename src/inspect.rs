@@ -15,7 +15,7 @@ use crate::fsops::{self, FileMeta, Observed};
 use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
-use crate::report::Printer;
+use crate::report::{self, Printer, shown};
 use crate::source::{Discovery, Mode, Selector, SkipKind, Skipped, check_collisions, shown_label};
 use crate::state::{Record, State};
 use crate::template;
@@ -43,9 +43,11 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
     } else {
         for s in &shown {
             match (s.kind.as_str(), s.detail.as_deref()) {
-                ("error", Some(msg)) => {
-                    eprintln!("rustow: {}: cannot compute desired content: {msg}", s.item.source.path)
-                }
+                ("error", Some(msg)) => eprintln!(
+                    "rustow: {}: cannot compute desired content: {}",
+                    report::shown(s.item.source.path.as_str()),
+                    report::shown(msg)
+                ),
                 _ => crate::report::out(format_args!("{}", s.text)),
             }
         }
@@ -82,7 +84,7 @@ fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Resu
 fn step_text(item: &PlanItem, label: &str, old: Option<&Record>) -> Result<(String, bool)> {
     Ok(match &item.step {
         Step::Failed(_) => (String::new(), false),
-        Step::Blocked { conflict, detail } => (format!("{label}: {}: {detail}\n", conflict.describe()), false),
+        Step::Blocked { conflict, detail } => (format!("{label}: {}: {}\n", conflict.describe(), shown(detail)), false),
         Step::Unfold { .. } => (
             format!("{label}: folded directory link; would become a real directory\n"),
             false,
@@ -129,7 +131,7 @@ fn describe(label: &str, d: &Deploy) -> Result<(String, bool)> {
                 out.push_str(&format!(
                     "{label}: {}; would link to {}\n",
                     what(&d.observed),
-                    text.display()
+                    shown(&text.display().to_string())
                 ));
             }
             if let Some(cache) = &d.cache {
@@ -173,7 +175,7 @@ fn current_bytes(path: &Path, observed: &Observed) -> Result<Option<Vec<u8>>> {
 fn what(observed: &Observed) -> String {
     match observed {
         Observed::Missing => "missing".into(),
-        Observed::Symlink(t) => format!("links to {}", t.display()),
+        Observed::Symlink(t) => format!("links to {}", shown(&t.display().to_string())),
         Observed::File { .. } => "regular file".into(),
         Observed::Dir => "directory".into(),
         Observed::Other => "special file".into(),
@@ -289,8 +291,8 @@ fn print_rows(rows: &[Row], attention: usize, printer: &Printer) {
         } else {
             format!(" ({})", r.mode)
         };
-        let detail = r.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-        outln!("{:>9} {dest}{}{mode}{detail}", r.status, r.source);
+        let detail = report::detail(r.detail.as_deref());
+        outln!("{:>9} {dest}{}{mode}{detail}", r.status, shown(&r.source));
     }
     if !printer.quiet {
         outln!("{}", summary(rows, attention));
@@ -475,7 +477,7 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
         );
     } else {
         for f in &findings {
-            outln!("problem: {f}");
+            outln!("problem: {}", shown(f));
         }
         if !printer.quiet {
             outln!(

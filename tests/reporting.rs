@@ -317,3 +317,40 @@ fn doctor_ignores_gpg_in_relative_path_entries() {
     let out = fx.run_env(&["doctor"], &[("PATH", ":.:bin")]);
     assert!(out.stdout.contains("gpg: not found in PATH"), "{out:?}");
 }
+
+/// A file name with a newline or an escape character cannot fake report
+/// lines: human output shows control characters escaped.
+#[test]
+fn control_characters_in_names_are_escaped() {
+    let fx = Fixture::new();
+    let name = "fake\n   create ~/.bashrc  <- trusted (link)\n1 changed\x1b[2J";
+    fx.write(name, "x\n");
+    std::os::unix::fs::symlink("/nonexistent", fx.repo.join("bad\tlink\r")).unwrap();
+    let shown = r"fake\n   create ~/.bashrc  <- trusted (link)\n1 changed\x1b[2J";
+    let apply = fx.ok(&["apply"]);
+    let status = fx.run(&["status", "-v"]);
+    let arg = fx.run(&["apply", "no\nsuch"]);
+    for out in [&apply, &status, &arg] {
+        let text = format!("{}{}", out.stdout, out.stderr);
+        assert!(!text.contains('\x1b'), "{out:?}");
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.starts_with("   create ~/.bashrc") || l == "1 changed"),
+            "{out:?}"
+        );
+    }
+    assert!(
+        apply.stdout.contains(&format!("create ~/{shown}  <- {shown} (link)")),
+        "{apply:?}"
+    );
+    assert!(
+        apply.stderr.contains(r"warning: bad\tlink\r: is a symbolic link"),
+        "{apply:?}"
+    );
+    assert!(
+        status.stdout.contains(&format!("LINKED ~/{shown}  <- {shown}")),
+        "{status:?}"
+    );
+    assert!(arg.stderr.contains(r"'no\nsuch' does not match"), "{arg:?}");
+}

@@ -435,7 +435,7 @@ fn confirm_removal(ask: bool, printer: &Printer, items: &[ItemReport]) -> Result
             "{:>8} {}  <- {} ({})",
             i.action.as_str(),
             printer.path(&i.dest),
-            i.source,
+            crate::report::shown(i.source.as_str()),
             i.mode
         );
     }

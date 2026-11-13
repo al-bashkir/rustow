@@ -1,5 +1,6 @@
 //! Human and JSON output. Never prints file contents.
 
+use std::borrow::Cow;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,27 @@ pub fn out(args: std::fmt::Arguments) {
         eprintln!("rustow: error: write output: {e}");
         std::process::exit(4);
     }
+}
+
+/// `text` for human output: each control character escaped, `\n`, `\t`
+/// and `\r` by name, any other (ESC, the rest of C0, DEL, C1) as `\xNN`.
+/// A file name then cannot start a new report line or a terminal
+/// sequence. JSON output escapes on its own and does not use this.
+pub fn shown(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(char::is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c if c.is_control() => out.push_str(&format!("\\x{:02x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// Whether the reported items were applied or only planned.
@@ -63,7 +85,7 @@ impl Printer {
     /// Informational message on stderr.
     pub fn notice(&self, msg: &str) {
         if !self.quiet && !self.json {
-            eprintln!("note: {msg}");
+            eprintln!("note: {}", shown(msg));
         }
     }
 
@@ -72,20 +94,22 @@ impl Printer {
     pub fn warn<'a>(&mut self, skipped: impl IntoIterator<Item = &'a Skipped>) {
         for s in skipped {
             if !self.quiet && !self.json {
-                eprintln!("warning: {}: {}", s.path, s.reason);
+                eprintln!("warning: {}: {}", shown(s.path.as_str()), shown(&s.reason));
             }
             self.warnings
                 .push(json!({ "source": s.path.as_str(), "reason": s.reason }));
         }
     }
 
-    /// Path for display, with the home directory shortened to `~`.
+    /// Path for human output, with the home directory shortened to `~`
+    /// and control characters escaped (`shown`).
     pub fn path(&self, path: &Path) -> String {
-        match self.home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
+        let text = match self.home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
             Some(rest) if rest.as_os_str().is_empty() => "~".into(),
             Some(rest) => format!("~/{}", rest.display()),
             None => path.display().to_string(),
-        }
+        };
+        shown(&text).into_owned()
     }
 
     pub fn items(&self, items: &[ItemReport], run: RunKind) {
@@ -145,14 +169,13 @@ impl Printer {
             return;
         }
         if let (false, Some(root)) = (self.quiet, repository) {
-            outln!("repository: {}", root.display());
+            outln!("repository: {}", shown(&root.display().to_string()));
         }
         let mut changed = 0;
         for c in changes {
             changed += usize::from(c.action != "ok");
             if !self.quiet && (c.action != "ok" || self.verbose || c.detail.is_some()) {
-                let detail = c.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
-                outln!("{:>8} {}{detail}", c.action, c.path);
+                outln!("{:>8} {}{}", c.action, shown(&c.path), detail(c.detail.as_deref()));
             }
         }
         if !self.quiet {
@@ -169,13 +192,13 @@ impl Printer {
     }
 
     fn item_line(&self, i: &ItemReport) {
-        let detail = i.detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default();
         outln!(
-            "{} {}  <- {} ({}){detail}",
+            "{} {}  <- {} ({}){}",
             self.verb(i.action),
             self.path(&i.dest),
-            i.source,
-            i.mode
+            shown(i.source.as_str()),
+            i.mode,
+            detail(i.detail.as_deref())
         );
     }
 
@@ -193,6 +216,11 @@ impl Printer {
         };
         format!("\x1b[{code}m{text}\x1b[0m")
     }
+}
+
+/// ": <detail>" for a report line, escaped as `shown`; empty without one.
+pub fn detail(text: Option<&str>) -> String {
+    text.map(|d| format!(": {}", shown(d))).unwrap_or_default()
 }
 
 struct Counts {
@@ -293,7 +321,7 @@ impl Printer {
             outln!("{}", json!({ key: list }));
         } else {
             for (source, dest, mode) in &rows {
-                outln!("{source} -> {dest} ({mode})");
+                outln!("{} -> {dest} ({mode})", shown(source));
             }
         }
     }
@@ -312,6 +340,13 @@ mod tests {
             home: None,
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn shown_escapes_control_characters_only() {
+        assert!(matches!(shown("plain ~/é ok"), Cow::Borrowed("plain ~/é ok")));
+        assert_eq!(shown("a\nb\tc\rd"), r"a\nb\tc\rd");
+        assert_eq!(shown("\x1b[2J\x00\x7f\u{9b}x"), r"\x1b[2J\x00\x7f\x9bx");
     }
 
     /// On a terminal each verb gets its color: changes green, notes cyan,

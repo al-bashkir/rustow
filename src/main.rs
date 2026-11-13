@@ -9,7 +9,7 @@ fn main() {
     let code = match rustow::app::run(cli) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("rustow: error: {err}");
+            eprintln!("rustow: error: {}", rustow::report::shown(&err.to_string()));
             err.exit_code()
         }
     };

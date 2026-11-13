@@ -126,6 +126,8 @@ Before it replaces an object, rustow checks the object again. If it changed, the
 
 `apply`, `link`, `file apply`, `template apply`, `unlink` and `undeploy` print one line for each item, then a summary. Conflicts and errors are not in the item list. They come after it, below a "Conflicts:" line, before the summary. `-q` prints only this block. A dry run summary starts with "dry run, nothing written: ". When the abort policy stops a run, the summary starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: ".
 
+Human output escapes control characters in names and messages, on stdout and stderr: a newline shows as `\n`, a tab as `\t`, a carriage return as `\r`, and any other control character (for example ESC) as `\xNN`. So a file name cannot make a line that looks like a report line. JSON output keeps the names as they are; JSON escapes them itself.
+
 With `--json` they print one object: `dry_run`, `aborted`, `items` (each with `source`, `dest`, `mode`, `action` and `detail`), `summary` (`changed`, `unchanged`, `adopted`, `conflicts`, `errors`) and `warnings` (each with `source` and `reason`; always empty for `unlink` and `undeploy`). `dry_run` is true only with `-n`. `aborted` is true when the abort policy stopped the run before it wrote anything.
 
 `apply`, `link`, `file apply` and `template apply` also report recorded destinations of their modes whose source is gone, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". In JSON the item has the action `orphaned`. rustow removes nothing, and the exit code does not change.

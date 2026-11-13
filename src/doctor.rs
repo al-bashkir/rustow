@@ -58,7 +58,7 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
         outln!("{}", json!({ "checks": list }));
     } else {
         for c in &checks {
-            outln!("{:>5}  {}: {}", c.level, c.name, c.detail);
+            outln!("{:>5}  {}: {}", c.level, c.name, crate::report::shown(&c.detail));
         }
     }
     Ok(i32::from(checks.iter().any(|c| c.level == "fail")))

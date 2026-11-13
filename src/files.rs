@@ -139,7 +139,11 @@ pub fn list(ctx: &mut Context, printer: &Printer) -> Result<i32> {
         outln!("{}", json!({ "files": files }));
     } else {
         for (source, dest, mode) in &rows {
-            outln!("{source} -> {dest} ({mode})");
+            outln!(
+                "{} -> {dest} ({})",
+                crate::report::shown(source),
+                crate::report::shown(mode)
+            );
         }
     }
     Ok(0)
