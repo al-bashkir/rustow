@@ -117,7 +117,7 @@ A recorded folded link that no longer qualifies becomes a real directory. This h
 
 rustow unfolds only when the same run deploys every source below the directory again. A partial run cannot unfold: a command that deploys only some modes, a path argument, or an item below the directory that is in conflict or fails. Then the folded link is a conflict, "cannot unfold the folded directory: X would not be deployed again; run `rustow apply <dir>`". Each item below it is a conflict too: "the folded directory D cannot be unfolded yet". The command exits with 3. Run `rustow apply <dir>` to unfold.
 
-If you replace rustow's folded link yourself (with a directory or your own symlink), rustow treats it as yours: it plans the files below it against what is there, with the normal conflict rules, and `unlink` forgets the old record.
+If you replace rustow's folded link yourself (with a directory or your own symlink), rustow treats it as yours: it plans the files below it against what is there, with the normal conflict rules, and `unlink` forgets the old record. When `apply` folds a directory, it drops the records of the files below it: the link replaces them.
 
 `unlink` of a file inside a folded directory matches nothing. Unlink the directory.
 

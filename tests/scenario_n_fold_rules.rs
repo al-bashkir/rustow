@@ -23,6 +23,30 @@ fn default_folds_below_top_level_but_never_a_direct_child_of_home() {
 }
 
 #[test]
+fn a_new_fold_drops_the_records_below_it() {
+    let fx = Fixture::new();
+    fx.write(".config/app/conf", "a\n");
+    fx.write(".config/app/other", "b\n");
+    fx.ok(&["apply"]);
+    let app = fx.home_path(".config/app");
+    fs::remove_file(&app).unwrap();
+    fs::create_dir(&app).unwrap();
+    fx.ok(&["apply"]);
+    assert!(
+        is_symlink(&app.join("conf")),
+        "the files link inside the real directory"
+    );
+    fs::remove_dir_all(&app).unwrap();
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&app), "folded again");
+    let entries = fx.state_json()["entries"].as_object().unwrap().clone();
+    let keys: Vec<&String> = entries.keys().collect();
+    assert_eq!(keys, [&app.display().to_string()], "{keys:?}");
+    let out = fx.ok(&["undeploy", "-y"]);
+    assert!(!out.stdout.contains("forget"), "{out:?}");
+}
+
+#[test]
 fn file_rule_keeps_its_directories_unfolded_and_a_sibling_subdir_folds() {
     let fx = Fixture::new();
     fx.write(

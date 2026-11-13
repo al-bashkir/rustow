@@ -335,6 +335,10 @@ fn apply(d: &Deploy, item: &PlanItem, run: &Run, state: &mut State) -> Result<Op
     let written = write_dest(d, new, run.policy, &backup, me(), &mut created);
     state.created_dirs.extend(created);
     let extra = written?;
+    if d.record.folded_dir {
+        // Nothing below a folded link is rustow's own: those records are of files that are gone.
+        state.entries.retain(|dest, _| !dest.starts_with(&item.dest));
+    }
     state.entries.insert(item.dest.clone(), d.record.clone());
     Ok(extra.or(cached))
 }
