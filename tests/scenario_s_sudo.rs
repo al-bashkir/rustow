@@ -138,6 +138,32 @@ fn a_failing_sudo_fails_the_items_and_writes_nothing() {
     assert_eq!(s.run(&["status"]).code, 1, "nothing recorded");
 }
 
+/// The helper answers each job before it gets the next one. Here the
+/// answer of the first job reaches rustow and the pipe breaks before the
+/// second answer: the first file is recorded, the second item fails.
+#[test]
+fn each_helper_result_counts_as_it_arrives() {
+    let s = Sudo::new(
+        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nchmod 755 \"$FAKE_SUDO_UNLOCK\"\n\
+         \"$@\" | { IFS= read -r l; exec 0<&-; printf '%s\\n' \"$l\"; }\n\
+         chmod 555 \"$FAKE_SUDO_UNLOCK\"\nexit 1\n",
+    );
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    let entries = &s.fx.state_json()["entries"];
+    assert!(
+        entries.get(s.fx.root_path("etc/app.conf").to_str().unwrap()).is_some(),
+        "{entries}"
+    );
+    assert!(entries.get(s.fx.root_path("etc/t.conf").to_str().unwrap()).is_none());
+    let failed = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/t.conf"))
+        .unwrap_or_default();
+    assert!(failed.contains("fake-sudo failed (exit status: 1)"), "{out:?}");
+}
+
 #[test]
 fn home_files_never_use_sudo() {
     let s = Sudo::new(FAKE);

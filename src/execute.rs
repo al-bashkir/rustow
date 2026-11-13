@@ -271,30 +271,22 @@ fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mu
 }
 
 /// Runs the jobs through one sudo helper call and applies the directories
-/// it created or removed to `state`. A failed call fails every job.
+/// it created or removed to `state`. Each job has its own result.
 fn sudo_batch(
     jobs: &[Job<&Deploy>],
     stop: &AtomicBool,
     state: &mut State,
 ) -> Vec<std::result::Result<Option<String>, String>> {
-    let done = if stop.load(Ordering::SeqCst) {
-        Err(Error::Failed("interrupted before sudo; nothing changed".into()))
-    } else {
-        crate::sudo::call(jobs)
-    };
-    match done {
-        Ok(done) => done
-            .into_iter()
-            .map(|d| {
-                state.created_dirs.extend(d.created_dirs);
-                for dir in &d.removed_dirs {
-                    state.created_dirs.remove(dir);
-                }
-                d.result
-            })
-            .collect(),
-        Err(e) => vec![Err(e.to_string()); jobs.len()],
-    }
+    crate::sudo::call(jobs, stop)
+        .into_iter()
+        .map(|d| {
+            state.created_dirs.extend(d.created_dirs);
+            for dir in &d.removed_dirs {
+                state.created_dirs.remove(dir);
+            }
+            d.result
+        })
+        .collect()
 }
 
 /// Puts one helper result into its report; `record` runs on success.
@@ -629,7 +621,7 @@ fn unfold(path: &Path, dir_id: DirId, observed: &Observed, item: &PlanItem, stat
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::fsops::FileMeta;
     use crate::hash::Hash;
@@ -673,7 +665,7 @@ mod tests {
     }
 
     /// A deploy that creates `path` in its existing parent directory.
-    fn create(path: &Path, desired: Desired, content: Option<&[u8]>) -> Deploy {
+    pub(crate) fn create(path: &Path, desired: Desired, content: Option<&[u8]>) -> Deploy {
         let parent = nix::sys::stat::stat(path.parent().unwrap()).unwrap();
         Deploy {
             path: path.to_path_buf(),

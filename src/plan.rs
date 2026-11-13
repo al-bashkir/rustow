@@ -212,7 +212,9 @@ pub struct Deploy {
     pub desired: Desired,
     pub observed: Observed,
     pub decision: Decision,
-    /// Content for a regular-file destination.
+    /// Content for a regular-file destination. The sudo helper gets it
+    /// after the JSON of the job, as raw bytes.
+    #[serde(skip)]
     pub content: Option<Zeroizing<Vec<u8>>>,
     /// Mode for a regular-file destination when `desired` sets none.
     pub file_mode: u32,
