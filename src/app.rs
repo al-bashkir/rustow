@@ -160,7 +160,9 @@ fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Resul
         StateCommand::Export { .. } if g.dry_run => Err(Error::Usage(
             "`rustow state export` has no --dry-run; it changes no state".into(),
         )),
-        StateCommand::Export { file } => crate::transfer::export(&ctx, file.as_deref()),
+        StateCommand::Export { file } => {
+            crate::transfer::export(&ctx, file.as_deref(), g.policy() == Policy::Overwrite)
+        }
         StateCommand::Import { file } => {
             let _lock = lock(&ctx, p, g.dry_run)?;
             crate::transfer::import(&mut ctx, p, &file, g.dry_run)

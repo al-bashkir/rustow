@@ -31,8 +31,9 @@ struct Registrations {
     links: BTreeSet<RelPath>,
 }
 
-/// Prints the registrations as JSON, or writes them to `file`.
-pub fn export(ctx: &Context, file: Option<&Path>) -> Result<i32> {
+/// Prints the registrations as JSON, or writes them to `file`: a new file,
+/// or any file when `replace` (`--force`).
+pub fn export(ctx: &Context, file: Option<&Path>, replace: bool) -> Result<i32> {
     let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let Lists { files, links } = Lists::of(&state.registrations);
     let regs = Registrations {
@@ -44,7 +45,14 @@ pub fn export(ctx: &Context, file: Option<&Path>) -> Result<i32> {
         serde_json::to_string_pretty(&regs).map_err(|e| Error::Failed(format!("encode registrations: {e}")))?;
     text.push('\n');
     match file {
-        Some(path) => fsops::write_atomic(path, text.as_bytes(), 0o644, None, None)?,
+        Some(path) if replace => fsops::write_atomic(path, text.as_bytes(), 0o644, None, None)?,
+        Some(path) if fs::symlink_metadata(path).is_ok() => {
+            return Err(Error::Usage(format!(
+                "{} already exists; add --force to replace it",
+                path.display()
+            )));
+        }
+        Some(path) => fsops::write_new(path, text.as_bytes(), 0o644)?,
         None => crate::report::out(format_args!("{text}")),
     }
     Ok(0)

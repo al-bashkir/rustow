@@ -99,6 +99,27 @@ fn import_refuses_paths_that_file_add_and_link_refuse() {
     }
 }
 
+/// `state export FILE` keeps an existing FILE unless `--force` is given.
+#[test]
+fn export_keeps_an_existing_file_without_force() {
+    let fx = machine();
+    fx.ok(&["file", "add", "a.conf"]);
+    let config = fx.repo.join("rustow.toml");
+    let before = read(&config);
+    let out = fx.run(&["state", "export", "rustow.toml"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr.contains("already exists") && out.stderr.contains("--force"),
+        "{out:?}"
+    );
+    assert_eq!(read(&config), before);
+    fx.ok(&["state", "export", "--force", "rustow.toml"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&read(&config)).unwrap()["files"],
+        json!(["a.conf"])
+    );
+}
+
 fn export(fx: &Fixture) -> Value {
     serde_json::from_str(&fx.ok(&["state", "export"]).stdout).unwrap()
 }
