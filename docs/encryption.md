@@ -65,7 +65,7 @@ homedir = "~/.gnupg"
 
 By default rustow never asks for a passphrase, so it can run from scripts and timers.
 
-- GnuPG: rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once, with the hint "if the key is passphrase-protected, unlock it in gpg-agent or rerun with --interactive".
+- GnuPG: rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once with "the secret key is locked (unlock it in gpg-agent or rerun with --interactive)". With `--interactive`, a wrong passphrase fails with "bad passphrase for the secret key". A missing key fails with "no usable secret key for any recipient in the keyring". rustow reads these cases from the gpg status output. It adds the first line that gpg prints, after "; gpg: ".
 - age: a passphrase-protected identity file fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)".
 - The failed item is an error. `apply`, `diff` and `enc edit` exit with 4. `status` shows ERROR. `enc` needs no private key: it writes the encrypted file and prints "not verified" with the reason.
 - With the global `--interactive` flag, rustow runs gpg with `--pinentry-mode ask`, so `gpg-agent` starts its pinentry. For age, rustow asks for the identity passphrase on the terminal.

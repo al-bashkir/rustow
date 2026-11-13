@@ -81,10 +81,10 @@ pub fn check_decrypt_status(lines: &[String], exit_ok: bool) -> Result<(), Failu
 /// A usable secret key, and no failure record.
 fn check_decrypt_keys(recs: &[Record]) -> Result<(), Failure> {
     if has(recs, "NO_SECKEY") && !has(recs, "DECRYPTION_OKAY") {
-        let why = "no usable secret key for any recipient in the keyring".to_owned();
         return Err(match unlock_error(recs) {
-            Some(_) => Failure::Locked(why),
-            None => Failure::NoKey(why),
+            Some(BAD_PASSPHRASE) => Failure::Locked("bad passphrase for the secret key".into()),
+            Some(_) => Failure::Locked("the secret key is locked".into()),
+            None => Failure::NoKey("no usable secret key for any recipient in the keyring".into()),
         });
     }
     if has(recs, "DECRYPTION_FAILED") || has(recs, "FAILURE") || has(recs, "ERROR") {
@@ -254,7 +254,7 @@ impl Gpg {
     /// Decrypts and fully verifies before returning plaintext.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Failure> {
         let run = self.run(&["--decrypt"], ciphertext).map_err(Failure::Corrupt)?;
-        check_decrypt_status(&run.status, run.success).map_err(|f| f.map(|e| self.explain(e, &run)))?;
+        check_decrypt_status(&run.status, run.success).map_err(|f| self.explain(f, &run))?;
         Ok(run.stdout)
     }
 
@@ -265,7 +265,7 @@ impl Gpg {
             args.extend(["--recipient", f.as_str()]);
         }
         let run = self.run(&args, plaintext)?;
-        check_encrypt_status(&run.status, run.success).map_err(|e| self.explain(e, &run))?;
+        check_encrypt_status(&run.status, run.success).map_err(|e| e + &detail(&run))?;
         Ok(run.stdout.to_vec())
     }
 
@@ -325,24 +325,24 @@ impl Gpg {
         Some(ids.map(|id| id.to_ascii_uppercase()).collect())
     }
 
-    fn explain(&self, error: String, run: &Run) -> String {
-        let key_problem = run
-            .status
-            .iter()
-            .any(|l| l.contains("NO_SECKEY") || l.contains("pkdecrypt_failed"));
-        let hint = if key_problem && !self.interactive {
-            " (if the key is passphrase-protected, unlock it in gpg-agent or rerun with --interactive)"
-        } else {
-            ""
+    /// Adds how to unlock a locked key in an unattended run, and gpg's first diagnostic.
+    fn explain(&self, failure: Failure, run: &Run) -> Failure {
+        let hint = match failure {
+            Failure::Locked(_) if !self.interactive => " (unlock it in gpg-agent or rerun with --interactive)",
+            _ => "",
         };
-        let detail = run
-            .stderr
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .map(|l| format!("; gpg: {}", l.trim()))
-            .unwrap_or_default();
-        format!("{error}{hint}{detail}")
+        failure.map(|e| format!("{e}{hint}{}", detail(run)))
     }
+}
+
+/// The first line that gpg wrote to stderr, as "; gpg: <line>".
+fn detail(run: &Run) -> String {
+    run.stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| format!("; gpg: {}", l.strip_prefix("gpg: ").unwrap_or(l)))
+        .unwrap_or_default()
 }
 
 /// (validity, capabilities, fingerprint) of each primary key in `--with-colons` output.
@@ -477,9 +477,12 @@ mod tests {
             matches!(&missing, Failure::NoKey(m) if m.contains("secret key")),
             "{missing:?}"
         );
-        for locked in ["67108949", "67108875"] {
-            let e = check_decrypt_status(&status(locked), false).unwrap_err();
-            assert!(matches!(e, Failure::Locked(_)), "{locked}: {e:?}");
+        for (code, why) in [
+            ("67108949", "the secret key is locked"),
+            ("67108875", "bad passphrase for the secret key"),
+        ] {
+            let e = check_decrypt_status(&status(code), false).unwrap_err();
+            assert_eq!(e, Failure::Locked(why.into()), "{code}");
         }
     }
 

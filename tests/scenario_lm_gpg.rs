@@ -72,6 +72,27 @@ fn enc_with_a_wrong_passphrase_is_not_verified() {
     assert_eq!(home.decrypt(&fx.repo.join("p.gpg")), "plain\n");
 }
 
+/// A wrong passphrase is named as such, not as a missing secret key.
+#[test]
+fn wrong_passphrase_is_named() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    home.stub_pinentry_answering("wrong");
+    fx.gpg_config(&home, &[&home.fpr], "");
+    fx.gpg_encrypt("s.gpg", "locked secret\n", &home);
+    let out = fx.run(&["--interactive", "apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(
+        out.stdout.contains("s.gpg: bad passphrase for the secret key; gpg: "),
+        "{out:?}"
+    );
+    assert!(!out.stdout.contains("no usable secret key"), "{out:?}");
+    assert!(!fx.home_path("s").exists());
+}
+
 /// An edit that re-encrypts to a key whose secret part is not here says
 /// so, as `enc` does: the next edit here cannot decrypt it.
 #[test]
@@ -379,7 +400,12 @@ fn locked_key_fails_fast_unattended_then_unlocked_agent_works() {
     let started = std::time::Instant::now();
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 4, "{out:?}");
-    assert!(out.stdout.contains("--interactive"), "{out:?}");
+    assert!(
+        out.stdout
+            .contains("s.gpg: the secret key is locked (unlock it in gpg-agent or rerun with --interactive); gpg: "),
+        "{out:?}"
+    );
+    assert!(!out.stdout.contains("no usable secret key"), "{out:?}");
     assert!(
         started.elapsed() < std::time::Duration::from_secs(20),
         "no hanging prompt"
@@ -533,7 +559,8 @@ fn gpg_messages_name_non_openpgp_data_and_subkey_fingerprints() {
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stdout.contains("not OpenPGP data"), "{out:?}");
     assert!(!out.stdout.contains("symmetric"), "{out:?}");
-    assert!(out.stdout.contains("; gpg: gpg: "), "the first gpg diagnostic: {out:?}");
+    assert!(out.stdout.contains("; gpg: "), "the first gpg diagnostic: {out:?}");
+    assert!(!out.stdout.contains("gpg: gpg:"), "one prefix: {out:?}");
     assert!(
         !out.stdout.contains("--interactive"),
         "no unlock hint without a key problem: {out:?}"
