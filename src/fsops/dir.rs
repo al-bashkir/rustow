@@ -431,7 +431,9 @@ impl Dir {
     }
 
     /// Moves the file or symlink `name` to `to_name` in `to`, never over
-    /// anything there. Across filesystems it copies, then removes `name`.
+    /// anything there. Across filesystems it copies into a temporary file
+    /// in `to`, renames that to `to_name`, then removes `name`: a copy that
+    /// fails leaves no partial file at `to_name`, and `name` stays.
     pub fn move_to(&self, name: &OsStr, to: &Dir, to_name: &OsStr) -> Result<()> {
         let (from, dest) = (self.entry(name), to.entry(to_name));
         let what = || format!("back up {} to {}", from.display(), dest.display());
@@ -440,7 +442,7 @@ impl Dir {
                 return Err(Error::Failed(format!("backup {} already exists", dest.display())));
             }
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => self
-                .copy_to(name, to, to_name)
+                .copy_through_temp(name, to, to_name)
                 .and_then(|()| sys(unlinkat(&self.fd, name, UnlinkatFlags::NoRemoveDir)))
                 .ctx(what)?,
             other => other.ctx(what)?,
@@ -448,6 +450,18 @@ impl Dir {
         to.sync();
         self.sync();
         Ok(())
+    }
+
+    /// `copy_to` a temporary file in `to`, then a no-replace rename to `to_name`.
+    fn copy_through_temp(&self, name: &OsStr, to: &Dir, to_name: &OsStr) -> io::Result<()> {
+        let temp = temp_name();
+        let copied = self
+            .copy_to(name, to, OsStr::new(&temp))
+            .and_then(|()| rename_noreplace(&to.fd, OsStr::new(&temp), &to.fd, to_name));
+        if copied.is_err() {
+            let _ = unlinkat(&to.fd, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+        }
+        copied
     }
 
     /// Copies the file or symlink `name` to the new entry `to_name` in `to`.
