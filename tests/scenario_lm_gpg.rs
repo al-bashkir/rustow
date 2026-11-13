@@ -119,18 +119,29 @@ fn edit_to_a_recipient_without_a_secret_key_here_is_not_verified() {
     assert!(fx.workspaces().is_empty());
 }
 
-/// When the new ciphertext does not decrypt here, `enc` fails and keeps
-/// the plaintext: it cannot tell a broken file from a missing key.
+/// When the new ciphertext does not decrypt here, or decrypts to other
+/// bytes, `enc` fails and keeps the plaintext.
 #[test]
 fn enc_fails_when_its_new_ciphertext_does_not_decrypt() {
     let Some((fx, _home)) = setup("") else { return };
     fx.write("p", "plain\n");
-    let path = gpg_wrapper(&fx, "*\" --decrypt \"*) echo 'gpg: broken' >&2; exit 2;;");
-    let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("PATH", &path)]);
-    assert_eq!(out.code, 4, "{out:?}");
-    assert!(out.stderr.contains("new ciphertext failed verification"), "{out:?}");
-    assert_eq!(read(&fx.repo.join("p")), "plain\n");
-    assert!(!fx.repo.join("p.gpg").exists());
+    for (arm, why) in [
+        (
+            "*\" --decrypt \"*) echo 'gpg: broken' >&2; exit 2;;",
+            "new ciphertext failed verification",
+        ),
+        (
+            "*\" --decrypt \"*) \"$real\" \"$@\" | tr a b; exit 0;;",
+            "new ciphertext does not decrypt to the input",
+        ),
+    ] {
+        let path = gpg_wrapper(&fx, arm);
+        let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("PATH", &path)]);
+        assert_eq!(out.code, 4, "{out:?}");
+        assert!(out.stderr.contains(why), "{out:?}");
+        assert_eq!(read(&fx.repo.join("p")), "plain\n");
+        assert!(!fx.repo.join("p.gpg").exists());
+    }
 }
 
 /// A signal that arrives while rustow encrypts the edit cancels it too:
@@ -150,7 +161,7 @@ fn signal_during_the_encryption_of_an_edit_cancels_it() {
 }
 
 /// A PATH whose first `gpg` runs the shell `case` branch `arm` on its
-/// arguments, then the real gpg.
+/// arguments, then the real gpg (`$real` in the branch).
 fn gpg_wrapper(fx: &Fixture, arm: &str) -> String {
     let real = Command::new("sh")
         .args(["-c", "command -v gpg"])
@@ -160,7 +171,10 @@ fn gpg_wrapper(fx: &Fixture, arm: &str) -> String {
     let real = String::from_utf8(real).unwrap();
     let wrapper = fx.editor(
         "gpg",
-        &format!("case \" $* \" in {arm} esac\nexec {} \"$@\"", real.trim()),
+        &format!(
+            "real='{}'\ncase \" $* \" in {arm} esac\nexec \"$real\" \"$@\"",
+            real.trim()
+        ),
     );
     let bin = std::path::Path::new(&wrapper).parent().unwrap().display().to_string();
     format!("{bin}:{}", std::env::var("PATH").unwrap())
