@@ -201,7 +201,13 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Resu
         .sort_by_file_name()
         .into_iter();
     while let Some(entry) = walker.next() {
-        let entry = entry.map_err(|e| Error::Failed(format!("scan repository {}: {e}", repo.display())))?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                out.skipped.push(unreadable(repo, e)?);
+                continue;
+            }
+        };
         let rel = repo_relative(repo, entry.path())?;
         if visit_entry(rel, entry.file_type(), ignore, cfg, &mut out) {
             walker.skip_current_dir();
@@ -217,6 +223,20 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Resu
     out.inactive.sort();
     out.rule_warnings = check_file_rules(repo, ignore, cfg, &out);
     Ok(out)
+}
+
+/// A path below the repository root that the walk cannot read (a
+/// directory without permission, a path longer than PATH_MAX) is one
+/// skipped entry. An error on the root itself stops the command.
+fn unreadable(repo: &Path, e: walkdir::Error) -> Result<Skipped> {
+    let why = e.io_error().map_or_else(|| e.to_string(), ToString::to_string);
+    match e.path().filter(|p| *p != repo) {
+        Some(path) => Ok(Skipped {
+            path: repo_relative(repo, path)?,
+            reason: format!("cannot read: {why}"),
+        }),
+        None => Err(Error::Failed(format!("scan repository {}: {why}", repo.display()))),
+    }
 }
 
 /// Each `[[file_rules]]` entry that cannot control folding, with the reason.

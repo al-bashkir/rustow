@@ -259,3 +259,43 @@ fn absolute_link_to_the_source_is_taken_over() {
     let twice = fx.ok(&["link", ".gitc"]);
     assert!(twice.stdout.contains("0 changed, 1 unchanged"), "{twice:?}");
 }
+
+/// An unreadable directory is one skipped entry: the other sources
+/// deploy, and the directory above it does not fold.
+#[test]
+fn unreadable_directory_is_skipped_with_a_warning() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.write(".config/app/a.conf", "a\n");
+    fx.write(".config/app/locked/x", "x\n");
+    let locked = fx.repo.join(".config/app/locked");
+    let set_mode = |mode| fs::set_permissions(&locked, fs::Permissions::from_mode(mode)).unwrap();
+    set_mode(0o000);
+    let apply = fx.run(&["apply"]);
+    let check = fx.run(&["check"]);
+    let status = fx.run(&["status"]);
+    let arg = fx.run(&["apply", ".config/app/locked"]);
+    set_mode(0o755);
+    let warning = "warning: .config/app/locked: cannot read: Permission denied";
+    assert_eq!(apply.code, 0, "{apply:?}");
+    assert!(apply.stderr.contains(warning), "{apply:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")), "{apply:?}");
+    assert!(is_symlink(&fx.home_path(".config/app/a.conf")), "{apply:?}");
+    let app = fs::symlink_metadata(fx.home_path(".config/app")).unwrap();
+    assert!(app.is_dir(), "no fold over an unreadable directory: {apply:?}");
+    assert_eq!(check.code, 0, "{check:?}");
+    assert!(check.stderr.contains(warning), "{check:?}");
+    assert_eq!(status.code, 0, "{status:?}");
+    assert!(
+        status
+            .stdout
+            .contains("SKIPPED .config/app/locked: cannot read: Permission denied"),
+        "{status:?}"
+    );
+    assert_eq!(arg.code, 2, "{arg:?}");
+    assert!(
+        arg.stderr.contains("source '.config/app/locked': cannot read"),
+        "{arg:?}"
+    );
+}

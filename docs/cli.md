@@ -75,6 +75,7 @@ A problem with one source does not stop the run. rustow skips that source and de
 - a file with a `[[template_rules]]` entry that is not a template;
 - a template in `[[files]]`;
 - a symlink or another file that is not a regular file;
+- a directory or a path below the repository root that rustow cannot read, for example a directory without read permission or a path that is too long ("cannot read: Permission denied …"). A directory above it does not fold. A repository root that rustow cannot read still stops the command;
 - a `[[files]]` or `[[template_rules]]` entry, or a `rustow file add` registration, whose source does not exist, is ignored, is reserved or is a directory.
 
 `apply`, `rustow` without a command, `link`, `file apply`, `template apply` and `diff` print one line on stderr for each skipped source in the path selection:

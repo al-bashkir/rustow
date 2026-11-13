@@ -261,19 +261,21 @@ fn holds_only(ctx: &Context, dir: &RelPath, allowed: &BTreeSet<&RelPath>) -> Res
 
 /// Repository-relative paths of all entries below `dir` (symlinks and
 /// special files included) and whether each is a directory, without
-/// following links.
+/// following links. A path that cannot be read counts as a file that is
+/// not a source: no fold covers it, and no unfold hides it.
 fn entries_below(ctx: &Context, dir: &RelPath) -> Result<Vec<(RelPath, bool)>> {
+    let top = ctx.root.join(dir.as_path());
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(ctx.root.join(dir.as_path()))
-        .min_depth(1)
-        .follow_links(false)
-    {
-        let entry = entry.map_err(|e| Error::Failed(format!("scan {dir}: {e}")))?;
-        let rel = entry.path().strip_prefix(&ctx.root).unwrap_or(entry.path());
+    for entry in walkdir::WalkDir::new(&top).min_depth(1).follow_links(false) {
+        let (path, is_dir) = match &entry {
+            Ok(e) => (e.path(), e.file_type().is_dir()),
+            Err(e) => (e.path().unwrap_or(&top), false),
+        };
+        let rel = path.strip_prefix(&ctx.root).unwrap_or(path);
         let rel = rel
             .to_str()
             .ok_or_else(|| Error::Config(format!("non-UTF-8 path below {dir}")))?;
-        out.push((RelPath::parse(rel)?, entry.file_type().is_dir()));
+        out.push((RelPath::parse(rel)?, is_dir));
     }
     Ok(out)
 }
