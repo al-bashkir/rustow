@@ -419,24 +419,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
     let policy = g.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {
-        let mut items: Vec<ItemReport> = plan
-            .items
-            .iter()
-            .map(|i| {
-                let (action, detail) = execute::predict(i, policy);
-                let mode = i.source.mode.shown_label();
-                ItemReport {
-                    source: i.source.path.clone(),
-                    dest: i.dest.clone(),
-                    mode,
-                    action,
-                    detail,
-                }
-            })
-            .collect();
-        items.extend(orphaned);
-        printer.items(&items, if g.dry_run { RunKind::DryRun } else { RunKind::Blocked });
-        return Ok(execute::exit_code(&items));
+        return Ok(unrun(&plan, policy, orphaned, g.dry_run, printer));
     }
     let stop = interrupt_flag()?;
     let backup_dir =
@@ -453,6 +436,18 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     let mut items = execute::execute(plan, &run, &mut state);
     items.extend(orphaned);
     finish(&ctx, &mut state, held.as_ref(), printer, &items)
+}
+
+/// Prints what each item of `plan` would do under `policy`, for a dry run
+/// or a run that the abort policy stopped, and gives the exit code.
+fn unrun(plan: &Plan, policy: Policy, orphaned: Vec<ItemReport>, dry_run: bool, printer: &Printer) -> i32 {
+    let predicted = plan.items.iter().map(|i| {
+        let (action, detail) = execute::predict(i, policy);
+        ItemReport::of(i, action, detail)
+    });
+    let items: Vec<ItemReport> = predicted.chain(orphaned).collect();
+    printer.items(&items, if dry_run { RunKind::DryRun } else { RunKind::Blocked });
+    execute::exit_code(&items)
 }
 
 /// Reports the items first, so a state write failure cannot hide what changed on disk.

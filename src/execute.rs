@@ -90,6 +90,19 @@ pub struct ItemReport {
     pub detail: Option<String>,
 }
 
+impl ItemReport {
+    /// The report of the plan item `item` with `action` and `detail`.
+    pub fn of(item: &PlanItem, action: Action, detail: Option<String>) -> ItemReport {
+        ItemReport {
+            source: item.source.path.clone(),
+            dest: item.dest.clone(),
+            mode: item.source.mode.shown_label(),
+            action,
+            detail,
+        }
+    }
+}
+
 /// Exit code for a finished or predicted run (see docs/cli.md).
 pub fn exit_code(items: &[ItemReport]) -> i32 {
     if items.iter().any(|i| i.action == Action::Fail) {
@@ -214,13 +227,7 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
     let mut queued = Vec::new();
     for item in plan.items {
         let (action, detail, sudo) = execute_item(&item, run, state);
-        out.push(ItemReport {
-            source: item.source.path.clone(),
-            dest: item.dest.clone(),
-            mode: item.source.mode.shown_label(),
-            action,
-            detail,
-        });
+        out.push(ItemReport::of(&item, action, detail));
         if sudo {
             queued.push((out.len() - 1, item));
         }
