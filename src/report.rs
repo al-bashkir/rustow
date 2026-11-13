@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::execute::{Action, ItemReport};
+use crate::execute::{Action, INTERRUPTED, ItemReport};
 use crate::source::Skipped;
 
 /// Writes command results to stdout. rustow prints only after its work is
@@ -174,13 +174,25 @@ impl Printer {
             }
         }
         if !problems.is_empty() {
-            outln!("Conflicts:");
-            for i in problems {
-                self.item_line(i);
-            }
+            self.problem_block(problems);
         }
         if !self.quiet {
             outln!("{}", summary_line(items, run));
+        }
+    }
+
+    /// The "Conflicts:" block. An interrupt can stop thousands of items:
+    /// they share one line.
+    fn problem_block(&self, problems: Vec<&ItemReport>) {
+        outln!("Conflicts:");
+        let (stopped, problems): (Vec<&ItemReport>, Vec<&ItemReport>) =
+            (problems.into_iter()).partition(|i| i.action == Action::Fail && i.detail.as_deref() == Some(INTERRUPTED));
+        for i in problems {
+            self.item_line(i);
+        }
+        if !stopped.is_empty() {
+            let n = plural(stopped.len(), "item");
+            outln!("{} interrupted before {n}; nothing changed", self.verb(Action::Fail));
         }
     }
 
@@ -250,6 +262,11 @@ impl Printer {
 /// ": <detail>" for a report line, escaped as `shown`; empty without one.
 pub fn detail(text: Option<&str>) -> String {
     text.map(|d| format!(": {}", shown(d))).unwrap_or_default()
+}
+
+/// "1 item", "2 items": a count and a noun that takes an "s" in the plural.
+pub fn plural(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
 struct Counts {
@@ -414,6 +431,13 @@ mod tests {
         assert_eq!(shown("a\u{202e}b"), r"a\u{202e}b");
         let near = "\u{61b}\u{61d}\u{200d}\u{2010}\u{2029}\u{202f}\u{2065}\u{206a}";
         assert!(matches!(shown(near), Cow::Borrowed(_)), "only these code points");
+    }
+
+    #[test]
+    fn one_takes_the_singular() {
+        assert_eq!(plural(0, "item"), "0 items");
+        assert_eq!(plural(1, "item"), "1 item");
+        assert_eq!(plural(2, "conflict"), "2 conflicts");
     }
 
     /// On a terminal each verb gets its color: changes green, notes cyan,

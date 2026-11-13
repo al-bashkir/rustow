@@ -250,7 +250,7 @@ fn a_signal_while_rustow_plans_changes_nothing_and_leaves_no_journal() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(4), "{out:?}");
     assert!(
-        stdout.contains("interrupted before this item; nothing changed"),
+        stdout.contains("error interrupted before 2 items; nothing changed"),
         "{stdout}"
     );
     assert!(!fx.home_path(".bashrc").exists(), "nothing written");

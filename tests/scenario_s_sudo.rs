@@ -250,6 +250,24 @@ fn the_helper_finds_a_conflict_below_a_directory_you_cannot_search() {
     assert!(uncovered(&s, || x.is_symlink()), "{out:?}");
 }
 
+/// A first signal stops the run. The items that did not run share one
+/// line of text output; JSON keeps one object for each. (The fake sudo
+/// interrupts rustow before the helper gets a job.)
+#[test]
+fn the_items_that_an_interrupt_stopped_share_one_line() {
+    let s = Sudo::new(&FAKE.replacen('\n', "\nkill -INT $PPID; sleep 1\n", 1));
+    let out = s.run(&["apply", "-q"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    let line = "   error interrupted before 2 items; nothing changed\n";
+    assert_eq!(out.stdout, format!("Conflicts:\n{line}"), "{out:?}");
+    let out = s.run(&["apply", "--json"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    let stopped = (v["items"].as_array().unwrap().iter())
+        .filter(|i| i["action"] == "error" && i["detail"] == "interrupted before this item; nothing changed");
+    assert_eq!(stopped.count(), 2, "{v}");
+}
+
 #[test]
 fn a_system_file_you_cannot_write_goes_through_sudo() {
     let s = Sudo::new(FAKE);

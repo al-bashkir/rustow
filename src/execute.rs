@@ -29,6 +29,9 @@ pub enum Policy {
     Overwrite,
 }
 
+/// The detail of each item that a first signal kept from running (an `Action::Fail`).
+pub const INTERRUPTED: &str = "interrupted before this item; nothing changed";
+
 /// Outcome of one item, as reported to the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -230,8 +233,7 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
 fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Option<String>, bool) {
     let (action, detail) = predict(item, run.policy);
     if run.stop.load(Ordering::SeqCst) {
-        let why = "interrupted before this item; nothing changed";
-        return (Action::Fail, Some(why.into()), false);
+        return (Action::Fail, Some(INTERRUPTED.into()), false);
     }
     let (done, sudo) = match &item.step {
         Step::Deploy(_) if matches!(action, Action::Conflict | Action::Skip | Action::Fail) => {
@@ -736,8 +738,7 @@ fn remove_item(
     cache_dir: &Path,
 ) -> (Action, Option<String>, Option<Job<&'static Deploy>>) {
     if stop.load(Ordering::SeqCst) {
-        let why = "interrupted before this item; nothing changed";
-        return (Action::Fail, Some(why.into()), None);
+        return (Action::Fail, Some(INTERRUPTED.into()), None);
     }
     match &r.verdict {
         Verdict::Keep(why) => (Action::Conflict, Some(why.clone()), None),

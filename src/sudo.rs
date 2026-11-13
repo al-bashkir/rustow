@@ -148,7 +148,7 @@ fn exchange(jobs: &[Job<&Deploy>], stop: &AtomicBool, done: &mut Vec<Done>, unan
         .map_err(|e| Error::Failed(format!("wait for {shown}: {e}")))?;
     match (done.len() == jobs.len(), stop.load(Ordering::SeqCst)) {
         (true, _) => Ok(()),
-        (false, true) => Err(Error::Failed("interrupted before this item; nothing changed".into())),
+        (false, true) => Err(Error::Failed(crate::execute::INTERRUPTED.into())),
         (false, false) => Err(Error::Failed(format!(
             "{shown} failed ({status}); system files that you cannot write need it"
         ))),
