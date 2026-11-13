@@ -26,6 +26,8 @@ A symlink must point only at a file that other users cannot change. rustow check
 
 When a check fails, the item is a conflict. The message starts with "untrusted link target: repository source: …" or "untrusted link target: cache entry: …". It gives the path and the cause, for example "writable by others" or "writable by group N, which is not the private group of uid M; run `chmod g-w <path>`". It also tells you to copy the file instead.
 
+rustow checks each path of a chain once in a command, while it plans: the result counts for every link target below that path.
+
 The same rule protects system files. rustow installs a system file as root, so its repository source must pass the rule for you: each path on the chain of the source is owned by root or by you, and only your user-private group may write it. Otherwise the item is a conflict, also with `--force` or `--backup`: "untrusted source: <path> is writable by others; another user can change what rustow installs as root". `check` reports it as a problem.
 
 A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow opens the directories above a destination one at a time and never follows a symlink by accident. It follows a symlinked ancestor only when both checks pass for the current user:

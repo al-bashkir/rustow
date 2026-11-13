@@ -479,19 +479,59 @@ pub fn trust_cache(entry: &Path, owner: u32) -> std::result::Result<(), String> 
         existing = existing.parent().ok_or("cache path has no existing ancestor")?;
     }
     let creator = (existing != entry).then(|| geteuid().as_raw());
-    let real = fs::canonicalize(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
-    let mut chain = Vec::new();
-    for dir in real.ancestors() {
-        let m = fs::metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        chain.push(Owned {
-            path: dir.to_path_buf(),
-            uid: m.uid(),
-            gid: m.gid(),
-            mode: m.mode() & 0o7777,
-            acl: has_acl(dir),
-        });
+    let real = real_path(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
+    trusted_chain(&real, owner)?;
+    // The paths passed: only the creator is left to check.
+    check_chain(&[], creator, owner, private_gid_of(owner))
+}
+
+/// `check_chain` of the real path `real` and of each directory above it,
+/// the nearest first. The verdict of each path is kept for the run: the
+/// sources of one tree share their directories, and a deep tree would
+/// cost the square of its depth for each source.
+fn trusted_chain(real: &Path, owner: u32) -> std::result::Result<(), String> {
+    use std::collections::HashMap;
+    type Verdicts = HashMap<(u32, PathBuf), std::result::Result<(), String>>;
+    thread_local!(static KNOWN: std::cell::RefCell<Verdicts> = Default::default());
+    let key = (owner, real.to_path_buf());
+    if let Some(known) = KNOWN.with_borrow(|k| k.get(&key).cloned()) {
+        return known;
     }
-    check_chain(&chain, creator, owner, private_gid_of(owner))
+    let verdict = owned(real)
+        .and_then(|path| check_chain(&[path], None, owner, private_gid_of(owner)))
+        .and_then(|()| real.parent().map_or(Ok(()), |up| trusted_chain(up, owner)));
+    KNOWN.with_borrow_mut(|k| k.insert(key, verdict.clone()));
+    verdict
+}
+
+/// Owner, group, mode and ACL of `path`, following a symlink.
+fn owned(path: &Path) -> std::result::Result<Owned, String> {
+    let m = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Owned {
+        path: path.to_path_buf(),
+        uid: m.uid(),
+        gid: m.gid(),
+        mode: m.mode() & 0o7777,
+        acl: has_acl(path),
+    })
+}
+
+/// `fs::canonicalize` of `path`, with each directory resolved once for the
+/// run: below a real directory, a name that is not a symlink is real too.
+fn real_path(path: &Path) -> io::Result<PathBuf> {
+    use std::collections::HashMap;
+    thread_local!(static REAL: std::cell::RefCell<HashMap<PathBuf, PathBuf>> = Default::default());
+    if let Some(real) = REAL.with_borrow(|r| r.get(path).cloned()) {
+        return Ok(real);
+    }
+    let real = match (path.parent(), path.file_name()) {
+        (Some(up), Some(name)) if up.is_absolute() && !fs::symlink_metadata(path)?.is_symlink() => {
+            real_path(up)?.join(name)
+        }
+        _ => fs::canonicalize(path)?,
+    };
+    REAL.with_borrow_mut(|r| r.insert(path.to_path_buf(), real.clone()));
+    Ok(real)
 }
 
 /// Owner of the deepest existing directory at or above `dir`.
@@ -1095,6 +1135,25 @@ mod tests {
         assert!(trust_cache(Path::new("/usr"), 0).is_ok());
         let e = trust_cache(Path::new("/usr/rustow-no-such-dir/entry"), 0).unwrap_err();
         assert!(e.contains("would be created by uid"), "{e}");
+    }
+
+    /// The chain is the one of the real path, also behind a symlink, and
+    /// the nearest path that the rule refuses gives the reason.
+    #[test]
+    fn trust_cache_checks_the_real_path_nearest_first() {
+        let t = tempfile::tempdir().unwrap();
+        let base = t.path().canonicalize().unwrap();
+        fs::create_dir_all(base.join("real/sub")).unwrap();
+        fs::write(base.join("real/sub/f"), "x").unwrap();
+        std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+        for dir in ["real", "real/sub"] {
+            fs::set_permissions(base.join(dir), fs::Permissions::from_mode(0o777)).unwrap();
+        }
+        let me = geteuid().as_raw();
+        let open = |dir: &str| format!("{} is writable by others", base.join(dir).display());
+        assert_eq!(trust_cache(&base.join("link/sub/f"), me), Err(open("real/sub")));
+        assert_eq!(trust_cache(&base.join("link/sub/new"), me), Err(open("real/sub")));
+        assert_eq!(trust_cache(&base.join("link/new"), me), Err(open("real")));
     }
 
     #[test]
