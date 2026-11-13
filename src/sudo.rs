@@ -647,6 +647,60 @@ mod tests {
         assert!(serve_all(&[gone])[0].result.is_ok() && !f.exists());
     }
 
+    /// Only the metadata of a file that the plan could not read changes, but
+    /// the helper finds other content than the recorded one: a conflict,
+    /// which overwrite and backup resolve as for a content change. They
+    /// write the desired content and metadata; backup saves the old file.
+    #[test]
+    fn the_helper_resolves_a_metadata_change_of_a_modified_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_t, d) = tmp();
+        let f = d.join("f");
+        fs::create_dir(d.join("bk")).unwrap();
+        let mode = || fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        let fix = || {
+            fs::write(&f, "edited").unwrap();
+            fs::set_permissions(&f, fs::Permissions::from_mode(0o600)).unwrap();
+            let meta = FileMeta {
+                mode: Some(0o640),
+                ..FileMeta::default()
+            };
+            let file = Desired::File {
+                hash: Hash::of(b"ours"),
+                meta,
+            };
+            let mut deploy = crate::execute::tests::create(&f, file, Some(b"ours"));
+            (deploy.observed, deploy.decision) = (unreadable(&f), crate::plan::Decision::FixMetadata);
+            deploy.expect = Some(Hash::of(b"ours"));
+            deploy
+        };
+        let write = |deploy, policy, backup: &str| Job::Write {
+            deploy,
+            policy,
+            backup: d.join(backup),
+            temp: format!("{TEMP_PREFIX}test"),
+        };
+        let skipped = fix();
+        let done = &serve_all(&[write(&skipped, Policy::Skip, "bk/1")])[0];
+        assert!(done.conflict, "{:?}", done.result);
+        assert_eq!(
+            (fs::read(&f).unwrap(), mode()),
+            (b"edited".to_vec(), 0o600),
+            "left as it is"
+        );
+
+        let forced = fix();
+        let done = &serve_all(&[write(&forced, Policy::Overwrite, "bk/2")])[0];
+        assert!(done.result.is_ok(), "{:?}", done.result);
+        assert_eq!((fs::read(&f).unwrap(), mode()), (b"ours".to_vec(), 0o640));
+
+        let saved = fix();
+        let done = &serve_all(&[write(&saved, Policy::Backup, "bk/3")])[0];
+        assert!(done.result.is_ok(), "{:?}", done.result);
+        assert_eq!((fs::read(&f).unwrap(), mode()), (b"ours".to_vec(), 0o640));
+        assert_eq!(fs::read(d.join("bk/3")).unwrap(), b"edited", "saved first");
+    }
+
     /// The plan could not see the destination (its directory is not
     /// searchable for the user); the helper (root) can. A create finds
     /// nothing there, an update finds the recorded content: anything else

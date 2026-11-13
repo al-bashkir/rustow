@@ -362,18 +362,26 @@ pub struct NewFile<'a> {
 }
 
 /// A temporary name for the change of `d` (`fsops::temp_name`), journaled
-/// in each directory where the change may create it: the destination's
-/// for a new file or a replaced object, and the backup's for a change
-/// that may go to `backup`: a conflict, an update of a file that the plan
-/// could not read (its content may not be the recorded one), or a change
-/// of a file that the plan could not see.
+/// in each directory where the change may create it (`temp_places`).
 pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
+    let (here, away) = temp_places(d, policy);
+    temp_in(d.path.parent().filter(|_| here), away, backup)
+}
+
+/// Whether the change of `d` may create a temporary file in the
+/// destination's directory (a new file or a replaced object), and in the
+/// backup's (a change that may go to the backup: a conflict, an update or
+/// a metadata change of a file that the plan could not read, whose content
+/// may not be the recorded one, or a change of a file that the plan could
+/// not see).
+fn temp_places(d: &Deploy, policy: Policy) -> (bool, bool) {
     let file = matches!(d.desired, Desired::File { .. });
     let replaces = matches!(d.decision, Decision::Create | Decision::Conflict(_));
-    let here = d.decision == Decision::Update || (file && replaces);
-    let unverified = (d.decision == Decision::Update && d.expect.is_some()) || d.observed == Observed::Hidden;
+    let unread = matches!(d.decision, Decision::Update | Decision::FixMetadata) && d.expect.is_some();
+    let here = d.decision == Decision::Update || (file && replaces) || unread;
+    let unverified = unread || d.observed == Observed::Hidden;
     let away = policy == Policy::Backup && (unverified || matches!(d.decision, Decision::Conflict(_)));
-    temp_in(d.path.parent().filter(|_| here), away, backup)
+    (here, away)
 }
 
 /// A temporary name (`fsops::temp_name`), journaled in `dir`, and in the
@@ -500,7 +508,13 @@ fn apply_dest(
             recheck(dir, name, &d.path, &d.observed, None)?;
             replace(dir, name, d, new, away, me)
         }
-        Decision::FixMetadata => fix_metadata(dir, name, d).map(|()| None),
+        Decision::FixMetadata => match fix_metadata(dir, name, d) {
+            // As in `update`: other content in a file that the plan could not read.
+            Err(Error::Conflict(_)) if matches!(away.0, Policy::Overwrite | Policy::Backup) => {
+                replace(dir, name, d, new, away, me)
+            }
+            fixed => fixed.map(|()| None),
+        },
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
 }
@@ -1082,6 +1096,65 @@ pub(crate) mod tests {
         assert!(verify(&dir, OsStr::new("f"), &d).is_ok());
         d.decision = Decision::Create;
         assert!(verify(&dir, OsStr::new("f"), &d).is_err());
+    }
+
+    /// Where a change may create its temporary file: in the destination's
+    /// directory when it writes a file there, and in the backup's when it
+    /// may move the old object away under `--backup`.
+    #[test]
+    fn a_change_journals_its_temporary_file_where_it_may_make_it() {
+        let file = Desired::File {
+            hash: Hash::of(b"x"),
+            meta: FileMeta::default(),
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let mut d = create(&tmp.path().join("f"), file, Some(b"x"));
+        let unreadable = Observed::Unreadable {
+            mode: 0o600,
+            uid: 0,
+            gid: 0,
+        };
+        let conflict = Decision::Conflict(Conflict::Modified);
+        let cases = [
+            (Observed::Missing, Decision::Create, None, (true, false)),
+            (Observed::Missing, conflict, None, (true, true)),
+            (unreadable.clone(), Decision::Update, Some(Hash::of(b"x")), (true, true)),
+            (
+                unreadable.clone(),
+                Decision::FixMetadata,
+                Some(Hash::of(b"x")),
+                (true, true),
+            ),
+            (unreadable, Decision::UpToDate, Some(Hash::of(b"x")), (false, false)),
+        ];
+        for (observed, decision, expect, want) in cases {
+            (d.observed, d.decision, d.expect) = (observed, decision, expect);
+            assert_eq!(temp_places(&d, Policy::Backup), want, "{:?} {decision:?}", d.observed);
+            assert_eq!(temp_places(&d, Policy::Overwrite), (want.0, false));
+        }
+        d.desired = Desired::Symlink("t".into());
+        (d.observed, d.decision, d.expect) = (Observed::Missing, Decision::Create, None);
+        assert_eq!(
+            temp_places(&d, Policy::Backup),
+            (false, false),
+            "a symlink needs no temporary file"
+        );
+    }
+
+    /// A metadata change sends no content, unless the plan could not read
+    /// the file: then `--force` may replace it.
+    #[test]
+    fn only_a_metadata_change_of_an_unread_file_sends_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = Desired::File {
+            hash: Hash::of(b"x"),
+            meta: FileMeta::default(),
+        };
+        let mut d = create(&tmp.path().join("f"), file, Some(b"x"));
+        d.decision = Decision::FixMetadata;
+        assert_eq!(d.open_content().unwrap().1, 0);
+        d.expect = Some(Hash::of(b"x"));
+        assert_eq!(d.open_content().unwrap().1, 1);
     }
 
     /// Content with another hash than planned never replaces the file, and

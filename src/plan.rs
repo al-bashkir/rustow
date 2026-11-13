@@ -332,12 +332,16 @@ pub struct Deploy {
 
 impl Deploy {
     /// A reader of the content that the planned change writes (a new or
-    /// replaced regular file), and its length; empty for any other change.
+    /// replaced regular file, also a metadata change of a file that the
+    /// plan could not read: `--force` may replace it), and its length;
+    /// empty for any other change.
     pub fn open_content(&self) -> Result<(Box<dyn Read + '_>, u64)> {
-        match (self.decision, &self.content) {
-            (Decision::Create | Decision::Update | Decision::Conflict(_), Some(content)) => {
-                Ok((content.open()?, content.size()))
-            }
+        let writes = matches!(
+            self.decision,
+            Decision::Create | Decision::Update | Decision::Conflict(_)
+        ) || (self.decision == Decision::FixMetadata && self.expect.is_some());
+        match &self.content {
+            Some(content) if writes => Ok((content.open()?, content.size())),
             _ => Ok((Box::new(std::io::empty()), 0)),
         }
     }
