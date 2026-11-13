@@ -21,7 +21,7 @@ A symlink must point only at a file that other users cannot change. rustow check
 
 - Each path must be owned by root or by the owner of the destination directory. Otherwise the cause is "<path> is owned by uid N, not by root or uid M".
 - No path may be writable by others. A sticky directory that root owns, such as `/tmp`, is the exception.
-- A path may be writable by its group only when that group is the user-private group of the owner: the primary group of the owner, with the owner's name and no other members. Thus a repository made with the default umask 002 of such systems is trusted.
+- A path may be writable by its group only when that group is the user-private group of the owner: the primary group of the owner, with the owner's name and no other members. An account in `/etc/passwd` whose primary group it is counts as a member. Thus a repository made with the default umask 002 of such systems is trusted.
 - On Linux, a path with a POSIX ACL may not be writable by its group bits. With an ACL, these bits are the ACL mask: the most that each user and group in the ACL may do. Otherwise the cause is "<path> has an ACL that can give write access to other users; run `setfacl -b <path>`". rustow does not read macOS ACLs.
 
 When a check fails, the item is a conflict. The message starts with "untrusted link target: repository source: …" or "untrusted link target: cache entry: …". It gives the path and the cause, for example "writable by others" or "writable by group N, which is not the private group of uid M; run `chmod g-w <path>`". It also tells you to copy the file instead.

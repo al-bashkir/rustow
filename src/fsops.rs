@@ -394,8 +394,8 @@ fn group_write(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result
 /// The owner's user-private group: the owner's primary group, when it has
 /// the owner's name and lists no other member. Only that group may have
 /// write access on a link target's chain.
-/// shortcut: users whose primary group this is are not listed in `members`;
-/// scan the account database if such setups must be caught.
+/// `members` holds the accounts whose primary group it is, too
+/// (`primary_members`).
 pub fn user_private_gid(owner: &str, primary_gid: u32, group: &str, members: &[String]) -> Option<u32> {
     (group == owner && members.iter().all(|m| m == owner)).then_some(primary_gid)
 }
@@ -410,7 +410,12 @@ fn private_gid_of(owner: u32) -> Option<u32> {
     let lookup = || {
         let user = User::from_uid(Uid::from_raw(owner)).ok().flatten()?;
         let group = Group::from_gid(user.gid).ok().flatten()?;
-        user_private_gid(&user.name, user.gid.as_raw(), &group.name, &group.mem)
+        // shortcut: only /etc/passwd (where the musl build looks users up),
+        // not NSS sources such as LDAP. Unreadable: no private group.
+        let passwd = read_limited(Path::new("/etc/passwd"), OFlag::empty(), crate::config::MAX_FILE_SIZE).ok()?;
+        let mut members = group.mem;
+        members.extend(primary_members(&String::from_utf8_lossy(&passwd), user.gid.as_raw()));
+        user_private_gid(&user.name, user.gid.as_raw(), &group.name, &members)
     };
     KNOWN.with_borrow_mut(|known| *known.entry(owner).or_insert_with(lookup))
 }
@@ -421,6 +426,19 @@ fn private_gid_of(owner: u32) -> Option<u32> {
 /// `acl_get_fd` if the trust rule must see them there.
 pub fn has_acl(path: impl rustix::path::Arg) -> bool {
     rustix::fs::getxattr_query(path, "system.posix_acl_access").is_ok()
+}
+
+/// The accounts in `passwd` (the text of `/etc/passwd`) whose primary
+/// group is `gid`. A line that does not parse is no account.
+fn primary_members(passwd: &str, gid: u32) -> Vec<String> {
+    passwd
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            (fields.nth(2)?.parse::<u32>().ok()? == gid).then(|| name.to_owned())
+        })
+        .collect()
 }
 
 /// Applies `check_chain` to the real path of a cache entry, which may not
@@ -948,6 +966,18 @@ mod tests {
             "extra member"
         );
         assert_eq!(user_private_gid("alice", 1000, "staff", &[]), None, "name mismatch");
+    }
+
+    /// An account whose primary group is the owner's group is a member
+    /// too, also when the group does not list it.
+    #[test]
+    fn primary_members_are_the_accounts_with_that_primary_gid() {
+        let passwd = "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\n\
+                      mallory:x:1001:1000::/home/mallory:/bin/sh\nbad line\nodd:x:1002:x::/:/bin/sh\n";
+        assert_eq!(primary_members(passwd, 1000), ["alice", "mallory"]);
+        assert_eq!(primary_members(passwd, 0), ["root"]);
+        let members = primary_members(passwd, 1000);
+        assert_eq!(user_private_gid("alice", 1000, "alice", &members), None);
     }
 
     #[test]
