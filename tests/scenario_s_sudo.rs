@@ -175,6 +175,40 @@ fn a_system_file_below_a_directory_you_cannot_search_is_compared_with_the_state(
     assert!(!uncovered(&s, || x.exists()), "{gone:?}");
 }
 
+/// A client that is killed after it sent a job records nothing, but the
+/// helper can still write the file. The next run finds the desired content
+/// where the state names the old one: it writes it again and records it.
+#[test]
+fn a_file_that_the_helper_wrote_without_a_record_is_not_a_conflict() {
+    let s = Sudo::new(SEARCHES);
+    let x = hidden(&s, "0640");
+    let state_file = || {
+        let dir = s.fx.state.join("rustow");
+        let found = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path());
+        found
+            .into_iter()
+            .find(|p| p.extension().is_some_and(|e| e == "json"))
+            .unwrap()
+    };
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let before = fs::read(state_file()).unwrap();
+    s.fx.write("rustowroot/etc/hidden/x.conf", "y\n");
+    assert_eq!(s.run(&["apply"]).code, 0);
+    // The state names the old content.
+    fs::write(state_file(), &before).unwrap();
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(uncovered(&s, || read(&x)), "y\n");
+
+    // The state names no file: the first create was not recorded.
+    fs::remove_file(state_file()).unwrap();
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    let calls = s.calls();
+    assert_eq!(s.run(&["apply"]).code, 0);
+    assert_eq!(s.calls(), calls, "recorded: no sudo");
+}
+
 /// The helper looks, as root, at what the plan could not see. A file that
 /// rustow did not write (no record), or another content than the recorded
 /// one, is a conflict, and the file stays; `--force` replaces it.
@@ -203,6 +237,17 @@ fn the_helper_finds_a_conflict_below_a_directory_you_cannot_search() {
         "{out:?}"
     );
     assert_eq!(uncovered(&s, || read(&x)), "edited\n");
+
+    // A symlink is no copy of rustow, even to the desired content.
+    let target = s.fx.base.join("desired");
+    fs::write(&target, "y\n").unwrap();
+    uncovered(&s, || {
+        fs::remove_file(&x).unwrap();
+        std::os::unix::fs::symlink(&target, &x).unwrap();
+    });
+    let out = s.run(&["apply", "rustowroot/etc/hidden"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(uncovered(&s, || x.is_symlink()), "{out:?}");
 }
 
 #[test]

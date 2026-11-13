@@ -496,7 +496,8 @@ fn apply_dest(
 /// destination that the plan could not see. Content of a file that the
 /// plan could not read or see that is not the recorded one, or a file
 /// there without a record, is a conflict, which `--force` and `--backup`
-/// resolve as a planned one.
+/// resolve as a planned one. The desired content is no conflict: a run
+/// whose client was killed wrote it and recorded nothing (`holds_desired`).
 fn update(
     dir: &Dir,
     name: &OsStr,
@@ -506,11 +507,20 @@ fn update(
     me: u32,
 ) -> Result<Option<String>> {
     match recheck(dir, name, &d.path, &d.observed, d.expect.as_ref()) {
+        Err(Error::Conflict(_)) if holds_desired(dir, name, d)? => put(dir, name, d, new, true).map(|()| None),
         Err(Error::Conflict(_)) if matches!(away.0, Policy::Overwrite | Policy::Backup) => {
             replace(dir, name, d, new, away, me)
         }
         checked => checked.and_then(|_| put(dir, name, d, new, true)).map(|()| None),
     }
+}
+
+/// Whether `name` is a regular file with the desired content.
+fn holds_desired(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<bool> {
+    Ok(matches!(
+        (&d.desired, dir.inspect(name)?),
+        (Desired::File { hash, .. }, Observed::File { hash: have, .. }) if *hash == have
+    ))
 }
 
 /// Moves away (backup) or removes the conflicting object, then creates.
