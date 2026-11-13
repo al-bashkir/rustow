@@ -212,23 +212,13 @@ impl Printer {
         if let (false, Some(root)) = (self.quiet, repository) {
             outln!("repository: {}", shown(&root.display().to_string()));
         }
-        let mut changed = 0;
         for c in changes {
-            changed += usize::from(c.action != "ok");
             if !self.quiet && (c.action != "ok" || self.verbose || c.detail.is_some()) {
                 outln!("{:>8} {}{}", c.action, shown(&c.path), detail(c.detail.as_deref()));
             }
         }
         if !self.quiet {
-            let line = format!("{changed} changed, {} unchanged", changes.len() - changed);
-            outln!(
-                "{}",
-                if dry_run {
-                    format!("dry run, nothing written: {line}")
-                } else {
-                    line
-                }
-            );
+            outln!("{}", changes_summary(changes, dry_run));
         }
     }
 
@@ -297,6 +287,16 @@ fn summary_counts(items: &[ItemReport]) -> serde_json::Value {
         "conflicts": c.conflicts,
         "errors": c.errors,
     })
+}
+
+/// The summary of `Printer::changes`; a dry run says "to change", as `summary_line` does.
+fn changes_summary(changes: &[Change], dry_run: bool) -> String {
+    let changed = changes.iter().filter(|c| c.action != "ok").count();
+    let unchanged = changes.len() - changed;
+    match dry_run {
+        true => format!("dry run, nothing written: {changed} to change, {unchanged} unchanged"),
+        false => format!("{changed} changed, {unchanged} unchanged"),
+    }
 }
 
 fn summary_line(items: &[ItemReport], run: RunKind) -> String {

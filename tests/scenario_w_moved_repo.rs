@@ -52,6 +52,11 @@ fn state_adopt_takes_over_a_moved_repository() {
     let dry = fx.ok(&["state", "adopt", "-n", old_root]);
     assert!(dry.stdout.contains("adopt"), "{dry:?}");
     assert!(
+        dry.stdout
+            .ends_with("\ndry run, nothing written: 1 to change, 0 unchanged\n"),
+        "as other dry runs: {dry:?}"
+    );
+    assert!(
         fx.run(&["status"]).stderr.contains(&notice),
         "a dry run changes nothing"
     );
