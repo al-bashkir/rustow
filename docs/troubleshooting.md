@@ -115,7 +115,7 @@ rustow refuses corrupt, foreign or newer state. For newer state ("written by a n
 
 ## Moved repository
 
-After you move the repository, old links are "not managed (broken symlink)", and the registrations of `file add` and copy-mode `link` seem lost. Each command prints "note: the state of a moved repository was found: <old path>; run `rustow state adopt <old path>` to take it over". Run that command, then `rustow apply`. It updates the links to the new path. Copies and registrations stay. Do not use `--force` before you adopt the state: a registered copy then looks like a plain file, and `--force` would replace your copy with a symlink. See [state adopt](cli.md#state-adopt).
+After you move the repository, old links are "not managed (broken symlink)", and the registrations of `file add` and copy-mode `link` seem lost. Until a command saves a state for the new path, each command prints "note: the state of a moved repository was found: <old path>; run `rustow state adopt <old path>` to take it over". Run that command, then `rustow apply`. If you ran `apply` first, the notice is gone and `adopt` refuses: move the new state file (`<state_dir>/<repo-id>.json` of the new path) away, then adopt. It updates the links to the new path. Copies and registrations stay. Do not use `--force` before you adopt the state: a registered copy then looks like a plain file, and `--force` would replace your copy with a symlink. See [state adopt](cli.md#state-adopt).
 
 ## Stale edit workspace
 

@@ -211,11 +211,13 @@ The export is JSON: `{"version": 1, "files": [...], "links": [...]}`. It holds r
 
 ## state adopt
 
-The state file belongs to the repository path. After you move the repository (`mv ~/dotfiles ~/dotfiles2`), rustow finds no state for the new path. When it finds a state file whose recorded repository path does not exist any more, each command prints a notice:
+The state file belongs to the repository path. After you move the repository (`mv ~/dotfiles ~/dotfiles2`), rustow finds no state for the new path. While this repository has no state file, and rustow finds a state file whose recorded repository path does not exist any more, each command prints a notice:
 
 ```
 note: the state of a moved repository was found: /home/me/dotfiles; run `rustow state adopt /home/me/dotfiles` to take it over
 ```
+
+The notice stops when a command saves a state for the new path, for example the first `apply` there. `adopt` then refuses, because this repository has a state. To adopt the old state after that, move the new state file away first.
 
 `rustow state adopt OLD_ROOT` takes the lock. It reads the state of OLD_ROOT with the same checks as every command. It sets the repository path to this repository, and moves the cache entries of the old path to the cache entries of this repository. It saves the result as the state of this repository. It keeps the old file as `<state_dir>/backups/<old-repo-id>/state-adopted.json`. It removes the old lock file `<state_dir>/<old-repo-id>.lock`, unless another run holds it. Then run `rustow apply`: it updates rustow's links to the new path. Copies and registrations stay. `adopt -n` shows what it would do.
 
