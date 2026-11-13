@@ -152,20 +152,38 @@ impl Context {
     /// directory selects its subtree. Reserved, ignored and unknown paths
     /// are errors, and so is a path that names a skipped file.
     pub fn select<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Source>> {
-        let wanted = self.wanted(discovery, args)?;
-        Ok(pick(&discovery.sources, &wanted, |i| &i.sources, discovery))
+        self.within(discovery, &discovery.sources, |i| &i.sources, args)
     }
 
     /// Skipped files and entries that `args` select, as for `select`.
     pub fn skipped<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
-        let wanted = self.wanted(discovery, args)?;
-        Ok(pick(&discovery.skipped, &wanted, |i| &i.skipped, discovery))
+        self.within(discovery, &discovery.skipped, |i| &i.skipped, args)
     }
 
     /// Templates that are not for this host and that `args` select, as for `select`.
     pub fn inactive<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
+        self.within(discovery, &discovery.inactive, |i| &i.inactive, args)
+    }
+
+    /// The entries of `list` (one list of `discovery`, `below` its index)
+    /// at or below one of the checked `args`, in list order and once each;
+    /// all of them without a path argument.
+    fn within<'a, T>(
+        &self,
+        discovery: &Discovery,
+        list: &'a [T],
+        below: fn(&Index) -> &Below,
+        args: &[String],
+    ) -> Result<Vec<&'a T>> {
         let wanted = self.wanted(discovery, args)?;
-        Ok(pick(&discovery.inactive, &wanted, |i| &i.inactive, discovery))
+        if wanted.is_empty() {
+            return Ok(list.iter().collect());
+        }
+        let below = below(discovery.index());
+        let mut at: Vec<usize> = wanted.iter().flat_map(|w| below.get(w.as_str())).copied().collect();
+        at.sort_unstable();
+        at.dedup();
+        Ok(at.into_iter().map(|i| &list[i]).collect())
     }
 
     /// The checked path prefixes of `args`; none selects everything.
@@ -202,20 +220,6 @@ impl Context {
         }
         Ok(rel)
     }
-}
-
-/// The entries of `list` at or below one of `wanted` (all of them when
-/// `wanted` is empty), in list order and once each. `below` names the
-/// index of `list` in `discovery`.
-fn pick<'a, T>(list: &'a [T], wanted: &[RelPath], below: fn(&Index) -> &Below, discovery: &Discovery) -> Vec<&'a T> {
-    if wanted.is_empty() {
-        return list.iter().collect();
-    }
-    let below = below(discovery.index());
-    let mut at: Vec<usize> = wanted.iter().flat_map(|w| below.get(w.as_str())).copied().collect();
-    at.sort_unstable();
-    at.dedup();
-    at.into_iter().map(|i| &list[i]).collect()
 }
 
 /// Canonical home and root targets (flag, else configuration); neither may lie inside the repository.
