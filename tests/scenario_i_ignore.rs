@@ -89,6 +89,40 @@ fn custom_patterns_and_negation() {
     assert!(is_symlink(&fx.home_path(".config/example/shared.conf")));
 }
 
+/// Each ignore pattern costs memory, so rustow reads at most 10000 of
+/// them: from `.rustowignore`, and from all `[[global_rules]]` together.
+/// Comments and blank lines do not count.
+#[test]
+fn more_than_ten_thousand_ignore_patterns_are_a_configuration_error() {
+    let fx = Fixture::new();
+    let patterns = |n: usize| (0..n).map(|i| format!("a{i}/**/b*.y\n")).collect::<String>();
+    fx.write(".rustowignore", &format!("# many\n\n{}", patterns(10_000)));
+    fx.write("a.bak", "x");
+    fx.ok(&["check"]);
+    fx.write(".rustowignore", &patterns(10_001));
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr
+            .contains(".rustowignore: 10001 patterns; rustow reads at most 10000"),
+        "{out:?}"
+    );
+
+    fx.write(".rustowignore", "");
+    let list = (0..10_001).map(|i| format!("\"x{i}\"")).collect::<Vec<_>>().join(",");
+    fx.write(
+        "rustow.toml",
+        &format!("version = 1\n[[global_rules]]\nos = \"plan9\"\nignore = [{list}]\n"),
+    );
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("[[global_rules]] ignore: 10001 patterns; rustow reads at most 10000"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn ignore_applies_to_root_relative_files_and_templates() {
     let fx = Fixture::new();

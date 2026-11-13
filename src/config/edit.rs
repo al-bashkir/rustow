@@ -38,7 +38,8 @@ pub fn ensure_init(text: &str) -> Result<Option<String>> {
 /// already exclude the whole `dir` subtree (built-in rules do not count).
 pub fn ensure_ignore_entry(text: &str, dir: &RelPath) -> Option<String> {
     let mut builder = GitignoreBuilder::new("/");
-    for line in text.lines() {
+    // Past MAX_RULES lines, a matcher costs too much memory.
+    for line in text.lines().take(crate::ignore::MAX_RULES) {
         // Git skips invalid patterns; so do we.
         let _ = builder.add_line(None, line);
     }
@@ -339,6 +340,15 @@ mod tests {
         ] {
             assert_eq!(ensure_ignore_entry(text, &cache()), None, "{text:?}");
         }
+    }
+
+    /// Only the first `MAX_RULES` lines count, so a huge file costs bounded
+    /// memory; an entry past them is added again, which does no harm.
+    #[test]
+    fn lines_past_the_rule_limit_do_not_count() {
+        let junk = "a/**/b*.y\n".repeat(crate::ignore::MAX_RULES);
+        assert!(ensure_ignore_entry(&format!("{junk}/.rustowcache/\n"), &cache()).is_some());
+        assert_eq!(ensure_ignore_entry(&format!("/.rustowcache/\n{junk}"), &cache()), None);
     }
 
     #[test]

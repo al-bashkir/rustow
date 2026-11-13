@@ -20,6 +20,34 @@ pub const IGNORE_FILE: &str = ".rustowignore";
 pub const DEFAULT_CACHE_DIR: &str = ".rustowcache";
 pub const ROOT_DIR: &str = "rustowroot";
 
+/// The most ignore patterns that rustow reads into its matchers. Each
+/// costs memory (a glob like `a/**/b*.y` about 8 KiB), so the 16 MiB of a
+/// file at the size limit could need gigabytes.
+pub const MAX_RULES: usize = 10_000;
+
+/// Fails when `count` patterns of `what` are more than `MAX_RULES`.
+fn within_limit(what: &str, count: usize) -> Result<()> {
+    match count > MAX_RULES {
+        true => Err(Error::Config(format!(
+            "{what}: {count} patterns; rustow reads at most {MAX_RULES}"
+        ))),
+        false => Ok(()),
+    }
+}
+
+/// The text of `.rustowignore` at `file` (empty when it is missing), with at
+/// most `MAX_RULES` patterns; comments and blank lines do not count.
+fn read_ignore_file(file: &Path) -> Result<String> {
+    let text = match fsops::read_limited(file, OFlag::empty(), MAX_FILE_SIZE) {
+        Ok(bytes) => text_of(file, bytes)?,
+        Err(e) if e.is_not_found() => String::new(),
+        Err(e) => return Err(e),
+    };
+    let patterns = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#'));
+    within_limit(IGNORE_FILE, patterns.count())?;
+    Ok(text)
+}
+
 /// Root-level files that are never sources.
 const RESERVED_ROOT_FILES: [&str; 3] = [".gitignore", crate::config::CONFIG_FILE, IGNORE_FILE];
 
@@ -38,11 +66,7 @@ impl Ignore {
     pub fn load(repo: &Path, internal: Vec<RelPath>) -> Result<Ignore> {
         let mut builder = GitignoreBuilder::new(repo);
         let file = repo.join(IGNORE_FILE);
-        let text = match fsops::read_limited(&file, OFlag::empty(), MAX_FILE_SIZE) {
-            Ok(bytes) => text_of(&file, bytes)?,
-            Err(e) if e.is_not_found() => String::new(),
-            Err(e) => return Err(e),
-        };
+        let text = read_ignore_file(&file)?;
         let errors: Vec<String> = text
             .lines()
             .enumerate()
@@ -73,6 +97,8 @@ impl Ignore {
     /// Adds the `ignore` patterns of each rule that matches `host`. The
     /// patterns of every rule must be valid, also on other hosts.
     pub fn with_rules(mut self, repo: &Path, rules: &[GlobalRule], host: &Host) -> Result<Ignore> {
+        let count = rules.iter().map(|r| r.ignore.len()).sum();
+        within_limit(&format!("{CONFIG_FILE}: [[global_rules]] ignore"), count)?;
         for rule in rules {
             let bad = |e: ::ignore::Error| {
                 Error::Config(format!("{CONFIG_FILE}: [[global_rules]] #{}: ignore: {e}", rule.number))

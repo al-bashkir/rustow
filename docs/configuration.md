@@ -232,7 +232,7 @@ A rule changes `[vars]` and the ignore rules on some hosts only.
 
 - **Conditions:** `os`, `arch`, `family`, `hostname` and `username`. They have the same values as the [template variables](templates.md#variables). Each value is an exact string. A rule matches when all its conditions are true. A rule must have at least one condition.
 - **`vars`:** a table. A matching rule merges it over `[vars]`. Tables merge key by key. Any other value replaces the old value. Keys that the rule does not set keep their value. When two matching rules set the same key, the lower rule in the file wins. In the example, on the host `work`, `vars.git.name` stays `"Alice"` and `vars.git.email` becomes `"asmith@work.example"`.
-- **`ignore`:** a list of patterns in [ignore](ignore.md) syntax. A matching rule adds them to `.rustowignore`. Each rule works alone: a `!` pattern in a rule cannot re-include a path that `.rustowignore` or another rule ignores. rustow checks the patterns of every rule, also of rules that do not match this host.
+- **`ignore`:** a list of patterns in [ignore](ignore.md) syntax. A matching rule adds them to `.rustowignore`. Each rule works alone: a `!` pattern in a rule cannot re-include a path that `.rustowignore` or another rule ignores. rustow checks the patterns of every rule, also of rules that do not match this host. All rules together may have at most 10000 patterns; more is a configuration error (exit 2).
 
 A path that a matching rule ignores is not for this host:
 

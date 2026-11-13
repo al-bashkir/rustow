@@ -1,6 +1,6 @@
 # Ignore rules
 
-`<repo>/.rustowignore` lists repository paths that rustow must not deploy. It uses gitignore syntax with Git semantics. An ignored directory cannot have children re-included.
+`<repo>/.rustowignore` lists repository paths that rustow must not deploy. It uses gitignore syntax with Git semantics. An ignored directory cannot have children re-included. rustow reads at most 10000 patterns (comments and blank lines do not count), because each pattern needs memory. More is a configuration error (exit 2): ".rustowignore: N patterns; rustow reads at most 10000".
 
 Patterns match repository paths:
 
