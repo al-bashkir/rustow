@@ -86,6 +86,36 @@ fn meta_lines_in_an_encrypted_template_fail_to_render() {
     assert!(!fx.home_path(".x").exists());
 }
 
+/// Only root can give a home file to another user: `apply` fails, and
+/// `status` shows the same error instead of MISSING.
+#[test]
+fn foreign_owner_of_a_home_template_is_an_error_in_status_too() {
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("SKIP: root may give a file to any user");
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    fx.write(".x.tmpl", "{%- meta.uid = 0 %}\nx\n");
+    let st = fx.run(&["status"]);
+    assert_eq!(st.code, 1, "{st:?}");
+    let row = st
+        .stdout
+        .lines()
+        .find(|l| l.contains(".x.tmpl"))
+        .unwrap_or_else(|| panic!("{st:?}"));
+    assert!(
+        row.trim_start().starts_with("ERROR")
+            && row.contains("set owner of")
+            && row.contains("Operation not permitted"),
+        "{row}"
+    );
+    let applied = fx.run(&["apply"]);
+    assert_eq!(applied.code, 4, "{applied:?}");
+    assert!(applied.stdout.contains("set owner of"), "{applied:?}");
+    assert!(!fx.home_path(".x").exists());
+}
+
 #[test]
 fn check_reports_an_unknown_meta_owner_or_group_as_apply_does() {
     let fx = Fixture::new();

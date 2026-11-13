@@ -902,11 +902,35 @@ fn needs_sudo(
     owner: (Option<u32>, Option<u32>),
     unreadable: bool,
 ) -> (Option<String>, bool) {
-    let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| !my_group(g));
     match scope {
-        Scope::Root if changes(decision) && (unwritable.is_some() || foreign || unreadable) => (None, true),
+        Scope::Root if changes(decision) && (unwritable.is_some() || foreign(owner) || unreadable) => (None, true),
         _ => (unwritable, false),
     }
+}
+
+/// True when a file must belong to another user, or to a group that the
+/// user is not a member of: only root can give it that owner.
+fn foreign((uid, gid): (Option<u32>, Option<u32>)) -> bool {
+    uid.is_some_and(|u| u != geteuid().as_raw()) || gid.is_some_and(|g| !my_group(g))
+}
+
+/// Why a home file that must change cannot get its `owner` (a home file
+/// never uses sudo): `apply` would fail with this error, and the plan
+/// carries it, so `status` and a dry run show it too. Root may give it any owner.
+fn home_owner_error(
+    scope: Scope,
+    decision: Decision,
+    path: &Path,
+    owner: (Option<u32>, Option<u32>),
+) -> Option<String> {
+    if scope != Scope::Home || !changes(decision) || geteuid().is_root() || !foreign(owner) {
+        return None;
+    }
+    let err = Error::Io {
+        context: format!("set owner of {}", path.display()),
+        source: nix::errno::Errno::EPERM.into(),
+    };
+    Some(with_privilege_hint(err))
 }
 
 /// True when `decision` changes the destination (under `--force` too).
@@ -1024,7 +1048,8 @@ fn deploy_step(
     let (unwritable, sudo) = needs_sudo(
         source.scope,
         decision,
-        unwritable(&path, &missing_dirs, decision),
+        unwritable(&path, &missing_dirs, decision)
+            .or_else(|| home_owner_error(source.scope, decision, &path, file_owner)),
         file_owner,
         matches!(observed, Observed::Unreadable { .. } | Observed::Hidden),
     );
