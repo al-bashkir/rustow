@@ -69,7 +69,7 @@ fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Resu
     if let Step::Deploy(d) = &item.step
         && matches!(d.observed, Observed::Unreadable { .. } | Observed::Hidden)
     {
-        return Ok(show_unreadable(item, d));
+        return Ok(show_unreadable(item, d, &printer.path(&item.dest)));
     }
     let (text, binary) = step_text(item, &printer.path(&item.dest), old)?;
     let (status, detail) = match &item.step {
@@ -94,15 +94,23 @@ fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Resu
 }
 
 /// A destination that the user cannot read takes the decision of the plan:
-/// nothing when it is up to date, else an error of that item only.
-fn show_unreadable<'a>(item: &'a PlanItem, d: &Deploy) -> Option<Shown<'a>> {
+/// nothing when it is up to date, the metadata line when only the metadata
+/// differs, else an error of that item only.
+fn show_unreadable<'a>(item: &'a PlanItem, d: &Deploy, label: &str) -> Option<Shown<'a>> {
     let why = "cannot read the destination (Permission denied); elevated privileges may be required";
-    (d.decision != Decision::UpToDate).then(|| Shown {
+    let (kind, detail, text) = match (&d.decision, &d.observed, &d.desired) {
+        (Decision::UpToDate, ..) => return None,
+        (Decision::FixMetadata, Observed::Unreadable { mode, uid, gid }, Desired::File { meta, .. }) => {
+            ("metadata", None, metadata_line(label, (*mode, *uid, *gid), meta))
+        }
+        _ => ("error", Some(why.into()), String::new()),
+    };
+    Some(Shown {
         item,
-        kind: "error".into(),
-        detail: Some(why.into()),
+        kind: kind.into(),
+        detail,
         binary: false,
-        text: String::new(),
+        text,
     })
 }
 
@@ -180,11 +188,7 @@ fn describe(label: &str, d: &Deploy) -> Result<(String, bool)> {
             if let Observed::File { mode, uid, gid, .. } = d.observed
                 && !meta.matches(mode, uid, gid)
             {
-                out.push_str(&format!(
-                    "{label}: metadata {} -> {}\n",
-                    show_meta(mode, uid, gid),
-                    show_wanted(meta)
-                ));
+                out.push_str(&metadata_line(label, (mode, uid, gid), meta));
             }
         }
     }
@@ -231,8 +235,11 @@ fn what(observed: &Observed) -> String {
     }
 }
 
-fn show_meta(mode: u32, uid: u32, gid: u32) -> String {
-    format!("mode {mode:04o} uid {uid} gid {gid}")
+fn metadata_line(label: &str, (mode, uid, gid): (u32, u32, u32), meta: &FileMeta) -> String {
+    format!(
+        "{label}: metadata mode {mode:04o} uid {uid} gid {gid} -> {}\n",
+        show_wanted(meta)
+    )
 }
 
 fn show_wanted(meta: &FileMeta) -> String {

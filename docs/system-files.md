@@ -33,7 +33,7 @@ A system file can be unreadable for you, for example a `[[files]]` entry with `m
 - When the desired content changed, the item is an update through sudo. The helper reads the file as root before it changes it. When the content is not the recorded one (someone changed it), the item is a MODIFIED conflict: "destination was modified since rustow last applied it", and the file stays. With `--force`, the helper replaces it. With `--backup`, it saves it first.
 - When the state has no record of the file, the item is a conflict: "cannot read the destination; rustow has no record of it". `--force` and `--backup` replace it through sudo.
 - `undeploy` removes such a file through the helper. The helper removes it only when its content is the recorded one. One item that fails never stops the other removals.
-- `diff` cannot show the content. For such an item that would change, it prints "rustow: <dest>: cannot read the destination (Permission denied); elevated privileges may be required" on stderr and goes on with the other items. The exit code is 4.
+- `diff` cannot show the content. When only the mode, the owner or the group differs, it shows the metadata line, as for a file that you can read. For another change, it prints "rustow: <dest>: cannot read the destination (Permission denied); elevated privileges may be required" on stderr and goes on with the other items. The exit code is 4.
 
 ### Destinations in a directory that you cannot search
 

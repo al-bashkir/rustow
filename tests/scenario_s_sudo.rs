@@ -684,6 +684,29 @@ fn diff_shows_nothing_for_an_unreadable_system_file_that_is_up_to_date() {
     assert!(!diff.stderr.contains("app.conf"), "{diff:?}");
 }
 
+/// The metadata of an unreadable file is known: when only it differs,
+/// `diff` shows the metadata line, as for a file that you can read.
+#[test]
+fn diff_shows_the_metadata_of_an_unreadable_system_file() {
+    let s = Sudo::new(FAKE);
+    let config = read(&s.fx.repo.join("rustow.toml"));
+    s.fx.write(
+        "rustow.toml",
+        &config.replace("app.conf\"\n", "app.conf\"\nmode = \"0640\"\n"),
+    );
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let app = unreadable(&s, "etc/app.conf");
+
+    let diff = s.run(&["diff"]);
+    assert_eq!(diff.code, 1, "{diff:?}");
+    let line = format!("{}: metadata mode 0000", app.display());
+    assert!(
+        diff.stdout.contains(&line) && diff.stdout.contains("-> mode 0640"),
+        "{diff:?}"
+    );
+    assert!(!diff.stderr.contains("app.conf"), "{diff:?}");
+}
+
 #[test]
 fn an_unreadable_system_file_without_a_record_is_a_conflict() {
     let s = Sudo::new(FAKE);
