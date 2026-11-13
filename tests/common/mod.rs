@@ -581,3 +581,26 @@ impl GpgHome {
             .collect()
     }
 }
+
+/// Sets a POSIX access ACL on `path` that lets user `uid` read and write
+/// it, in the kernel's xattr format (no `setfacl` needed).
+#[cfg(target_os = "linux")]
+pub fn grant_write(path: &Path, uid: u32) -> std::io::Result<()> {
+    const ANY: u32 = u32::MAX;
+    // (tag, perm, id): owner rw, named user rw, group r, mask rw, other r.
+    let entries = [
+        (0x01, 6, ANY),
+        (0x02, 6, uid),
+        (0x04, 4, ANY),
+        (0x10, 6, ANY),
+        (0x20, 4, ANY),
+    ];
+    let mut acl = 2u32.to_le_bytes().to_vec();
+    for (tag, perm, id) in entries {
+        acl.extend(u16::to_le_bytes(tag));
+        acl.extend(u16::to_le_bytes(perm));
+        acl.extend(u32::to_le_bytes(id));
+    }
+    let flags = rustix::fs::XattrFlags::empty();
+    Ok(rustix::fs::setxattr(path, "system.posix_acl_access", &acl, flags)?)
+}

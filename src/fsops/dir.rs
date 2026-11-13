@@ -6,7 +6,7 @@
 use std::ffi::OsStr;
 use std::fs::{self, File, Permissions};
 use std::io::{self, Read, Write};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,7 +18,7 @@ use nix::sys::stat::{FileStat, Mode, SFlag, fchmod, fstat, fstatat, mkdirat};
 use nix::unistd::{AccessFlags, UnlinkatFlags, faccessat, linkat, symlinkat, unlinkat};
 use serde::{Deserialize, Serialize};
 
-use super::{FileMeta, Observed, Owned, TEMP_PREFIX, check_dir, private_gid_of};
+use super::{FileMeta, Observed, Owned, TEMP_PREFIX, check_dir, has_acl, private_gid_of};
 use crate::error::{Error, IoContext, Result};
 use crate::hash::Hash;
 
@@ -184,7 +184,7 @@ impl Dir {
     /// when `check_dir` accepts it and `name` is still that symlink.
     fn settle(&self, name: &OsStr, path: PathBuf, link: &FileStat, target: Dir, me: u32) -> Result<Next> {
         let st = sys(fstat(&target.fd)).ctx(|| format!("inspect {}", target.path.display()))?;
-        if let Err(why) = trusted(&target.path, &st, perm(st.st_mode), me) {
+        if let Err(why) = trusted(&target.path, &st, Some(&target.fd), me) {
             return Ok(Next::Blocked(path, format!("symlink target is not safe: {why}")));
         }
         match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
@@ -208,7 +208,7 @@ impl Dir {
             Err(e) => return Err(e.desc().into()),
         };
         // A symlink's own mode bits mean nothing: only its owner counts.
-        trusted(path, &link, 0, me).map_err(|why| format!("symlink is not safe: {why}"))?;
+        trusted(path, &link, None, me).map_err(|why| format!("symlink is not safe: {why}"))?;
         *budget = budget.checked_sub(1).ok_or(Errno::ELOOP.desc())?;
         Ok(link)
     }
@@ -426,7 +426,7 @@ impl Dir {
         let path = self.entry(name);
         let dir = sys(self.child(name, SEARCH)).ctx(|| format!("create directory {}", path.display()))?;
         let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
-        trusted(&path, &st, perm(st.st_mode), me).map_err(Error::Failed)?;
+        trusted(&path, &st, Some(&dir.fd), me).map_err(Error::Failed)?;
         Ok(dir)
     }
 
@@ -626,13 +626,16 @@ fn sys<T>(r: nix::Result<T>) -> io::Result<T> {
     r.map_err(io::Error::from)
 }
 
-/// `check_dir` for `me` on what `st` describes, with `mode` as its permission bits.
-fn trusted(path: &Path, st: &FileStat, mode: u32, me: u32) -> std::result::Result<(), String> {
+/// `check_dir` for `me` on what `st` describes: the open directory `dir`,
+/// or a symlink (`None`), whose own mode bits mean nothing.
+fn trusted(path: &Path, st: &FileStat, dir: Option<&OwnedFd>, me: u32) -> std::result::Result<(), String> {
     let owned = Owned {
         path: path.to_path_buf(),
         uid: st.st_uid,
         gid: st.st_gid,
-        mode,
+        mode: dir.map_or(0, |_| perm(st.st_mode)),
+        // An O_PATH fd has no fgetxattr; its /proc link reaches the same inode.
+        acl: dir.is_some_and(|fd| has_acl(format!("/proc/self/fd/{}", fd.as_raw_fd()))),
     };
     check_dir(&owned, me, private_gid_of(me))
 }

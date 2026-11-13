@@ -485,3 +485,33 @@ fn a_group_writable_system_source_deploys_only_in_a_user_private_group() {
         assert!(!fx.root_path("etc/g.conf").exists());
     }
 }
+
+/// An ACL can let another user write a source whose mode bits look safe:
+/// the group bits are then the ACL mask. Such a system source is untrusted.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_system_source_with_an_acl_that_lets_others_write_is_a_conflict() {
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/acl.conf\"\n",
+    );
+    let src = fx.write("rustowroot/etc/acl.conf", "x\n");
+    if let Err(e) = grant_write(&src, 65534) {
+        eprintln!("SKIP: no POSIX ACL on this filesystem: {e}");
+        return;
+    }
+    let why = format!(
+        "untrusted source: {0} has an ACL that can give write access to other users; run `setfacl -b {0}`",
+        src.display()
+    );
+
+    let check = fx.run(&["check"]);
+    assert_eq!(check.code, 1, "{check:?}");
+    let problem = format!("problem: rustowroot/etc/acl.conf: {why}");
+    assert!(check.stdout.contains(&problem), "{check:?}");
+    let out = fx.run(&["apply", "--force"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains(&why), "{out:?}");
+    assert!(!fx.root_path("etc/acl.conf").exists());
+}

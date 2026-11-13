@@ -326,6 +326,8 @@ pub struct Owned {
     pub uid: u32,
     pub gid: u32,
     pub mode: u32,
+    /// An extended POSIX ACL is set: the group bits of `mode` are its mask.
+    pub acl: bool,
 }
 
 /// Trust rule for the file a symlink will point to: every path on the
@@ -365,7 +367,22 @@ fn check_dir(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result::
     if dir.mode & 0o002 != 0 {
         return Err(format!("{path} is writable by others"));
     }
-    if dir.mode & 0o020 != 0 && Some(dir.gid) != private_gid {
+    if dir.mode & 0o020 == 0 {
+        return Ok(());
+    }
+    group_write(dir, owner, private_gid)
+}
+
+/// The group bits of `dir` allow write: trusted only for the owner's
+/// private group, and never with an ACL, whose mask these bits are.
+fn group_write(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result::Result<(), String> {
+    let path = dir.path.display();
+    if dir.acl {
+        return Err(format!(
+            "{path} has an ACL that can give write access to other users; run `setfacl -b {path}`"
+        ));
+    }
+    if Some(dir.gid) != private_gid {
         return Err(format!(
             "{path} is writable by group {}, which is not the private group of uid {owner}; run `chmod g-w {path}`",
             dir.gid
@@ -398,6 +415,14 @@ fn private_gid_of(owner: u32) -> Option<u32> {
     KNOWN.with_borrow_mut(|known| *known.entry(owner).or_insert_with(lookup))
 }
 
+/// True when `path` has a POSIX access ACL. Linux keeps its xattr only for
+/// an ACL that says more than the mode bits.
+/// shortcut: macOS ACLs are not read (they are no xattr); read them with
+/// `acl_get_fd` if the trust rule must see them there.
+pub fn has_acl(path: impl rustix::path::Arg) -> bool {
+    rustix::fs::getxattr_query(path, "system.posix_acl_access").is_ok()
+}
+
 /// Applies `check_chain` to the real path of a cache entry, which may not
 /// exist yet (then the current user would create the missing part).
 pub fn trust_cache(entry: &Path, owner: u32) -> std::result::Result<(), String> {
@@ -415,6 +440,7 @@ pub fn trust_cache(entry: &Path, owner: u32) -> std::result::Result<(), String> 
             uid: m.uid(),
             gid: m.gid(),
             mode: m.mode() & 0o7777,
+            acl: has_acl(dir),
         });
     }
     check_chain(&chain, creator, owner, private_gid_of(owner))
@@ -818,6 +844,7 @@ mod tests {
             uid,
             gid: uid,
             mode,
+            acl: false,
         }
     }
 
@@ -911,6 +938,27 @@ mod tests {
         let world = [owned("/home/u/dot", 1000, 0o777)];
         let e = check_chain(&world, None, 1000, Some(1000)).unwrap_err();
         assert!(e.contains("writable by others") && !e.contains("chmod g-w"), "{e}");
+    }
+
+    /// With an ACL, the group bits are its mask: the most that named users
+    /// and groups may do. A private owning group does not make it safe.
+    #[test]
+    fn chain_refuses_an_acl_whose_mask_allows_write() {
+        let acl = |mode| {
+            [Owned {
+                acl: true,
+                ..owned("/home/u/dot/f", 1000, mode)
+            }]
+        };
+        let e = check_chain(&acl(0o664), None, 1000, Some(1000)).unwrap_err();
+        assert_eq!(
+            e,
+            "/home/u/dot/f has an ACL that can give write access to other users; run `setfacl -b /home/u/dot/f`"
+        );
+        assert!(
+            check_chain(&acl(0o644), None, 1000, Some(1000)).is_ok(),
+            "mask without write"
+        );
     }
 
     #[test]

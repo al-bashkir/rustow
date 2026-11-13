@@ -480,3 +480,26 @@ fn a_target_behind_a_symlink_to_a_world_writable_directory_is_refused() {
     );
     assert!(!open.join(".cfg").exists());
 }
+
+/// The walk sees an ACL on a directory that a symlink reaches: its mode
+/// bits look safe, but another user can write into it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_target_behind_a_symlink_to_a_directory_with_a_write_acl_is_refused() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \".cfg\"\n");
+    fx.write(".cfg", "token\n");
+    let shared = fx.base.join("shared");
+    fs::create_dir(&shared).unwrap();
+    if let Err(e) = grant_write(&shared, 65534) {
+        eprintln!("SKIP: no POSIX ACL on this filesystem: {e}");
+        return;
+    }
+    let target = fx.base.join("tt");
+    std::os::unix::fs::symlink(&shared, &target).unwrap();
+    let out = fx.run(&["--target", target.to_str().unwrap(), "apply"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    let why = format!("symlink target is not safe: {} has an ACL", shared.display());
+    assert!(out.stderr.contains(&why), "{out:?}");
+    assert!(!shared.join(".cfg").exists());
+}
