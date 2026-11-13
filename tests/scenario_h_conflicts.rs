@@ -27,7 +27,7 @@ fn default_skips_conflicts_deploys_the_rest_and_lists_conflicts_last() {
             "  create ~/.zshrc  <- .zshrc (link)",
             "Conflicts:",
             "    skip ~/.bashrc  <- .bashrc (link): existing destination is not managed by rustow",
-            "1 changed, 0 unchanged, 1 conflicts",
+            "1 changed, 0 unchanged, 1 conflict",
         ],
         "{out:?}"
     );

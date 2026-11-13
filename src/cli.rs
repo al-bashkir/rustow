@@ -154,6 +154,9 @@ pub struct EncArgs {
     /// Repository-relative plaintext source (a file named "edit" is written ./edit)
     #[arg(value_name = "PATH", required = true, add = ArgValueCompleter::new(crate::complete::plaintext))]
     pub path: Option<String>,
+    /// Arguments after PATH, refused by `app`: clap would call one a subcommand.
+    #[arg(hide = true)]
+    pub extra: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]

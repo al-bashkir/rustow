@@ -594,9 +594,9 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
         }
         if !printer.quiet {
             outln!(
-                "{} sources checked, {} problems",
-                discovery.sources.len(),
-                findings.len()
+                "{} checked, {}",
+                report::plural(discovery.sources.len(), "source"),
+                report::plural(findings.len(), "problem")
             );
         }
     }

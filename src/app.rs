@@ -183,6 +183,11 @@ fn enc_cmd(g: &Global, env: &Env, p: &mut Printer, e: EncArgs) -> Result<i32> {
             "`rustow enc` has no --dry-run; it changes only the repository".into(),
         ));
     }
+    if let Some(arg) = e.extra.first() {
+        return Err(Error::Usage(format!(
+            "unexpected argument '{arg}'; `rustow enc` takes one PATH"
+        )));
+    }
     let mut ctx = open(g, env, p)?;
     let held = lock(&ctx, p, false)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
@@ -551,7 +556,7 @@ fn confirm_removal(ask: bool, printer: &Printer, items: &[ItemReport]) -> Result
             i.mode
         );
     }
-    eprint!("Remove {n} destination{}? [y/N] ", if n == 1 { "" } else { "s" });
+    eprint!("Remove {}? [y/N] ", crate::report::plural(n, "destination"));
     let mut answer = String::new();
     std::io::stdin()
         .lock()

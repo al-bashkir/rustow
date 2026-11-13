@@ -119,7 +119,7 @@ pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Res
     if !dry_run {
         take_over(ctx, &state, &old_id)?;
     }
-    let detail = format!("{} records", state.entries.len());
+    let detail = crate::report::plural(state.entries.len(), "record");
     printer.changes(
         None,
         &[Change::new(&old.display().to_string(), "adopt", Some(detail))],

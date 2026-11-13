@@ -155,25 +155,21 @@ fn summary_lines_are_exact() {
     let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(
         summary(&out),
-        "conflicts found, nothing written: 0 to change, 2 unchanged, 1 conflicts"
+        "conflicts found, nothing written: 0 to change, 2 unchanged, 1 conflict"
     );
     fx.write("bad.tmpl", "{{ vars.nope }}");
     let out = fx.run(&["apply"]);
-    assert_eq!(
-        summary(&out),
-        "0 changed, 2 unchanged, 1 conflicts, 1 errors",
-        "{out:?}"
-    );
+    assert_eq!(summary(&out), "0 changed, 2 unchanged, 1 conflict, 1 error", "{out:?}");
     let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(
         summary(&out),
-        "conflicts and errors found, nothing written: 0 to change, 2 unchanged, 1 conflicts, 1 errors"
+        "conflicts and errors found, nothing written: 0 to change, 2 unchanged, 1 conflict, 1 error"
     );
     fs::remove_file(fx.home_path("new")).unwrap();
     let out = fx.run(&["apply", "--on-conflict", "abort"]);
     assert_eq!(
         summary(&out),
-        "errors found, nothing written: 1 to change, 2 unchanged, 1 errors"
+        "errors found, nothing written: 1 to change, 2 unchanged, 1 error"
     );
 }
 

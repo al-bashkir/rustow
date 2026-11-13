@@ -139,6 +139,18 @@ fn enc_migrates_registration_and_template_rule() {
     assert_eq!(mode(&fx.home_path("x.json")), 0o600);
 }
 
+/// A second path is an unexpected argument, not a subcommand.
+#[test]
+fn enc_takes_one_path() {
+    let (fx, _key) = keyed();
+    fx.write("s.txt", "s\n");
+    let out = fx.run(&["enc", "s.txt", "extra"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("unexpected argument 'extra'"), "{out:?}");
+    assert!(!out.stderr.contains("subcommand"), "{out:?}");
+    assert!(fx.repo.join("s.txt").exists(), "nothing encrypted");
+}
+
 /// `enc` renames the entry in the file that a symlinked `rustow.toml`
 /// names; the symlink stays.
 #[test]

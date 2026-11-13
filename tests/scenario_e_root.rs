@@ -130,7 +130,7 @@ fn status_and_check_report_a_skipped_root_file() {
     assert_eq!(skipped[0]["detail"], reason(source));
     let out = fx.ok(&["check"]);
     assert!(out.stderr.contains(&warning(source)), "{out:?}");
-    assert!(out.stdout.contains("1 sources checked, 0 problems"), "{out:?}");
+    assert!(out.stdout.contains("1 source checked, 0 problems"), "{out:?}");
     let out = fx.ok(&["check", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
     let want = serde_json::json!([{ "source": source, "reason": reason(source) }]);
@@ -140,7 +140,7 @@ fn status_and_check_report_a_skipped_root_file() {
     let out = fx.run(&["check"]);
     assert_eq!(out.code, 1, "a real problem keeps its exit code: {out:?}");
     assert!(
-        out.stdout.contains("1 problems") && out.stderr.contains(&warning(source)),
+        out.stdout.contains(", 1 problem\n") && out.stderr.contains(&warning(source)),
         "{out:?}"
     );
 }

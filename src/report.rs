@@ -310,10 +310,10 @@ fn summary_line(items: &[ItemReport], run: RunKind) -> String {
         parts.push(format!("{} adopted", c.adopted));
     }
     if c.conflicts > 0 {
-        parts.push(format!("{} conflicts", c.conflicts));
+        parts.push(plural(c.conflicts, "conflict"));
     }
     if c.errors > 0 {
-        parts.push(format!("{} errors", c.errors));
+        parts.push(plural(c.errors, "error"));
     }
     let line = parts.join(", ");
     match run {
