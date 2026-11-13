@@ -451,3 +451,23 @@ fn edit_never_runs_an_editor_from_the_current_directory() {
     assert!(!marker.exists(), "{out:?}");
     assert_eq!(fx.age_decrypt(&fx.repo.join("s.age"), &key), "x\n");
 }
+
+/// `enc` changes the repository and the state, so it takes the repository
+/// lock: while another run holds it, `enc` changes nothing.
+#[test]
+fn enc_stops_while_another_run_holds_the_lock() {
+    let (fx, _key) = keyed();
+    fx.write("s", "x\n");
+    fx.ok(&["apply"]);
+    let lock = fs::read_dir(fx.state.join("rustow"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "lock"))
+        .unwrap();
+    let held = fs::OpenOptions::new().write(true).open(&lock).unwrap();
+    held.try_lock().unwrap();
+    let out = fx.run(&["enc", "s"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("another rustow process"), "{out:?}");
+    assert!(!fx.repo.join("s.age").exists() && fx.repo.join("s").exists());
+}

@@ -567,3 +567,17 @@ fn id_of(st: &FileStat) -> DirId {
         ino: st.st_ino,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The counter alone keeps two names apart, also when the clock does not move.
+    #[test]
+    fn temp_names_are_reserved_and_count_up() {
+        let (a, b) = (temp_name(), temp_name());
+        assert!(a.starts_with(TEMP_PREFIX) && b.starts_with(TEMP_PREFIX), "{a} {b}");
+        let count = |n: &str| n.rsplit('-').next().unwrap().parse::<u64>().unwrap();
+        assert!(count(&b) > count(&a), "{a} {b}");
+    }
+}
