@@ -259,8 +259,7 @@ pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool,
         printer.changes(None, &[Change::new(src.rel.as_str(), "ok", detail)], false);
         return Ok(0);
     }
-    let (ciphertext, unverified) = encrypt_edited(ctx, &src, &edited, workspace)?;
-    interrupted(&stop, &src.rel)?;
+    let (ciphertext, unverified) = encrypt_edited(ctx, &src, &edited, workspace, &stop)?;
     write_back(state, &src, &ciphertext, recipients)?;
     let detail = format!(
         "re-encrypted; deployed files change on the next `rustow apply`{}",
@@ -332,12 +331,14 @@ fn recipients_changed(ctx: &Context, state: &State, src: &Opened, recipients: &H
 }
 
 /// Encrypts and verifies the edit (with the reason it is not verified).
-/// On failure or a concurrent change, the workspace is kept.
+/// On failure or a concurrent change, the workspace is kept; a signal
+/// meanwhile cancels the edit.
 fn encrypt_edited(
     ctx: &Context,
     src: &Opened,
     edited: &[u8],
     workspace: Workspace,
+    stop: &AtomicBool,
 ) -> Result<(Vec<u8>, Option<&'static str>)> {
     let encrypted = crypto::encrypt(src.backend, edited, ctx)
         .and_then(|c| crypto::verify(src.backend, &c, edited, ctx).map(|why| (c, why)));
@@ -355,6 +356,7 @@ fn encrypt_edited(
     if !src.unchanged() {
         return Err(conflict(&src.rel, workspace.keep()));
     }
+    interrupted(stop, &src.rel)?;
     Ok(sealed)
 }
 

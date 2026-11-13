@@ -363,30 +363,17 @@ fn editor_failure_message_names_the_editor_status() {
     assert!(out.stderr.contains("editor exited with"), "{out:?}");
 }
 
-#[test]
-fn signal_during_edit_is_handled_and_cleaned_up() {
-    let (fx, key) = keyed();
-    let ct = fx.age_encrypt("s.age", "keep\n", &[&key]);
-    let before = fs::read(&ct).unwrap();
-    // The editor asks rustow (its parent) to stop, then fails.
-    let editor = fx.editor("sig", "kill -TERM $PPID\nsleep 0.2\nexit 1");
-    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
-    assert_eq!(out.code, 4, "{out:?}");
-    assert!(out.stderr.contains("interrupted"), "{out:?}");
-    assert_eq!(fs::read(&ct).unwrap(), before);
-    assert!(fx.workspaces().is_empty());
-}
-
-/// A signal sent to rustow alone while the editor runs cancels the edit,
-/// also when the editor then exits with success: nothing is encrypted and
-/// the workspace goes.
+/// A signal sent to rustow alone (the editor's parent) while the editor
+/// runs cancels the edit, whether the editor then succeeds or fails:
+/// nothing is encrypted and the workspace goes.
 #[test]
 fn signal_to_rustow_during_edit_cancels_it() {
     let (fx, key) = keyed();
     let ct = fx.age_encrypt("s.age", "keep\n", &[&key]);
     let before = fs::read(&ct).unwrap();
-    for sig in ["TERM", "INT", "HUP"] {
-        let editor = fx.editor("sig", &format!("kill -{sig} $PPID\nsleep 0.2\nprintf 'v2\\n' > \"$1\""));
+    let save = "printf 'v2\\n' > \"$1\"";
+    for (sig, then) in [("TERM", save), ("INT", save), ("HUP", save), ("TERM", "exit 1")] {
+        let editor = fx.editor("sig", &format!("kill -{sig} $PPID\nsleep 0.2\n{then}"));
         let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
         assert_eq!(out.code, 4, "{sig}: {out:?}");
         assert!(
