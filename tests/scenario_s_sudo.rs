@@ -451,6 +451,29 @@ fn jobs_that_ended_or_never_started_leave_no_journal_entry() {
     no_leftover_notice(&s);
 }
 
+/// A job that rustow sent and that got no answer keeps its journal
+/// entry: rustow cannot tell if the helper started it. First sudo stops
+/// at once, and the frame (larger than a pipe buffer) does not fit into
+/// the pipe; then a helper reads the frame and answers no result.
+#[test]
+fn a_job_without_an_answer_keeps_its_journal_entry() {
+    let big = "x".repeat(1 << 20);
+    let no_result = "#!/bin/sh\nIFS= read -r header\necho 'not a result'\nexec cat >/dev/null\n";
+    for (fake, content) in [("#!/bin/sh\nexit 1\n", big.as_str()), (no_result, "y\n")] {
+        let s = Sudo::new(fake);
+        hidden(&s, "0644");
+        s.fx.write("rustowroot/etc/hidden/x.conf", content);
+        let out = s.run(&["apply", "rustowroot/etc/hidden"]);
+        assert_eq!(out.code, 4, "{out:?}");
+        let doctor = s.fx.run(&["doctor"]);
+        let line = line_of(&doctor, "temp file");
+        assert!(
+            line.contains("etc/hidden/.rustow-tmp-") && line.contains("remove it with `sudo rm -- "),
+            "{doctor:?}"
+        );
+    }
+}
+
 /// The real helper runs as root: a directory that it made in the state
 /// directory would be root's, and each later backup of the user would fail.
 /// So rustow makes the backup directories as the user before sudo starts,

@@ -467,6 +467,21 @@ mod tests {
         RelPath::parse(s).unwrap()
     }
 
+    /// Under `O_NOFOLLOW` a symlink is "not a regular file"; without it,
+    /// the file it points at is read. Another failed open, such as a
+    /// missing file, keeps its own error.
+    #[test]
+    fn read_limited_refuses_a_symlink_only_when_it_does_not_follow_it() {
+        let (_t, d) = tmp();
+        fs::write(d.join("target"), "x").unwrap();
+        symlink(d.join("target"), d.join("link")).unwrap();
+        assert_eq!(read_limited(&d.join("link"), OFlag::empty(), 8).unwrap(), b"x");
+        let refused = read_limited(&d.join("link"), OFlag::O_NOFOLLOW, 8).unwrap_err();
+        assert!(matches!(refused, Error::Config(_)), "{refused}");
+        let missing = read_limited(&d.join("missing"), OFlag::O_NOFOLLOW, 8).unwrap_err();
+        assert!(matches!(missing, Error::Io { .. }), "{missing}");
+    }
+
     #[test]
     fn file_meta_matches_only_set_fields() {
         let m = FileMeta {
