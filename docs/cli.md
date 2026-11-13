@@ -102,7 +102,7 @@ Problems that are not about one source still stop every command with exit 2. Exa
 - `backup`: move the old object to `<state_dir>/backups/<repo-id>/<UTC YYYYmmddTHHMMSSZ>-<pid>/<home|root|cache>/<dest-rel>`. The directories are private. rustow makes them as you before it changes the item, also for a system file that the sudo helper replaces. When the state directory is on another filesystem, rustow copies the object into a temporary file there, renames it to the backup name, and then removes the original. When the copy fails (for example, the disk is full), no partial backup stays, the original stays in place, and the item fails.
 - `overwrite`: replace the file or symlink.
 
-`backup` and `overwrite` never replace a directory or a special file. They never act through an unsafe ancestor symlink. They never touch a destination that resolves inside the repository or the cache.
+`backup` and `overwrite` never replace a directory or a special file. They never act through an unsafe ancestor symlink. They never touch a destination that resolves inside the repository, the cache or the state directory: such an item is a conflict.
 
 ## Decisions
 

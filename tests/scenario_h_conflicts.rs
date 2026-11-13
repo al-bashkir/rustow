@@ -558,3 +558,28 @@ fn a_target_behind_a_symlink_to_a_directory_with_a_write_acl_is_refused() {
     assert!(out.stderr.contains(&why), "{out:?}");
     assert!(!shared.join(".cfg").exists());
 }
+
+/// A target that holds the state directory cannot deploy into it, also
+/// with --force: a source there would replace rustow's own state file.
+#[test]
+fn a_destination_inside_the_state_directory_is_refused() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let state = fs::read_dir(fx.state.join("rustow"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "json"))
+        .unwrap();
+    let name = state.file_name().unwrap().to_str().unwrap();
+    fx.write(&format!("state/rustow/{name}"), "{}\n");
+    let out = fx.run(&["--target", fx.base.to_str().unwrap(), "apply", "--force"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let why = format!(
+        "{} resolves inside the repository, its cache or the state directory",
+        state.display()
+    );
+    assert!(out.stdout.contains(&why), "{out:?}");
+    assert!(is_regular(&state));
+    assert!(fx.state_json()["entries"].is_object(), "rustow's own state stays");
+}

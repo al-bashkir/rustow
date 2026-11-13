@@ -705,9 +705,16 @@ fn locate_dest(
             (path, id, Some((existing, missing)))
         }
     };
-    if path.starts_with(&ctx.root) || path.starts_with(&ctx.cache_dir) {
-        let detail = repo_symlink(ctx, source, state)
-            .unwrap_or_else(|| format!("{} resolves inside the repository or its cache", path.display()));
+    if [&ctx.root, &ctx.cache_dir, &ctx.state_dir]
+        .iter()
+        .any(|d| path.starts_with(d))
+    {
+        let detail = repo_symlink(ctx, source, state).unwrap_or_else(|| {
+            format!(
+                "{} resolves inside the repository, its cache or the state directory",
+                path.display()
+            )
+        });
         return Ok(Located::Early(blocked(Conflict::ParentBlocked, detail)));
     }
     Ok(Located::At(path, id, missing_dirs))
