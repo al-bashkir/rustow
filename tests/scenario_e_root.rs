@@ -412,3 +412,73 @@ fn diff_shows_content_for_an_unwritable_system_directory() {
     assert!(apply.stdout.contains("false failed"), "{apply:?}");
     assert!(!fx.root_path("etc/qa.conf").exists());
 }
+
+/// rustow installs a system file as root. A source that another user can
+/// change is a conflict for that item: `apply` writes nothing for it, and
+/// `check` reports it. The trust rule is the one of link targets.
+#[test]
+fn a_system_source_that_others_can_change_is_a_conflict() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/open.conf\"\n[[files]]\nsource = \"rustowroot/etc/ok.conf\"\n",
+    );
+    let open = fx.write("rustowroot/etc/open.conf", "x\n");
+    fx.write("rustowroot/etc/ok.conf", "y\n");
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o666)).unwrap();
+
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let line = out.stdout.lines().find(|l| l.contains("open.conf")).unwrap_or_default();
+    let why = format!(
+        "untrusted source: {} is writable by others; another user can change what rustow installs as root",
+        open.display()
+    );
+    assert!(line.contains(&why), "{out:?}");
+    assert!(!fx.root_path("etc/open.conf").exists());
+    assert_eq!(read(&fx.root_path("etc/ok.conf")), "y\n", "the other item deploys");
+
+    let check = fx.run(&["check"]);
+    assert_eq!(check.code, 1, "{check:?}");
+    assert!(
+        check
+            .stdout
+            .contains(&format!("problem: rustowroot/etc/open.conf: {why}")),
+        "{check:?}"
+    );
+    let forced = fx.run(&["apply", "--force"]);
+    assert_eq!(forced.code, 3, "--force does not resolve it: {forced:?}");
+    assert!(!fx.root_path("etc/open.conf").exists());
+}
+
+/// A group-writable source is trusted only in the user's private group
+/// (named like the user, no other members), as for link targets.
+#[test]
+fn a_group_writable_system_source_deploys_only_in_a_user_private_group() {
+    use nix::unistd::{Group, User, geteuid};
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/g.conf\"\n",
+    );
+    let src = fx.write("rustowroot/etc/g.conf", "g\n");
+    let user = User::from_uid(geteuid()).unwrap().expect("test user");
+    let group = Group::from_gid(user.gid).unwrap().expect("primary group");
+    let private = group.name == user.name && group.mem.iter().all(|m| *m == user.name);
+    std::os::unix::fs::chown(&src, None, Some(user.gid.as_raw())).unwrap();
+    fs::set_permissions(&src, fs::Permissions::from_mode(0o664)).unwrap();
+    let out = fx.run(&["apply"]);
+    if private {
+        assert_eq!(out.code, 0, "{out:?}");
+        assert_eq!(read(&fx.root_path("etc/g.conf")), "g\n");
+    } else {
+        assert_eq!(out.code, 3, "{out:?}");
+        assert!(
+            out.stdout.contains("untrusted source") && out.stdout.contains("chmod g-w"),
+            "{out:?}"
+        );
+        assert!(!fx.root_path("etc/g.conf").exists());
+    }
+}

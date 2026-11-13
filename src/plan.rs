@@ -62,6 +62,9 @@ pub enum Conflict {
     /// A symlink would point at a file that someone other than root or the
     /// destination directory's owner can change.
     Untrusted,
+    /// A system file would come from a source that someone other than
+    /// root or the user can change.
+    UntrustedSource,
     /// A folded directory holds files that are not sources.
     FoldedStrays,
 }
@@ -78,6 +81,7 @@ impl Conflict {
             Conflict::ParentBlocked => "a parent directory is blocked",
             Conflict::NoParent => "parent directory is missing and create_directories = false",
             Conflict::Untrusted => "untrusted link target",
+            Conflict::UntrustedSource => "untrusted source",
             Conflict::FoldedStrays => "cannot unfold the folded directory",
         }
     }
@@ -694,6 +698,18 @@ fn check_link_trust(
     }))
 }
 
+/// Why another user can change what rustow installs as root from the
+/// system source `source`: the trust rule of link targets
+/// (`fsops::trust_cache`) on its repository path, for the current user.
+/// `None` for a home source or a trusted one. `check` reports it too.
+pub fn untrusted_source(ctx: &Context, source: &Source) -> Option<String> {
+    if source.scope != Scope::Root {
+        return None;
+    }
+    let why = fsops::trust_cache(&ctx.root.join(source.path.as_path()), geteuid().as_raw()).err()?;
+    Some(format!("{why}; another user can change what rustow installs as root"))
+}
+
 /// The directory a destination is written into: its parent, or the
 /// deepest existing ancestor while directories are still missing.
 fn dest_dir<'a>(path: &'a Path, missing_dirs: &'a MissingDirs) -> &'a Path {
@@ -836,6 +852,9 @@ fn plan_one(
         Located::At(path, dir_id, missing_dirs) => (path, dir_id, missing_dirs),
         Located::Early(step) => return Ok(step),
     };
+    if let Some(why) = untrusted_source(ctx, source) {
+        return Ok(blocked(Conflict::UntrustedSource, why));
+    }
     let want = match want(ctx, source, &path) {
         Ok(w) => w,
         Err(msg) => return Ok(Step::Failed(msg)),

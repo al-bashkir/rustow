@@ -17,13 +17,15 @@
 
 ## Trust rule
 
-A symlink must point only at a file that other users cannot change. rustow checks each path on the chain of the link target: the repository source of an ordinary link, or the cache entry of a template or a decrypted file. Only home files deploy as symlinks, so the rule applies to home files. System files are always copies.
+A symlink must point only at a file that other users cannot change. rustow checks each path on the chain of the link target: the repository source of an ordinary link, or the cache entry of a template or a decrypted file. Only home files deploy as symlinks. System files are always copies; the rule checks their sources (see below).
 
-- Each path must be owned by root or by the owner of the destination directory.
+- Each path must be owned by root or by the owner of the destination directory. Otherwise the cause is "<path> is owned by uid N, not by root or uid M".
 - No path may be writable by others. A sticky directory that root owns, such as `/tmp`, is the exception.
 - A path may be writable by its group only when that group is the user-private group of the owner: the primary group of the owner, with the owner's name and no other members. Thus a repository made with the default umask 002 of such systems is trusted.
 
 When a check fails, the item is a conflict. The message starts with "untrusted link target: repository source: …" or "untrusted link target: cache entry: …". It gives the path and the cause, for example "writable by others" or "writable by group N, which is not the private group of uid M; run `chmod g-w <path>`". It also tells you to copy the file instead.
+
+The same rule protects system files. rustow installs a system file as root, so its repository source must pass the rule for you: each path on the chain of the source is owned by root or by you, and only your user-private group may write it. Otherwise the item is a conflict, also with `--force` or `--backup`: "untrusted source: <path> is writable by others; another user can change what rustow installs as root". `check` reports it as a problem.
 
 A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow opens the directories above a destination one at a time and never follows a symlink by accident. It follows a symlinked ancestor only when both checks pass for the current user:
 

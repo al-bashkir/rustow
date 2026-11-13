@@ -489,6 +489,13 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
         .collect();
     findings.extend(meta_problems.iter().map(|s| format!("{}: {}", s.path, s.reason)));
     findings.extend(unknown_ids(ctx));
+    let untrusted = crate::plan::Conflict::UntrustedSource.describe();
+    findings.extend(
+        discovery
+            .sources
+            .iter()
+            .filter_map(|s| crate::plan::untrusted_source(ctx, s).map(|why| format!("{}: {untrusted}: {why}", s.path))),
+    );
     let context = template::context(&ctx.config.vars, &ctx.home_target);
     for s in discovery
         .sources

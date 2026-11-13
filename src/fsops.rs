@@ -337,7 +337,7 @@ fn check_dir(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result::
     let path = dir.path.display();
     if dir.uid != 0 && dir.uid != owner {
         return Err(format!(
-            "{path} is owned by uid {}, but the destination directory belongs to uid {owner}",
+            "{path} is owned by uid {}, not by root or uid {owner}",
             dir.uid
         ));
     }
