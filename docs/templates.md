@@ -85,7 +85,7 @@ The meta block is the group of `meta.` lines at the start of the file. It stops 
 - A template cannot run commands.
 - Errors name the template and the line. They never show values. When MiniJinja's detail names only types, the error shows it, for example "template X, line N: invalid operation: tried to use + operator on unsupported types string and number". Other details can quote a value, so the error shows only the kind, for example "invalid operation".
 - One render has a fixed evaluation limit of about 10 million steps (MiniJinja fuel). Real templates stay far below it. A template that goes over it, for example an endless or nested loop, fails with "template X, line N: exceeded the evaluation limit". Only that item fails: `apply` deploys the other items and exits with 4, `status` shows ERROR and `check` reports a problem. The limit bounds the time of a render, not the memory of the values that it makes.
-- rustow keeps each rendered template in memory until it writes it. While it renders a template, the text and the output are in memory: a 200 MB template needs about 400 MB.
+- rustow keeps each rendered template in memory until it writes it. While it renders a template, the text and the output are in memory: a 200 MB template of plain text needs about 400 MB. MiniJinja also keeps a compiled form of each expression and of the text between them, so a template with many expressions needs more. With one expression in each line of 100 bytes, a 200 MB template needs about 900 MB.
 
 ## Commands
 
