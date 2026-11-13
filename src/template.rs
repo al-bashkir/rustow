@@ -81,19 +81,31 @@ pub fn render_plain(name: &str, text: &str, context: &Value) -> Result<String, S
     render_at(name, block.body, context, block.lines)
 }
 
+/// The evaluation limit of one render (MiniJinja fuel: about one unit per
+/// instruction). Real templates use far less; an endless loop stops here.
+/// It bounds time only: the memory of intermediate values is not bounded.
+const FUEL: u64 = 10_000_000;
+
 /// Renders `source`, which starts `offset` lines into the template file.
 fn render_at(name: &str, source: &str, context: &Value, offset: usize) -> Result<String, String> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.set_auto_escape_callback(|_| AutoEscape::None);
+    env.set_fuel(Some(FUEL));
     let syntax = SyntaxConfig::builder()
         .keep_trailing_newline(true)
         .build()
         .map_err(|e| e.to_string())?;
     env.set_syntax(syntax);
-    let describe = |e: minijinja::Error| match e.line() {
-        Some(line) => format!("template {name}, line {}: {}", line + offset, e.kind()),
-        None => format!("template {name}: {}", e.kind()),
+    let describe = |e: minijinja::Error| {
+        let why = match e.kind() {
+            minijinja::ErrorKind::OutOfFuel => "exceeded the evaluation limit".to_owned(),
+            kind => kind.to_string(),
+        };
+        match e.line() {
+            Some(line) => format!("template {name}, line {}: {why}", line + offset),
+            None => format!("template {name}: {why}"),
+        }
     };
     let template = env.template_from_named_str(name, source).map_err(describe)?;
     template.render(minijinja::value::Serde(context)).map_err(describe)

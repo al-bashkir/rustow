@@ -203,3 +203,26 @@ fn symlink_inside_the_cache_is_refused() {
     );
     assert!(!fx.home_path("t").exists());
 }
+
+/// A template that would run for hours stops at the evaluation limit. It
+/// fails alone: the other items deploy.
+#[test]
+fn a_template_over_the_evaluation_limit_fails_alone() {
+    let fx = Fixture::new();
+    let endless = "{% for i in range(100000) %}{% for j in range(100000) %}{% endfor %}{% endfor %}\n";
+    fx.write(".slow.tmpl", endless);
+    fx.write(".bashrc", "b\n");
+    let why = "template .slow.tmpl, line 1: exceeded the evaluation limit";
+    let apply = fx.run_within(60, &["apply"]);
+    assert_eq!(apply.code, 4, "{apply:?}");
+    assert!(apply.stdout.contains(why), "{apply:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")), "{apply:?}");
+    let check = fx.run_within(60, &["check"]);
+    assert_eq!(check.code, 1, "{check:?}");
+    assert!(check.stdout.contains(&format!("problem: {why}")), "{check:?}");
+    let status = fx.run_within(60, &["status"]);
+    assert!(
+        status.stdout.contains("ERROR") && status.stdout.contains(why),
+        "{status:?}"
+    );
+}

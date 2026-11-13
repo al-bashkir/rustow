@@ -84,6 +84,7 @@ The meta block is the group of `meta.` lines at the start of the file. It stops 
 - A template cannot include or import files.
 - A template cannot run commands.
 - Errors name the template and the line. They never show values.
+- One render has a fixed evaluation limit of about 10 million steps (MiniJinja fuel). Real templates stay far below it. A template that goes over it, for example an endless or nested loop, fails with "template X, line N: exceeded the evaluation limit". Only that item fails: `apply` deploys the other items and exits with 4, `status` shows ERROR and `check` reports a problem. The limit bounds the time of a render, not the memory of the values that it makes.
 
 ## Commands
 
