@@ -959,6 +959,34 @@ pub(crate) mod tests {
         }
     }
 
+    /// The check after a change accepts a destination that the user cannot
+    /// read only when nothing was written to it: a new file that nobody
+    /// could read back is not the planned result.
+    #[test]
+    fn verify_accepts_an_unreadable_destination_only_when_nothing_was_written() {
+        use std::os::unix::fs::PermissionsExt;
+        if nix::unistd::geteuid().is_root() {
+            eprintln!("SKIP: root can read everything");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        fs::write(base.join("f"), "x").unwrap();
+        fs::set_permissions(base.join("f"), fs::Permissions::from_mode(0o000)).unwrap();
+        let file = Desired::File {
+            hash: Hash::of(b"x"),
+            meta: FileMeta::default(),
+        };
+        let mut d = create(&base.join("f"), file, None);
+        d.observed = fsops::inspect(&base.join("f")).unwrap();
+        assert!(matches!(d.observed, Observed::Unreadable { .. }), "{:?}", d.observed);
+        let dir = fsops::open_ready(&base, me()).unwrap();
+        d.decision = Decision::UpToDate;
+        assert!(verify(&dir, OsStr::new("f"), &d).is_ok());
+        d.decision = Decision::Create;
+        assert!(verify(&dir, OsStr::new("f"), &d).is_err());
+    }
+
     /// Content with another hash than planned never replaces the file, and
     /// leaves no temporary file.
     #[test]

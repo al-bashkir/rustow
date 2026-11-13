@@ -502,3 +502,36 @@ fn undeploy_goes_on_after_an_unreadable_system_file() {
     set_mode(&app, 0o644);
     assert_eq!(read(&app), "a\n", "kept");
 }
+
+/// The helper reads, as root, a file that the plan could not read. When
+/// its content is not the recorded one, the helper answers with a
+/// conflict: the item is a conflict (exit 3), not an error, and the state
+/// keeps the old record. Here a fake helper gives that answer.
+#[test]
+fn a_conflict_that_the_helper_finds_is_a_conflict() {
+    let s = Sudo::new(FAKE);
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let app = unreadable(&s, "etc/app.conf");
+    let key = app.to_str().unwrap().to_owned();
+    let before = s.fx.state_json()["entries"][&key].clone();
+    s.fx.write("rustowroot/etc/app.conf", "b\n");
+    let answer = r#"{"created_dirs":[],"removed_dirs":[],"result":{"Err":"destination was modified since rustow last applied it"},"conflict":true}"#;
+    fs::write(
+        &s.script,
+        format!("#!/bin/sh\nIFS= read -r header\nprintf '%s\\n' '{answer}'\nexec cat >/dev/null\n"),
+    )
+    .unwrap();
+
+    let out = s.run(&["apply", "rustowroot/etc/app.conf"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let line = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/app.conf"))
+        .unwrap_or_default();
+    assert!(
+        line.contains("conflict") && line.contains("destination was modified since rustow last applied it"),
+        "{out:?}"
+    );
+    assert_eq!(s.fx.state_json()["entries"][&key], before, "the old record stays");
+}
