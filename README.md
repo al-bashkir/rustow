@@ -10,7 +10,7 @@ The repository root mirrors your home directory. The `rustowroot/` directory mir
 - Templates use MiniJinja. Undefined variables are errors.
 - Encrypted sources: age (built in) and GnuPG (installed `gpg`).
 - System files under `rustowroot/`. They deploy only as copies, never as symlinks. You run rustow as yourself; it asks `sudo` only for the system files that you cannot write.
-- Safe conflict handling. By default rustow changes nothing when any item conflicts or fails to plan.
+- Safe conflict handling. By default rustow leaves each item that conflicts or fails to plan, deploys the other items and exits with 3 (4 for an error). `--on-conflict abort` changes nothing when any item conflicts or fails to plan.
 - A problem with one source does not stop the run. rustow skips that source with a warning and deploys the rest.
 - State file per repository. `status`, `diff` and `check` show differences. They exit with code 1 when they find some.
 - `.rustowignore` with gitignore syntax.
