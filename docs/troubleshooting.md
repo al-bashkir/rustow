@@ -52,6 +52,8 @@ The state records a destination whose source is gone. `status` and the deploy co
 
 "<path>: a temporary file that an interrupted run left; remove it with `sudo rm -- <path>`": you cannot remove that file, for example because the sudo helper wrote it as root. Run the command in the message. `doctor` shows the same line until the file is gone. See [temporary files](cli.md#temporary-files-of-an-interrupted-run).
 
+"<path>: cannot look for a temporary file that an interrupted run left: <dir>: <reason>": the path to that directory is not safe now, for example a symlink that another user owns. rustow does not look there, and it gives no command: do not run `sudo rm` through that path. Find out who changed the path. The line goes when the path is safe again and the file is gone.
+
 ## Exit code 2: configuration
 
 Read the message. A TOML error gives the line, the column and the key path: `rustow.toml: line L, column C, key <path>: <message>`. Common causes: missing `version = 1`, an unknown key, a bad mode string, a template `mode` without owner read (0400).

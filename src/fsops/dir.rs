@@ -15,7 +15,7 @@ use std::sync::{Mutex, PoisonError};
 use nix::errno::Errno;
 use nix::fcntl::{AT_FDCWD, AtFlags, OFlag, openat, readlinkat, renameat};
 use nix::sys::stat::{FileStat, Mode, SFlag, fchmod, fstat, fstatat, mkdirat};
-use nix::unistd::{UnlinkatFlags, linkat, symlinkat, unlinkat};
+use nix::unistd::{AccessFlags, UnlinkatFlags, faccessat, linkat, symlinkat, unlinkat};
 use serde::{Deserialize, Serialize};
 
 use super::{FileMeta, Observed, Owned, TEMP_PREFIX, check_dir, private_gid_of};
@@ -247,6 +247,21 @@ impl Dir {
             SFlag::S_IFREG => self.observe_file(name, st)?,
             _ => Observed::Other,
         })
+    }
+
+    /// False only when `name` is surely not here; true also when the user
+    /// may not search this directory.
+    pub fn may_have(&self, name: &OsStr) -> bool {
+        !matches!(
+            fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW),
+            Err(Errno::ENOENT | Errno::ENOTDIR)
+        )
+    }
+
+    /// True when the effective user may add and remove entries here.
+    pub fn writable(&self) -> bool {
+        let access = AccessFlags::W_OK | AccessFlags::X_OK;
+        faccessat(&self.fd, ".", access, AtFlags::AT_EACCESS).is_ok()
     }
 
     /// The text of the symlink `name`.

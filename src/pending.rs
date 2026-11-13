@@ -5,24 +5,39 @@
 //! left and removes the journal. After a run that died, the next command
 //! that takes the lock removes the files that the journal lists, or prints
 //! the command that removes them. An entry stays until its file is gone.
-//! rustow never runs sudo only to clean up.
+//! rustow looks at an entry only through its directory, walked with the
+//! trust rule (`fsops::Dir`). rustow never runs sudo only to clean up.
 
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use nix::fcntl::OFlag;
-use nix::unistd::{AccessFlags, access, geteuid};
+use nix::unistd::geteuid;
 
 use crate::error::{IoContext, Result};
-use crate::fsops::{self, TEMP_PREFIX};
+use crate::fsops::{self, Dir, TEMP_PREFIX, Walked};
 use crate::state::MAX_STATE_SIZE;
 
 /// The journal of the run that holds the lock. Dropping it ends the
 /// journal: entries whose files are gone go, and so does an empty journal.
 pub struct Pending {
     path: PathBuf,
+}
+
+/// Temporary names of this run whose files are gone or were never made,
+/// also where the user cannot look (`settled`).
+static SETTLED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Tells the journal that no file with the temporary name `name` is left:
+/// the end of this run drops its entries.
+pub fn settled(name: &str) {
+    SETTLED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(name.to_owned());
 }
 
 /// What a journaled temporary file is now.
@@ -32,6 +47,8 @@ enum Leftover {
     Removable,
     /// Only root may remove it, for example a file of the sudo helper.
     NeedsRoot,
+    /// rustow cannot look: the walk to its directory is blocked, for this reason.
+    Unchecked(String),
 }
 
 impl Pending {
@@ -40,9 +57,10 @@ impl Pending {
     /// one notice for each.
     pub fn start(path: PathBuf) -> Result<(Pending, Vec<String>)> {
         let mut notices = Vec::new();
+        let me = geteuid().as_raw();
         let kept: Vec<PathBuf> = entries(&path)?
             .into_iter()
-            .filter(|temp| recover(temp, &mut notices))
+            .filter(|temp| recover(temp, me, &mut notices))
             .collect();
         rewrite(&path, &kept)?;
         let journal = OpenOptions::new()
@@ -60,10 +78,16 @@ impl Pending {
 impl Drop for Pending {
     fn drop(&mut self) {
         fsops::journal_to(None);
+        let settled = std::mem::take(&mut *SETTLED.lock().unwrap_or_else(PoisonError::into_inner));
+        let gone = |temp: &PathBuf| {
+            temp.file_name()
+                .is_some_and(|n| settled.iter().any(|s| n == OsStr::new(s)))
+        };
         if let Ok(entries) = entries(&self.path) {
+            let me = geteuid().as_raw();
             let kept: Vec<PathBuf> = entries
                 .into_iter()
-                .filter(|temp| !matches!(leftover(temp), Leftover::Gone))
+                .filter(|temp| !gone(temp) && !matches!(leftover(temp, me), Leftover::Gone))
                 .collect();
             let _ = rewrite(&self.path, &kept);
         }
@@ -71,32 +95,36 @@ impl Drop for Pending {
 }
 
 /// One line for each temporary file that the journal at `path` lists and
-/// that is still there, with what to do about it (for `doctor`).
+/// that may still be there, with what to do about it (for `doctor`).
 pub fn report(path: &Path) -> Result<Vec<String>> {
+    let me = geteuid().as_raw();
     Ok(entries(path)?
         .iter()
-        .filter_map(|temp| match leftover(temp) {
-            Leftover::Gone => None,
+        .filter_map(|temp| match leftover(temp, me) {
             Leftover::Removable => Some(format!(
                 "{}: {LEFT}; the next command that changes files removes it",
                 temp.display()
             )),
-            Leftover::NeedsRoot => Some(needs_root(temp)),
+            other => kept(temp, &other),
         })
         .collect())
 }
 
 const LEFT: &str = "a temporary file that an interrupted run left";
 
-/// Removes the leftover `temp` when the user can; true when the journal
-/// must keep it.
-fn recover(temp: &Path, notices: &mut Vec<String>) -> bool {
-    match leftover(temp) {
+/// The notice for a leftover that the user cannot remove or cannot look at.
+fn kept(temp: &Path, found: &Leftover) -> Option<String> {
+    match found {
+        Leftover::NeedsRoot => Some(needs_root(temp)),
+        Leftover::Unchecked(why) => Some(format!("{}: cannot look for {LEFT}: {why}", temp.display())),
+        Leftover::Gone | Leftover::Removable => None,
+    }
+}
+
+/// Removes the leftover `temp` when `me` can; true when the journal must keep it.
+fn recover(temp: &Path, me: u32, notices: &mut Vec<String>) -> bool {
+    match leftover(temp, me) {
         Leftover::Gone => false,
-        Leftover::NeedsRoot => {
-            notices.push(needs_root(temp));
-            true
-        }
         Leftover::Removable => match remove(temp) {
             Ok(()) => {
                 notices.push(format!("removed {}: {LEFT}", temp.display()));
@@ -107,6 +135,10 @@ fn recover(temp: &Path, notices: &mut Vec<String>) -> bool {
                 true
             }
         },
+        other => {
+            notices.extend(kept(temp, &other));
+            true
+        }
     }
 }
 
@@ -116,23 +148,22 @@ fn remove(temp: &Path) -> Result<()> {
     fsops::open_ready(parent, geteuid().as_raw())?.remove(name)
 }
 
-fn leftover(temp: &Path) -> Leftover {
-    let writable = || {
-        temp.parent()
-            .is_some_and(|dir| access(dir, AccessFlags::W_OK | AccessFlags::X_OK).is_ok())
+/// What `temp` is now, seen through its directory walked for `me`.
+fn leftover(temp: &Path, me: u32) -> Leftover {
+    let Ok((parent, name)) = fsops::split(temp) else {
+        return Leftover::Gone;
     };
-    match fs::symlink_metadata(temp) {
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            Leftover::Gone
-        }
-        Ok(_) if writable() => Leftover::Removable,
-        // Also a file that the user cannot even see: only root can check it.
-        _ => Leftover::NeedsRoot,
+    let dir = match Dir::open(parent, me) {
+        Ok(Walked::Ready(dir)) => dir,
+        Ok(Walked::Missing { .. }) => return Leftover::Gone,
+        Ok(Walked::Blocked { path, reason }) => return Leftover::Unchecked(format!("{}: {reason}", path.display())),
+        Err(e) => return Leftover::Unchecked(e.to_string()),
+    };
+    match (dir.may_have(name), dir.writable()) {
+        (false, _) => Leftover::Gone,
+        (true, true) => Leftover::Removable,
+        // Also a file in a directory that the user cannot search: only root can look.
+        (true, false) => Leftover::NeedsRoot,
     }
 }
 
@@ -205,6 +236,48 @@ mod tests {
         assert_eq!(shell_word(Path::new("/a b/x")), "'/a b/x'");
         assert_eq!(shell_word(Path::new("/it's")), r"'/it'\''s'");
         assert_eq!(shell_word(Path::new("/$(x)")), "'/$(x)'");
+    }
+
+    /// rustow looks at a leftover only through its directory, walked with
+    /// the trust rule. Behind a symlink that another user owns (here the
+    /// test user's symlink, checked for another user) it does not look:
+    /// the notice names the path and the reason, and gives no sudo
+    /// command, and the journal keeps the entry.
+    #[test]
+    fn a_leftover_behind_an_untrusted_symlink_is_not_checked() {
+        let me = geteuid().as_raw();
+        if me == 0 {
+            eprintln!("SKIP: root owns every symlink it creates");
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().canonicalize().unwrap();
+        fs::create_dir(d.join("real")).unwrap();
+        std::os::unix::fs::symlink(d.join("real"), d.join("link")).unwrap();
+        fs::write(d.join("real/.rustow-tmp-1"), "half").unwrap();
+        let journal = d.join("x.pending");
+        fs::write(
+            &journal,
+            format!("{}\n", serde_json::json!(d.join("link/.rustow-tmp-1"))),
+        )
+        .unwrap();
+        let temp = &entries(&journal).unwrap()[0];
+
+        let mut notices = Vec::new();
+        assert!(recover(temp, me + 1, &mut notices), "kept");
+        let why = format!("{}: symlink is not safe", d.join("link").display());
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].starts_with(&format!("{}: cannot look for", temp.display()))
+                && notices[0].contains(&why)
+                && !notices[0].contains("sudo"),
+            "{notices:?}"
+        );
+        assert!(d.join("real/.rustow-tmp-1").exists());
+
+        assert!(!recover(temp, me, &mut notices), "removed through a trusted walk");
+        assert!(!d.join("real/.rustow-tmp-1").exists(), "{notices:?}");
+        assert!(matches!(leftover(temp, me), Leftover::Gone));
     }
 
     #[test]

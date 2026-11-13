@@ -74,7 +74,8 @@ pub struct Header<J> {
 
 /// The helper's result for one job. The directories it created or removed
 /// are listed also when the job failed later. `conflict` says that the
-/// error is a conflict (`Error::Conflict`), not a failure.
+/// error is a conflict (`Error::Conflict`), not a failure. The helper
+/// sends it after the job renamed or removed its temporary file.
 #[derive(Serialize, Deserialize)]
 pub struct Done {
     pub created_dirs: Vec<PathBuf>,
@@ -98,22 +99,40 @@ impl Done {
 /// without a result line fails with the reason: an interrupt, or the exit
 /// status of sudo.
 pub fn call(jobs: &[Job<&Deploy>], stop: &AtomicBool) -> Vec<Done> {
-    let mut done = Vec::with_capacity(jobs.len());
-    if let Err(e) = exchange(jobs, stop, &mut done) {
+    let (mut done, mut unanswered) = (Vec::with_capacity(jobs.len()), false);
+    let result = exchange(jobs, stop, &mut done, &mut unanswered);
+    settle(jobs, unanswered.then_some(done.len()));
+    if let Err(e) = result {
         done.resize_with(jobs.len(), || Done::failed(e.to_string()));
     }
     done
 }
 
+/// Drops the temporary name of each write job from the journal
+/// (`pending::settled`): the helper renames or removes a job's temporary
+/// file before it answers, and makes none for a job that it never got.
+/// Only job `open`, which the helper got and never answered, may have
+/// left its file.
+fn settle(jobs: &[Job<&Deploy>], open: Option<usize>) {
+    for (i, job) in jobs.iter().enumerate() {
+        if let Job::Write { temp, .. } = job
+            && Some(i) != open
+        {
+            crate::pending::settled(temp);
+        }
+    }
+}
+
 /// Starts the helper and sends the jobs in lock-step. Err explains the
-/// jobs that have no result in `done`.
-fn exchange(jobs: &[Job<&Deploy>], stop: &AtomicBool, done: &mut Vec<Done>) -> Result<()> {
+/// jobs that have no result in `done`. `unanswered` tells that the helper
+/// got the first of them.
+fn exchange(jobs: &[Job<&Deploy>], stop: &AtomicBool, done: &mut Vec<Done>, unanswered: &mut bool) -> Result<()> {
     if stop.load(Ordering::SeqCst) {
         return Err(Error::Failed("interrupted before sudo; nothing changed".into()));
     }
     let (shown, mut child) = start()?;
     if let (Some(to), Some(from)) = (child.stdin.take(), child.stdout.take()) {
-        lock_step(jobs, stop, to, &mut BufReader::new(from), done);
+        *unanswered = lock_step(jobs, stop, to, &mut BufReader::new(from), done);
     }
     let status = child
         .wait()
@@ -146,18 +165,19 @@ fn start() -> Result<(String, Child)> {
 
 /// Sends each frame and reads its result line, until an interrupt or until
 /// the helper stops answering. Dropping `to` at the end tells the helper
-/// that no job follows.
+/// that no job follows. True when it stops at a job that it sent (all or
+/// part of it) without an answer.
 fn lock_step(
     jobs: &[Job<&Deploy>],
     stop: &AtomicBool,
     mut to: ChildStdin,
     from: &mut impl BufRead,
     done: &mut Vec<Done>,
-) {
+) -> bool {
     let user = nix::unistd::geteuid().as_raw();
     for job in jobs {
         if stop.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
         // A source that changed since the plan fails its job here; it is not sent.
         let (mut content, len) = match content_of(job) {
@@ -168,13 +188,14 @@ fn lock_step(
             }
         };
         if send(&mut to, Header { user, len, job }, &mut content).is_err() {
-            return;
+            return true;
         }
         match receive(from) {
             Some(result) => done.push(result),
-            None => return,
+            None => return true,
         }
     }
+    false
 }
 
 /// The content of a job and its length: for a write, what

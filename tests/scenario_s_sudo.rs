@@ -409,6 +409,48 @@ fn the_helper_refuses_a_symlink_swapped_in_after_the_plan() {
     );
 }
 
+/// The temporary-file journal of a run that ended normally is gone, and
+/// the next run gives no notice about a leftover.
+fn no_leftover_notice(s: &Sudo) {
+    let pending = fs::read_dir(s.fx.state.join("rustow"))
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "pending"))
+        .count();
+    let doctor = s.fx.run(&["doctor"]);
+    assert_eq!(pending, 0, "{doctor:?}");
+    assert!(doctor.stdout.contains("ok  temp files: none"), "{doctor:?}");
+}
+
+/// The helper refuses the jobs: the planned directory became a symlink
+/// to a directory that the user cannot search. The helper never made a
+/// temporary file there, so rustow drops their journal entries; it does
+/// not tell the user to remove them with sudo.
+#[test]
+fn a_refused_job_leaves_no_journal_entry() {
+    let link = "chmod 000 \"$(dirname \"$FAKE_SUDO_UNLOCK\")/../other\"\n\
+                ln -s \"$(dirname \"$FAKE_SUDO_UNLOCK\")/../other\" \"$FAKE_SUDO_UNLOCK\"";
+    let (s, out, _) = swap_before_the_helper(link);
+    assert!(out.stdout.contains("etc changed while rustow was running"), "{out:?}");
+    no_leftover_notice(&s);
+}
+
+/// A job that the helper wrote, and jobs that never reached it (here the
+/// sudo program is missing), leave no journal entry either, also in a
+/// directory that the user cannot search.
+#[test]
+fn jobs_that_ended_or_never_started_leave_no_journal_entry() {
+    let s = Sudo::new(SEARCHES);
+    hidden(&s, "0644");
+    assert_eq!(s.run(&["apply"]).code, 0);
+    no_leftover_notice(&s);
+
+    s.fx.write("rustowroot/etc/hidden/x.conf", "y\n");
+    let env = [("RUSTOW_SUDO", "rustow-test-no-such-sudo")];
+    let out = s.fx.run_env(&["apply"], &env);
+    assert!(out.stdout.contains("not found in PATH"), "{out:?}");
+    no_leftover_notice(&s);
+}
+
 /// The real helper runs as root: a directory that it made in the state
 /// directory would be root's, and each later backup of the user would fail.
 /// So rustow makes the backup directories as the user before sudo starts,
