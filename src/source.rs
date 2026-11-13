@@ -186,6 +186,51 @@ pub struct Discovery {
     /// `[[file_rules]]` entries that cannot apply, sorted by path. Warnings
     /// only: the path itself may still deploy.
     pub rule_warnings: Vec<Skipped>,
+    /// Built on first use (`Discovery::index`), after discovery filled the lists.
+    pub index: std::sync::OnceLock<Index>,
+}
+
+/// `Below` of `sources`, `skipped` and `inactive`: path arguments select
+/// in O(matches), not O(sources) each.
+#[derive(Debug)]
+pub struct Index {
+    pub sources: Below,
+    pub skipped: Below,
+    pub inactive: Below,
+}
+
+impl Discovery {
+    pub fn index(&self) -> &Index {
+        self.index.get_or_init(|| Index {
+            sources: Below::of(self.sources.iter().map(|s| &s.path)),
+            skipped: Below::of(self.skipped.iter().map(|s| &s.path)),
+            inactive: Below::of(self.inactive.iter().map(|s| &s.path)),
+        })
+    }
+}
+
+/// The positions in a list of paths of the entries at or below each
+/// prefix: each path, each of its parent directories, and "" (the root).
+#[derive(Debug, Default)]
+pub struct Below(std::collections::HashMap<String, Vec<usize>>);
+
+impl Below {
+    pub fn of<'a>(paths: impl Iterator<Item = &'a RelPath>) -> Below {
+        let mut map: std::collections::HashMap<String, Vec<usize>> = Default::default();
+        for (i, path) in paths.enumerate() {
+            let path = path.as_str();
+            let parents = path.match_indices('/').map(|(end, _)| &path[..end]);
+            for prefix in std::iter::once(path).chain(parents).chain([""]) {
+                map.entry(prefix.to_owned()).or_default().push(i);
+            }
+        }
+        Below(map)
+    }
+
+    /// The positions, ascending, of the entries at or below `prefix`.
+    pub fn get(&self, prefix: &str) -> &[usize] {
+        self.0.get(prefix).map_or(&[], Vec::as_slice)
+    }
 }
 
 /// Two or more sources that would write the same destination, or one
@@ -621,6 +666,21 @@ mod tests {
 
     fn rel(s: &str) -> RelPath {
         RelPath::parse(s).unwrap()
+    }
+
+    /// A prefix covers a path and what lies below it as a directory, never
+    /// a sibling that only shares its first characters ("a-c" is not below
+    /// "a"). "" is the repository root.
+    #[test]
+    fn below_finds_the_entries_at_or_under_a_prefix() {
+        let paths = [rel("a"), rel("a-c"), rel("a/b"), rel("a/b/c")];
+        let below = Below::of(paths.iter());
+        assert_eq!(below.get("a"), [0, 2, 3]);
+        assert_eq!(below.get("a/b"), [2, 3]);
+        assert_eq!(below.get("a-c"), [1]);
+        assert_eq!(below.get(""), [0, 1, 2, 3]);
+        assert_eq!(below.get("b"), [] as [usize; 0]);
+        assert_eq!(below.get("a/"), [] as [usize; 0], "keys are normalized paths");
     }
 
     fn cfg(text: &str) -> Config {

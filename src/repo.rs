@@ -8,7 +8,7 @@ use crate::fsops::{Dir, Walked};
 use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore, ROOT_DIR};
 use crate::paths::{RelPath, Scope, expand_tilde, normalize};
-use crate::source::{Discovery, Skipped, Source, discover};
+use crate::source::{Below, Discovery, Index, Skipped, Source, discover};
 use crate::state::State;
 use crate::template::Host;
 
@@ -153,22 +153,19 @@ impl Context {
     /// are errors, and so is a path that names a skipped file.
     pub fn select<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Source>> {
         let wanted = self.wanted(discovery, args)?;
-        Ok(discovery.sources.iter().filter(|s| covers(&wanted, &s.path)).collect())
+        Ok(pick(&discovery.sources, &wanted, |i| &i.sources, discovery))
     }
 
     /// Skipped files and entries that `args` select, as for `select`.
     pub fn skipped<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
-        self.within(discovery, &discovery.skipped, args)
+        let wanted = self.wanted(discovery, args)?;
+        Ok(pick(&discovery.skipped, &wanted, |i| &i.skipped, discovery))
     }
 
     /// Templates that are not for this host and that `args` select, as for `select`.
     pub fn inactive<'a>(&self, discovery: &'a Discovery, args: &[String]) -> Result<Vec<&'a Skipped>> {
-        self.within(discovery, &discovery.inactive, args)
-    }
-
-    fn within<'a>(&self, discovery: &Discovery, list: &'a [Skipped], args: &[String]) -> Result<Vec<&'a Skipped>> {
         let wanted = self.wanted(discovery, args)?;
-        Ok(list.iter().filter(|s| covers(&wanted, &s.path)).collect())
+        Ok(pick(&discovery.inactive, &wanted, |i| &i.inactive, discovery))
     }
 
     /// The checked path prefixes of `args`; none selects everything.
@@ -192,23 +189,33 @@ impl Context {
             return Err(Error::Usage(format!("'{rel}' is ignored by {by}")));
         }
         // An inactive template is not for this host: selecting it is not an error.
-        let mut paths = (discovery.sources.iter().map(|s| &s.path)).chain(discovery.inactive.iter().map(|s| &s.path));
-        if paths.any(|p| p.starts_with(&rel)) {
+        let index = discovery.index();
+        if !index.sources.get(rel.as_str()).is_empty() || !index.inactive.get(rel.as_str()).is_empty() {
             return Ok(rel);
         }
-        if let Some(s) = discovery.skipped.iter().find(|s| s.path == rel) {
+        let skipped = index.skipped.get(rel.as_str());
+        if let Some(s) = skipped.iter().map(|&i| &discovery.skipped[i]).find(|s| s.path == rel) {
             return Err(Error::Usage(format!("source '{rel}': {}", s.reason)));
         }
-        if !discovery.skipped.iter().any(|s| s.path.starts_with(&rel)) {
+        if skipped.is_empty() {
             return Err(Error::Usage(format!("'{rel}' does not match any deployable source")));
         }
         Ok(rel)
     }
 }
 
-/// `path` lies at or below one of `wanted`, or `wanted` is empty.
-fn covers(wanted: &[RelPath], path: &RelPath) -> bool {
-    wanted.is_empty() || wanted.iter().any(|w| path.starts_with(w))
+/// The entries of `list` at or below one of `wanted` (all of them when
+/// `wanted` is empty), in list order and once each. `below` names the
+/// index of `list` in `discovery`.
+fn pick<'a, T>(list: &'a [T], wanted: &[RelPath], below: fn(&Index) -> &Below, discovery: &Discovery) -> Vec<&'a T> {
+    if wanted.is_empty() {
+        return list.iter().collect();
+    }
+    let below = below(discovery.index());
+    let mut at: Vec<usize> = wanted.iter().flat_map(|w| below.get(w.as_str())).copied().collect();
+    at.sort_unstable();
+    at.dedup();
+    at.into_iter().map(|i| &list[i]).collect()
 }
 
 /// Canonical home and root targets (flag, else configuration); neither may lie inside the repository.
