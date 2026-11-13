@@ -45,6 +45,12 @@ pub fn shown(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Colors are on for text output to a terminal, unless `--no-color` or a
+/// `NO_COLOR` with a value (no-color.org: an empty one does not count).
+fn colors(no_color: bool, json: bool, env: Option<&std::ffi::OsStr>, terminal: bool) -> bool {
+    !no_color && !json && env.is_none_or(|v| v.is_empty()) && terminal
+}
+
 /// Whether the reported items were applied or only planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunKind {
@@ -67,12 +73,12 @@ pub struct Printer {
 
 impl Printer {
     pub fn new(json: bool, quiet: bool, verbose: bool, no_color: bool) -> Printer {
-        let color = !no_color && !json && std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal();
+        let env = std::env::var_os("NO_COLOR");
         Printer {
             json,
             quiet,
             verbose,
-            color,
+            color: colors(no_color, json, env.as_deref(), std::io::stdout().is_terminal()),
             home: None,
             warnings: Vec::new(),
         }
@@ -340,6 +346,18 @@ mod tests {
             home: None,
             warnings: Vec::new(),
         }
+    }
+
+    /// no-color.org: only a NO_COLOR with a value turns colors off.
+    #[test]
+    fn colors_need_a_terminal_and_no_non_empty_no_color() {
+        let tty = true;
+        assert!(colors(false, false, None, tty));
+        assert!(colors(false, false, Some("".as_ref()), tty));
+        assert!(!colors(false, false, Some("1".as_ref()), tty));
+        assert!(!colors(true, false, None, tty), "--no-color");
+        assert!(!colors(false, true, None, tty), "--json");
+        assert!(!colors(false, false, None, false), "not a terminal");
     }
 
     #[test]
