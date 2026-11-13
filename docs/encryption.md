@@ -106,6 +106,8 @@ SIGINT (Ctrl-C), SIGTERM or SIGHUP while `enc` reads, encrypts or verifies the f
 
 `enc` prints a notice: Git history, backups and deployed files keep the old plaintext. rustow does not erase them.
 
+`enc` keeps the plaintext, the ciphertext and the plaintext of the verification in memory at the same time: it needs about 3 times the file size. A 200 MB file needs about 650 MB.
+
 `enc` rejects reserved paths, symlinks, missing files and already encrypted files (exit 2). It rejects empty or invalid recipients (exit 2). It has no `--dry-run`. A file named `edit` is written `./edit`.
 
 `enc` and `enc edit` refuse a path through a symlinked parent directory (exit 2), for example: "source 'ld' is a symbolic link; rustow encrypts only files inside the repository; use the real path".
@@ -123,7 +125,9 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell. A program name without a `/` is looked up in the absolute directories of `PATH` only.
 - `enc edit` holds the repository lock while the editor is open. Until the editor exits, another rustow command for this repository fails with "another rustow process is using this repository" (exit 4). This also applies to a timer that runs `apply`.
 - If the editor fails, the ciphertext stays unchanged and rustow removes the workspace.
-- SIGINT, SIGTERM or SIGHUP cancels the edit. rustow waits until the editor exits. Then it does not encrypt your edit, removes the workspace and exits with 4: "interrupted; the edit is not saved". A signal that arrives while rustow encrypts the edit also cancels it. A second signal exits at once. Then the workspace stays until `rustow cache clean`.
+- SIGINT, SIGTERM or SIGHUP cancels the edit. rustow waits until the editor exits. Then it does not encrypt your edit, removes the workspace and exits with 4: "interrupted; the edit is not saved". A signal that arrives while rustow encrypts the edit also cancels it. A second signal exits at once with 130. Then the workspace stays until `rustow cache clean`.
+- When rustow is killed (SIGKILL) while the editor is open, the editor goes on. Nothing holds the lock of the workspace then, so `rustow cache clean` removes the workspace, also while the editor still has the file open. Save your edit somewhere else first. rustow did not encrypt it.
+- `enc edit` keeps the ciphertext, the plaintext, your edit, the new ciphertext and the plaintext of its verification in memory: a 200 MB file needs about 1 GB. When rustow cannot get the memory (for example, under a memory limit), it stops at once ("memory allocation of N bytes failed") and does not name the workspace. The workspace (with the plaintext, mode 0600) stays until `rustow cache clean`.
 - After the edit, rustow verifies the new ciphertext as `enc` does. When no key here can check it, rustow writes it and prints "not verified" with the reason. For example, after you set the recipients to another person's key only, the next `enc edit` on this machine cannot decrypt the file.
 - If the encryption or the verification fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.
