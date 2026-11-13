@@ -115,6 +115,32 @@ fn a_symlink_as_state_file_is_refused() {
     }
 }
 
+/// Every command refuses a symlink at the state directory, as `apply`
+/// does; a symlink above it is followed.
+#[test]
+fn a_symlink_as_state_directory_is_refused() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let (dir, real) = (fx.state.join("rustow"), fx.base.join("real"));
+    fs::rename(&dir, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &dir).unwrap();
+    for args in [&["status"][..], &["diff"], &["check"], &["apply"], &["state", "export"]] {
+        let out = fx.run(args);
+        assert_eq!(out.code, 4, "{args:?}\n{out:?}");
+        let name = dir.display().to_string();
+        assert!(
+            out.stderr.contains(&name) && out.stderr.contains("(symlinks are not followed)"),
+            "{args:?}\n{out:?}"
+        );
+    }
+    fs::remove_file(&dir).unwrap();
+    fs::rename(&real, &dir).unwrap();
+    fs::rename(&fx.state, fx.base.join("state-real")).unwrap();
+    std::os::unix::fs::symlink(fx.base.join("state-real"), &fx.state).unwrap();
+    assert!(fx.ok(&["status", "-v"]).stdout.contains("LINKED"), "a symlink above");
+}
+
 #[test]
 fn state_import_of_a_device_or_fifo_is_refused() {
     let fx = Fixture::new();

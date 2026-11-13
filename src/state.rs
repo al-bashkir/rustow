@@ -161,6 +161,13 @@ impl State {
 
     /// Loads the state of `repo`; a missing file gives an empty state.
     pub fn load(dir: &Path, repo_id: &str, repo: &Path) -> Result<State> {
+        // As for a write (`Dir::private`): rustow never reads the state through a symlink.
+        if fs::symlink_metadata(dir).is_ok_and(|m| !m.is_dir()) {
+            return Err(Error::Failed(format!(
+                "{} is not a directory (symlinks are not followed)",
+                dir.display()
+            )));
+        }
         let file = State::file(dir, repo_id);
         let bytes = match fsops::read_limited(&file, OFlag::O_NOFOLLOW, MAX_STATE_SIZE) {
             Ok(b) => b,
