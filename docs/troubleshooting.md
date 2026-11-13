@@ -84,6 +84,7 @@ rustow checks every symlink (see the [trust rule](security.md#trust-rule)). Only
 - "writable by group N, which is not the private group of uid M": run the `chmod g-w` command in the message.
 - "writable by others": run `chmod o-w` on that path.
 - Otherwise deploy the file as a copy: use `rustow file add`, or a template rule for a template.
+- A cache entry that is not safe for you either, for example in a cache directory that others can write, ends with "fix the permissions of that path (rustow makes its cache directories with mode 0700)". A copy does not make the cache safe. Run `chmod 700` on that cache directory, or `chmod o-w` on a directory above it.
 
 "symlink target is not safe: …" names a symlinked ancestor of the destination, for example `~/.config`. Its target directory fails the same rule. Fix the permissions of that directory.
 

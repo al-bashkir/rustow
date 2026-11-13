@@ -799,19 +799,27 @@ fn check_link_trust(
         Some((cache_path, _)) => (
             cache_path.clone(),
             "cache entry",
-            "[[template_rules]] metadata or `rustow file add`",
+            "copy it instead with [[template_rules]] metadata or `rustow file add`",
         ),
         None => (
             ctx.root.join(source.path.as_path()),
             "repository source",
-            "`rustow file add`",
+            "copy it instead with `rustow file add`",
         ),
     };
     let dir = dest_dir(path, missing_dirs);
     Ok(fsops::trust_cache(&target, fsops::owner_of(dir)?).err().map(|why| {
-        let detail = format!("{what}: {why}; copy it instead with {fix}");
-        blocked(Conflict::Untrusted, detail)
+        let fix = unsafe_cache(want, &target).unwrap_or(fix);
+        blocked(Conflict::Untrusted, format!("{what}: {why}; {fix}"))
     }))
+}
+
+/// The hint for a cache entry that is not safe for its own user either,
+/// for example in a cache directory that others can write: a copy does
+/// not make the cache safe.
+fn unsafe_cache(want: &Want, target: &Path) -> Option<&'static str> {
+    (want.cache.is_some() && fsops::trust_cache(target, geteuid().as_raw()).is_err())
+        .then_some("fix the permissions of that path (rustow makes its cache directories with mode 0700)")
 }
 
 /// Why another user can change what rustow installs as root from the

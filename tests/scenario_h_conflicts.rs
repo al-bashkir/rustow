@@ -288,6 +288,30 @@ fn home_link_into_a_repository_the_target_owner_does_not_own_is_untrusted() {
         cached.contains("untrusted") && cached.contains("cache entry"),
         "{cached}"
     );
+    // The cache is safe for its owner: only a copy avoids the link to it.
+    assert!(cached.contains("copy it instead"), "{cached}");
+}
+
+/// A cache directory that others can write is unsafe for everyone: the
+/// hint says to fix it, not to copy the template.
+#[test]
+fn cache_writable_by_others_gets_a_hint_for_the_cache() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(".t.tmpl", "y\n");
+    fx.ok(&["apply"]);
+    let rendered = fx.repo.join(".rustowcache/rendered");
+    fs::set_permissions(&rendered, fs::Permissions::from_mode(0o777)).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(
+        out.stdout.contains("cache entry: ")
+            && out
+                .stdout
+                .contains("rendered is writable by others; fix the permissions of that path"),
+        "{out:?}"
+    );
+    assert!(!out.stdout.contains("copy it instead"), "{out:?}");
 }
 
 /// Review I5: a home symlink into a source that others can modify is
