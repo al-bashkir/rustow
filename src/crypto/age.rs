@@ -166,9 +166,8 @@ impl Callbacks for Prompt {
         if !self.interactive {
             return None;
         }
-        rpassword::prompt_password(format!("Passphrase for age identity {}: ", self.file))
-            .ok()
-            .map(SecretString::from)
+        let ask = || rpassword::prompt_password(format!("Passphrase for age identity {}: ", self.file));
+        crate::app::at_prompt(ask).ok().map(SecretString::from)
     }
 }
 

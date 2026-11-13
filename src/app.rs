@@ -1,6 +1,6 @@
 //! Command dispatch: builds the context and runs one command.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::cli::{
@@ -571,7 +571,6 @@ fn is_yes(answer: &str) -> bool {
 /// handlers; each later call returns the same flag.
 pub(crate) fn interrupt_flag() -> Result<Arc<AtomicBool>> {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-    static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     if let Some(stop) = STOP.get() {
         return Ok(Arc::clone(stop));
     }
@@ -582,6 +581,19 @@ pub(crate) fn interrupt_flag() -> Result<Arc<AtomicBool>> {
             .map_err(|e| Error::Failed(format!("install signal handler: {e}")))?;
     }
     Ok(Arc::clone(STOP.get_or_init(|| stop)))
+}
+
+static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
+/// Runs `ask`, a question on the terminal. A first signal during it exits
+/// at once with 130, as a second one does: the user leaves the prompt, and
+/// a run that still asks has changed nothing.
+pub(crate) fn at_prompt<T>(ask: impl FnOnce() -> T) -> T {
+    let Some(stop) = STOP.get() else { return ask() };
+    let noted = stop.swap(true, Ordering::SeqCst);
+    let answer = ask();
+    stop.store(noted, Ordering::SeqCst);
+    answer
 }
 
 #[cfg(test)]
