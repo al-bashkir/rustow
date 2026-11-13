@@ -4,7 +4,9 @@
 //! sudo asks for the password on the terminal.
 //! `RUSTOW_SUDO` names another program (`doas`, or a fake in the tests).
 //!
-//! The protocol is lock-step frames. rustow writes one frame per job on the
+//! The protocol is lock-step frames. The helper first prints `READY` on
+//! stdout; rustow sends nothing before that line, so without it no job ran.
+//! Then rustow writes one frame per job on the
 //! helper's stdin: a `Header` as one JSON line, then exactly `len` bytes of
 //! content. The helper runs the job with `execute::write_dest` or
 //! `execute::remove_dest` as root, and answers with one `Done` JSON line on
@@ -37,6 +39,9 @@ pub const HELPER: &str = "__sudo-helper";
 
 /// The longest header line that the helper reads.
 const MAX_HEADER: usize = 1 << 20;
+
+/// The first line of the helper: it runs and reads frames now.
+const READY: &[u8] = b"rustow sudo helper ready\n";
 
 /// One destination for the helper.
 #[derive(Serialize, Deserialize)]
@@ -132,7 +137,11 @@ fn exchange(jobs: &[Job<&Deploy>], stop: &AtomicBool, done: &mut Vec<Done>, unan
     }
     let (shown, mut child) = start()?;
     if let (Some(to), Some(from)) = (child.stdin.take(), child.stdout.take()) {
-        *unanswered = lock_step(jobs, stop, to, &mut BufReader::new(from), done);
+        let mut from = BufReader::new(from);
+        // Without the helper's first line (sudo refused, say), no job is sent.
+        if ready(&mut from) {
+            *unanswered = lock_step(jobs, stop, to, &mut from, done);
+        }
     }
     let status = child
         .wait()
@@ -219,6 +228,15 @@ fn send(to: &mut impl Write, header: Header<&Job<&Deploy>>, content: &mut dyn Re
     to.flush()
 }
 
+/// True when the first line of `from` is the helper's `READY`; it reads
+/// at most that many bytes.
+fn ready(from: &mut impl BufRead) -> bool {
+    let mut line = Vec::new();
+    from.take(READY.len() as u64)
+        .read_until(b'\n', &mut line)
+        .is_ok_and(|_| line == READY)
+}
+
 /// The next result line of the helper; `None` at the end of its output,
 /// or for a line that is not a result.
 fn receive(from: &mut impl BufRead) -> Option<Done> {
@@ -251,10 +269,14 @@ pub fn serve() -> Result<i32> {
     serve_on(&mut File::from(stdin), &mut std::io::stdout().lock())
 }
 
-/// Runs the job of each frame of `input` and writes its result as one line
-/// to `output`. It stops at the end of `input`, or after the job whose
-/// result it cannot write: rustow is gone, and no later job may run.
+/// Writes `READY` to `output`, then runs the job of each frame of `input`
+/// and writes its result as one line to `output`. It stops at the end of
+/// `input`, or when it cannot write a line: rustow is gone, and no later
+/// job may run.
 pub fn serve_on(input: &mut impl Read, output: &mut impl Write) -> Result<i32> {
+    if output.write_all(READY).and_then(|()| output.flush()).is_err() {
+        return Ok(0);
+    }
     while let Some(header) = read_header(input)? {
         let mut body = input.by_ref().take(header.len);
         let done = run(header, &mut body);
@@ -458,13 +480,40 @@ mod tests {
             frame(&mut input, &remove(&d.join(name)));
         }
         let mut output = Breaks {
-            lines: 1,
+            lines: 2,
             got: Vec::new(),
         };
         assert_eq!(serve_on(&mut input.as_slice(), &mut output).unwrap(), 0);
-        assert_eq!(output.got.iter().filter(|&&b| b == b'\n').count(), 1);
+        assert_eq!(results(&output.got).len(), 1, "the ready line and one result");
         assert!(!d.join("a").exists() && !d.join("b").exists());
         assert!(d.join("c").exists(), "job 3 never ran");
+    }
+
+    /// The helper says that it runs before it reads anything; the client
+    /// takes only that exact line, and reads no more of another one.
+    #[test]
+    fn the_helper_says_that_it_runs_first() {
+        let mut output = Vec::new();
+        assert_eq!(serve_on(&mut io::empty(), &mut output).unwrap(), 0);
+        assert_eq!(output, READY);
+        assert!(ready(&mut output.as_slice()));
+        assert!(!ready(&mut &b"sudo: a password is required\n"[..]));
+        assert!(!ready(&mut &b""[..]));
+        let mut long = &[b'x'; 4096][..];
+        assert!(!ready(&mut long));
+        assert_eq!(long.len(), 4096 - READY.len(), "no more than a ready line");
+
+        // rustow is gone before the ready line: no job runs.
+        let (_t, d) = tmp();
+        fs::write(d.join("a"), "a").unwrap();
+        let mut input = Vec::new();
+        frame(&mut input, &remove(&d.join("a")));
+        let mut gone = Breaks {
+            lines: 0,
+            got: Vec::new(),
+        };
+        assert_eq!(serve_on(&mut input.as_slice(), &mut gone).unwrap(), 0);
+        assert!(d.join("a").exists(), "no job without the ready line");
     }
 
     /// Input that ends inside the content fails the job before anything
@@ -488,8 +537,7 @@ mod tests {
         input.truncate(input.len() - 4);
         let mut output = Vec::new();
         serve_on(&mut input.as_slice(), &mut output).unwrap();
-        let done: Done = serde_json::from_slice(&output).unwrap();
-        assert!(done.result.is_err());
+        assert!(results(&output)[0].result.is_err());
         assert_eq!(fs::read_dir(&d).unwrap().count(), 0, "no file and no temp");
     }
 
@@ -513,12 +561,7 @@ mod tests {
             backup: d.join("backups/root/f"),
             temp: format!("{TEMP_PREFIX}test"),
         };
-        let mut input = Vec::new();
-        frame(&mut input, &job);
-        let mut output = Vec::new();
-        serve_on(&mut input.as_slice(), &mut output).unwrap();
-        let done: Done = serde_json::from_slice(&output).unwrap();
-        assert!(done.result.is_err());
+        assert!(serve_all(&[job])[0].result.is_err());
         assert!(!d.join("backups").exists(), "no directory made");
         assert_eq!(fs::read(d.join("f")).unwrap(), b"old");
     }
@@ -670,8 +713,13 @@ mod tests {
         }
         let mut output = Vec::new();
         serve_on(&mut input.as_slice(), &mut output).unwrap();
-        output
-            .split(|&b| b == b'\n')
+        results(&output)
+    }
+
+    /// The result lines of the helper's `output`, after its ready line.
+    fn results(output: &[u8]) -> Vec<Done> {
+        let rest = output.strip_prefix(READY).expect("the ready line comes first");
+        rest.split(|&b| b == b'\n')
             .filter(|l| !l.is_empty())
             .map(|l| serde_json::from_slice(l).unwrap())
             .collect()
@@ -822,11 +870,7 @@ mod tests {
         frame(&mut input, &remove(&d.join("a")));
         let mut output = Vec::new();
         serve_on(&mut input.as_slice(), &mut output).unwrap();
-        let lines: Vec<Done> = output
-            .split(|&b| b == b'\n')
-            .filter(|l| !l.is_empty())
-            .map(|l| serde_json::from_slice(l).unwrap())
-            .collect();
+        let lines = results(&output);
         assert_eq!(lines.len(), 2);
         assert!(
             lines[0]

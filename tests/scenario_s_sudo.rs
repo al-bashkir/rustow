@@ -268,14 +268,15 @@ fn a_failing_sudo_fails_the_items_and_writes_nothing() {
     assert_eq!(s.run(&["status"]).code, 1, "nothing recorded");
 }
 
-/// The helper answers each job before it gets the next one. Here the
-/// answer of the first job reaches rustow and the pipe breaks before the
-/// second answer: the first file is recorded, the second item fails.
+/// The helper answers each job before it gets the next one. Here its
+/// ready line and the answer of the first job reach rustow and the pipe
+/// breaks before the second answer: the first file is recorded, the
+/// second item fails.
 #[test]
 fn each_helper_result_counts_as_it_arrives() {
     let s = Sudo::new(
         "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nchmod 755 \"$FAKE_SUDO_UNLOCK\"\n\
-         \"$@\" | { IFS= read -r l; exec 0<&-; printf '%s\\n' \"$l\"; }\n\
+         \"$@\" | { IFS= read -r r; printf '%s\\n' \"$r\"; IFS= read -r l; exec 0<&-; printf '%s\\n' \"$l\"; }\n\
          chmod 555 \"$FAKE_SUDO_UNLOCK\"\nexit 1\n",
     );
     let out = s.run(&["apply"]);
@@ -451,15 +452,37 @@ fn jobs_that_ended_or_never_started_leave_no_journal_entry() {
     no_leftover_notice(&s);
 }
 
-/// A job that rustow sent and that got no answer keeps its journal
-/// entry: rustow cannot tell if the helper started it. First sudo stops
-/// at once, and the frame (larger than a pipe buffer) does not fit into
-/// the pipe; then a helper reads the frame and answers no result.
+/// The line that the helper prints when it starts.
+const READY: &str = "rustow sudo helper ready";
+
+/// sudo stops before the helper starts (a wrong password, say): no
+/// helper ever said that it runs, so it made nothing, and rustow keeps
+/// no journal entry, also in a directory that the user cannot search.
+#[test]
+fn a_sudo_that_never_starts_the_helper_leaves_no_journal_entry() {
+    let s = Sudo::new("#!/bin/sh\necho 'sudo: 3 incorrect password attempts' >&2\nexit 1\n");
+    hidden(&s, "0644");
+    let out = s.run(&["apply", "rustowroot/etc/hidden"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(
+        line_of(&out, "hidden/x.conf").contains("fake-sudo failed (exit status: 1)"),
+        "{out:?}"
+    );
+    no_leftover_notice(&s);
+}
+
+/// A job that rustow sent to a running helper and that got no answer
+/// keeps its journal entry: rustow cannot tell if the helper started it.
+/// First the helper stops at once, and the frame (larger than a pipe
+/// buffer) does not fit into the pipe; then it reads the frame and
+/// answers no result.
 #[test]
 fn a_job_without_an_answer_keeps_its_journal_entry() {
     let big = "x".repeat(1 << 20);
-    let no_result = "#!/bin/sh\nIFS= read -r header\necho 'not a result'\nexec cat >/dev/null\n";
-    for (fake, content) in [("#!/bin/sh\nexit 1\n", big.as_str()), (no_result, "y\n")] {
+    let stops = format!("#!/bin/sh\necho '{READY}'\nexit 1\n");
+    let no_result =
+        format!("#!/bin/sh\necho '{READY}'\nIFS= read -r header\necho 'not a result'\nexec cat >/dev/null\n");
+    for (fake, content) in [(stops.as_str(), big.as_str()), (no_result.as_str(), "y\n")] {
         let s = Sudo::new(fake);
         hidden(&s, "0644");
         s.fx.write("rustowroot/etc/hidden/x.conf", content);
@@ -726,7 +749,7 @@ fn a_conflict_that_the_helper_finds_is_a_conflict() {
     let answer = r#"{"created_dirs":[],"removed_dirs":[],"result":{"Err":"destination was modified since rustow last applied it"},"conflict":true}"#;
     fs::write(
         &s.script,
-        format!("#!/bin/sh\nIFS= read -r header\nprintf '%s\\n' '{answer}'\nexec cat >/dev/null\n"),
+        format!("#!/bin/sh\necho '{READY}'\nIFS= read -r header\nprintf '%s\\n' '{answer}'\nexec cat >/dev/null\n"),
     )
     .unwrap();
 
