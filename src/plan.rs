@@ -1407,7 +1407,9 @@ fn removal_verdict(found: Option<(DirId, Observed)>, record: &Record) -> Verdict
 }
 
 /// Real path of a recorded destination, the identity of its directory and
-/// what is there now; only the path when its directory is not usable.
+/// what is there now; only the path when its directory is not usable. A
+/// directory inside the repository or its cache is not usable: what is
+/// there is a source or a cache entry, never what rustow deployed.
 fn observe_recorded(
     ctx: &Context,
     record: &Record,
@@ -1416,6 +1418,11 @@ fn observe_recorded(
 ) -> Result<(PathBuf, Option<(DirId, Observed)>)> {
     let rel = RelPath::parse(&rel.to_string_lossy())?;
     match fsops::parent_state(ctx.target_root(record.scope), &rel, geteuid().as_raw())? {
+        ParentState::Ready { dir: parent, .. }
+            if parent.starts_with(&ctx.root) || parent.starts_with(&ctx.cache_dir) =>
+        {
+            Ok((dest.to_path_buf(), None))
+        }
         ParentState::Ready { dir: parent, id } => {
             let path = parent.join(rel.file_name());
             let observed = fsops::inspect(&path)?;

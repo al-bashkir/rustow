@@ -178,7 +178,7 @@ rustow writes each file through a temporary file (`.rustow-tmp-…`) in the same
 
 ## unlink and undeploy
 
-`unlink` removes link-mode records and folded directory links whose symlink still has the recorded text. `undeploy` removes all modes. It removes a copy only if the content hash is unchanged. A system file that you cannot read goes through the sudo helper, which checks the hash as root. An item that fails does not stop the others. Both accept sources that you removed from the repository. If you replaced a folded directory link yourself, they forget its record and leave what is there.
+`unlink` removes link-mode records and folded directory links whose symlink still has the recorded text. `undeploy` removes all modes. It removes a copy only if the content hash is unchanged. A system file that you cannot read goes through the sudo helper, which checks the hash as root. An item that fails does not stop the others. Both accept sources that you removed from the repository. If you replaced a folded directory link yourself, they forget its record and leave what is there. They do the same when a directory above a destination now resolves inside the repository or its cache (for example, you replaced it with a symlink into the repository): what is there is a source, so they never remove it.
 
 rustow also removes parent directories that it created, only when they are empty.
 

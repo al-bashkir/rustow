@@ -175,6 +175,26 @@ fn undeploy_removes_managed_and_refuses_modified() {
     assert_eq!(read(&fx.home_path("copied.conf")), "edited\n");
 }
 
+/// The user replaced the directory of a deployed copy with a symlink into
+/// the repository: the recorded path now reaches the source itself.
+/// undeploy forgets the record and leaves the source.
+#[test]
+fn undeploy_never_removes_a_source_through_a_symlink_into_the_repository() {
+    let fx = Fixture::new();
+    fx.write(".config/app/conf", "precious\n");
+    fx.ok(&["file", "add", ".config/app/conf"]);
+    fx.ok(&["apply"]);
+    let app = fx.home_path(".config/app");
+    fs::remove_dir_all(&app).unwrap();
+    std::os::unix::fs::symlink(fx.repo.join(".config/app"), &app).unwrap();
+
+    let out = fx.run(&["undeploy", "--yes"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(read(&fx.repo.join(".config/app/conf")), "precious\n", "{out:?}");
+    assert!(fs::symlink_metadata(&app).unwrap().is_symlink(), "left in place");
+    assert!(fx.ok(&["undeploy", "--yes"]).stdout.contains("0 changed"), "forgotten");
+}
+
 #[test]
 fn undeploy_all_without_terminal_needs_yes() {
     let fx = mixed();
