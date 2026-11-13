@@ -222,21 +222,22 @@ impl Gpg {
         else {
             return Err("gpg pipes are unavailable".into());
         };
-        let input = Zeroizing::new(input.to_vec());
-        let writer = std::thread::spawn(move || {
-            // A write error means gpg stopped reading; its status says why.
-            let _ = stdin.write_all(&input);
+        // Scoped threads borrow `input`, so the input is in memory only once.
+        let (read, out, stderr) = std::thread::scope(|s| {
+            s.spawn(move || {
+                // A write error means gpg stopped reading; its status says why.
+                let _ = stdin.write_all(input);
+            });
+            let diagnostics = s.spawn(move || {
+                let mut text = String::new();
+                let _ = stderr.read_to_string(&mut text);
+                text
+            });
+            let mut out = Zeroizing::new(Vec::new());
+            let read = stdout.read_to_end(&mut out);
+            (read, out, diagnostics.join().unwrap_or_default())
         });
-        let diagnostics = std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = stderr.read_to_string(&mut text);
-            text
-        });
-        let mut out = Zeroizing::new(Vec::new());
-        let read = stdout.read_to_end(&mut out);
         let status = child.wait().map_err(|e| format!("wait for gpg: {e}"))?;
-        let _ = writer.join();
-        let stderr = diagnostics.join().unwrap_or_default();
         read.map_err(|e| format!("read gpg output: {e}"))?;
         let status_lines = std::fs::read_to_string(&status_file)
             .unwrap_or_default()
