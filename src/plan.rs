@@ -1081,7 +1081,7 @@ fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want
         Mode::FileCopy(meta) => want_file_copy(source, source_abs, meta),
         Mode::DecryptLink(backend) | Mode::DecryptCopy(backend, _) => {
             let (bytes, record) = read_source(source, &source_abs)?;
-            let plaintext = crypto::decrypt(*backend, &source.path, &bytes, ctx)?;
+            let plaintext = plaintext(Some(*backend), source, bytes, ctx)?;
             transformed(ctx, source, path, plaintext, record)
         }
         Mode::TemplateLink(backend) | Mode::TemplateCopy(backend, _) => {
@@ -1171,10 +1171,7 @@ fn want_template(
     record: Record,
 ) -> std::result::Result<Want, String> {
     // Encrypted templates are decrypted (and authenticated) before rendering.
-    let plaintext = match backend {
-        Some(b) => crypto::decrypt(b, &source.path, &bytes, ctx)?,
-        None => Zeroizing::new(bytes),
-    };
+    let plaintext = plaintext(backend, source, bytes, ctx)?;
     let text = std::str::from_utf8(&plaintext).map_err(|_| format!("template {} is not valid UTF-8", source.path))?;
     let context = template::context(&ctx.config.vars, &ctx.home_target);
     // Only plaintext templates have a meta block (it was read at discovery).
@@ -1186,7 +1183,23 @@ fn want_template(
         render_id: Some(template::render_id(&plaintext, &context)),
         ..record
     };
+    // Only the output stays in memory until the write.
+    drop(plaintext);
     transformed(ctx, source, path, Zeroizing::new(rendered.into_bytes()), record)
+}
+
+/// The bytes of a source, decrypted when `backend` is set. It takes the
+/// file bytes, so the ciphertext is freed before the caller goes on.
+fn plaintext(
+    backend: Option<Backend>,
+    source: &Source,
+    bytes: Vec<u8>,
+    ctx: &Context,
+) -> std::result::Result<Zeroizing<Vec<u8>>, String> {
+    match backend {
+        Some(b) => crypto::decrypt(b, &source.path, &bytes, ctx),
+        None => Ok(Zeroizing::new(bytes)),
+    }
 }
 
 /// Desired state for rendered or decrypted content: a symlink to the

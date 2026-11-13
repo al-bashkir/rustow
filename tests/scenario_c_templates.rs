@@ -209,6 +209,25 @@ fn symlink_inside_the_cache_is_refused() {
     assert!(!fx.home_path("t").exists());
 }
 
+/// While a template renders, its text and its output are in memory once
+/// each; then only the output. A 32 MB template deploys as a copy in
+/// 110 MiB of address space: rustow itself needs about 30 MiB.
+#[test]
+fn a_large_template_is_in_memory_at_most_twice() {
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[template_rules]]\nsource = \"big.conf.tmpl\"\nmode = \"0644\"\n",
+    );
+    let line = "a line of static template text\n";
+    let text = line.repeat(32_000_000 / line.len());
+    fx.write("big.conf.tmpl", &text);
+    let limit = nix::sys::resource::Resource::RLIMIT_AS;
+    let out = fx.run_limit(limit, 110 << 20, &["apply"], &[]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(fs::metadata(fx.home_path("big.conf")).unwrap().len(), text.len() as u64);
+}
+
 /// A template that would run for hours stops at the evaluation limit. It
 /// fails alone: the other items deploy.
 #[test]

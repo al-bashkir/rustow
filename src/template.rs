@@ -109,7 +109,13 @@ fn render_at(name: &str, source: &str, context: &Value, offset: usize) -> Result
         }
     };
     let template = env.template_from_named_str(name, source).map_err(describe)?;
-    template.render(minijinja::value::Serde(context)).map_err(describe)
+    // `Template::render` reserves twice the template text, rounded up to a
+    // power of two; most output is about as long as the text.
+    let mut out = Vec::with_capacity(source.len());
+    template
+        .render_captured_to(minijinja::value::Serde(context), &mut out)
+        .map_err(describe)?;
+    Ok(String::from_utf8(out).expect("MiniJinja writes only text"))
 }
 
 /// MiniJinja error details whose `{}` slots hold only a word of
