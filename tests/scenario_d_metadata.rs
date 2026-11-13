@@ -93,6 +93,11 @@ fn chown_to_root_without_privilege_fails_clearly() {
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stdout.contains("set owner"), "{out:?}");
     assert!(!fx.home_path(".ssh/config").exists(), "no partial file is left");
+    assert!(
+        !fx.home_path(".ssh").exists(),
+        "the failed item removes the directory it made"
+    );
+    assert_eq!(fx.state_json()["created_dirs"], serde_json::json!([]));
 }
 
 /// A change of the owner alone on a deployed copy still runs chown:

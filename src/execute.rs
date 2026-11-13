@@ -326,9 +326,11 @@ fn me() -> u32 {
 
 /// The destination part of a deploy. It walks the planned directory again
 /// for `me` and refuses another one at that path, creates the missing
-/// directories in it (pushed to `created` as they appear), then makes the
-/// planned change and checks it, all through the open directory. The sudo
-/// helper runs it as root, with `me` the user who made the plan.
+/// directories in it, then makes the planned change and checks it, all
+/// through the open directory. When the item fails, it removes the empty
+/// directories it created, deepest first. `created` gets the created
+/// directories that remain. The sudo helper runs it as root, with `me` the
+/// user who made the plan.
 pub fn write_dest(
     d: &Deploy,
     policy: Policy,
@@ -336,6 +338,18 @@ pub fn write_dest(
     me: u32,
     created: &mut Vec<PathBuf>,
 ) -> Result<Option<String>> {
+    let mut made = Vec::new();
+    let done = write_in(d, policy, backup, me, &mut made);
+    if done.is_err() {
+        let gone = fsops::remove_empty(made.iter().rev().map(PathBuf::as_path), me);
+        made.truncate(made.len() - gone.len());
+    }
+    created.extend(made);
+    done
+}
+
+/// `write_dest` without the cleanup; `made` gets each directory it creates.
+fn write_in(d: &Deploy, policy: Policy, backup: &Path, me: u32, made: &mut Vec<PathBuf>) -> Result<Option<String>> {
     let (parent, name) = fsops::split(&d.path)?;
     let (base, missing) = match &d.missing_dirs {
         Some((existing, missing)) => (existing.as_path(), missing.as_slice()),
@@ -343,9 +357,9 @@ pub fn write_dest(
     };
     let mut dir = fsops::open_planned(base, d.dir_id, me)?;
     for part in missing {
-        let (next, made) = dir.mkdir(OsStr::new(part), d.dir_mode, me)?;
-        if made {
-            created.push(next.path.clone());
+        let (next, created) = dir.mkdir(OsStr::new(part), d.dir_mode, me)?;
+        if created {
+            made.push(next.path.clone());
         }
         dir = next;
     }
@@ -643,8 +657,19 @@ mod tests {
             dest: RelPath::parse("a").unwrap(),
             mode: Mode::Link,
         };
+        Plan {
+            items: vec![PlanItem {
+                source,
+                dest: path.to_path_buf(),
+                step: Step::Deploy(Box::new(create(path, desired, content))),
+            }],
+        }
+    }
+
+    /// A deploy that creates `path` in its existing parent directory.
+    fn create(path: &Path, desired: Desired, content: Option<&[u8]>) -> Deploy {
         let parent = nix::sys::stat::stat(path.parent().unwrap()).unwrap();
-        let deploy = Deploy {
+        Deploy {
             path: path.to_path_buf(),
             dir_id: fsops::DirId {
                 dev: parent.st_dev,
@@ -663,13 +688,6 @@ mod tests {
             detail: None,
             unwritable: None,
             sudo: false,
-        };
-        Plan {
-            items: vec![PlanItem {
-                source,
-                dest: path.to_path_buf(),
-                step: Step::Deploy(Box::new(deploy)),
-            }],
         }
     }
 
@@ -727,5 +745,36 @@ mod tests {
         );
         assert_eq!(fs::read_dir(&sub).unwrap().count(), 0);
         assert_eq!(fs::read_dir(dir.path().join("old")).unwrap().count(), 0);
+    }
+
+    /// A failed item removes the empty directories it created; one that a
+    /// file still holds stays, and only that one is reported as created.
+    #[test]
+    fn a_failed_item_keeps_only_the_directories_it_cannot_remove() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        let me = nix::unistd::geteuid().as_raw();
+        let below = |want: &[u8], owner| {
+            let file = Desired::File {
+                hash: Hash::of(want),
+                meta: FileMeta::default(),
+            };
+            let mut d = create(&base.join("x"), file, Some(b"new"));
+            d.path = base.join("a/b/x");
+            d.missing_dirs = Some((base.to_path_buf(), vec!["a".into(), "b".into()]));
+            d.file_owner = owner;
+            d
+        };
+        let mut created = Vec::new();
+        let e = write_dest(&below(b"other", (None, None)), Policy::Abort, base, me, &mut created).unwrap_err();
+        assert!(e.to_string().contains("does not match the planned result"), "{e}");
+        assert_eq!(created, [base.join("a"), base.join("a/b")], "a/b/x stays");
+        if me != 0 {
+            fs::remove_dir_all(base.join("a")).unwrap();
+            created.clear();
+            let root_owned = below(b"new", (Some(0), None));
+            assert!(write_dest(&root_owned, Policy::Abort, base, me, &mut created).is_err());
+            assert!(created.is_empty() && !base.join("a").exists());
+        }
     }
 }
