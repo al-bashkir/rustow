@@ -1,18 +1,25 @@
 //! Directories held open. rustow resolves a destination's directory one
 //! component at a time and keeps it open, so that a path changed after
-//! the check cannot send a later change somewhere else.
+//! the check cannot send a later change somewhere else. Every change is
+//! made relative to an open directory.
 
 use std::ffi::OsStr;
+use std::fs::{self, File, Permissions};
+use std::io::{self, Read, Write};
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use nix::errno::Errno;
-use nix::fcntl::{AT_FDCWD, AtFlags, OFlag, openat, readlinkat};
-use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat};
+use nix::fcntl::{AT_FDCWD, AtFlags, OFlag, openat, readlinkat, renameat};
+use nix::sys::stat::{FileStat, Mode, SFlag, fchmod, fstat, fstatat, mkdirat};
+use nix::unistd::{UnlinkatFlags, linkat, symlinkat, unlinkat};
 use serde::{Deserialize, Serialize};
 
-use super::{Owned, check_dir, private_gid_of};
-use crate::error::{IoContext, Result};
+use super::{FileMeta, Observed, Owned, TEMP_PREFIX, check_dir, private_gid_of};
+use crate::error::{Error, IoContext, Result};
+use crate::hash::Hash;
 
 /// Device and inode of a directory: the plan keeps it, and the executor
 /// refuses a directory with another identity at the planned path.
@@ -64,22 +71,60 @@ enum Next {
     Blocked(PathBuf, String),
 }
 
+/// The planned directory at `path`, walked again for `me`; any other
+/// directory there (another inode, a missing or blocked path) fails.
+pub fn open_planned(path: &Path, id: DirId, me: u32) -> Result<Dir> {
+    match Dir::open(path, me)? {
+        Walked::Ready(dir) if dir.id()? == id => Ok(dir),
+        _ => Err(Error::Failed(format!(
+            "{} changed while rustow was running; left unchanged",
+            path.display()
+        ))),
+    }
+}
+
+/// The existing directory at `path`, walked for `me`.
+pub fn open_ready(path: &Path, me: u32) -> Result<Dir> {
+    match Dir::open(path, me)? {
+        Walked::Ready(dir) => Ok(dir),
+        Walked::Missing { .. } => Err(Error::Failed(format!("{}: {}", path.display(), Errno::ENOENT.desc()))),
+        Walked::Blocked { path, reason } => Err(Error::Failed(format!("{}: {reason}", path.display()))),
+    }
+}
+
 impl Dir {
     /// Walks the absolute path `abs` from `/` (see `walk`).
     pub fn open(abs: &Path, me: u32) -> Result<Walked> {
+        if !abs.is_absolute() {
+            return Err(Error::Failed(format!("{} is not an absolute path", abs.display())));
+        }
         Dir::root()?.walk(abs, me)
     }
 
     fn root() -> Result<Dir> {
-        let fd = openat(
+        let fd = sys(openat(
             AT_FDCWD,
             "/",
             SEARCH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
             Mode::empty(),
-        )
-        .map_err(std::io::Error::from)
+        ))
         .ctx(|| "open /".to_owned())?;
         Ok(Dir { fd, path: "/".into() })
+    }
+
+    /// The directory at `path`, opened as the kernel resolves it (symlinks
+    /// followed): only to read an entry, never to change one.
+    pub(super) fn at(path: &Path) -> io::Result<Dir> {
+        let fd = sys(openat(
+            AT_FDCWD,
+            path,
+            SEARCH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ))?;
+        Ok(Dir {
+            fd,
+            path: path.to_path_buf(),
+        })
     }
 
     /// Walks `rel` below this directory. Each component opens without
@@ -93,24 +138,32 @@ impl Dir {
 
     /// Device and inode of this directory.
     pub fn id(&self) -> Result<DirId> {
-        let st = fstat(&self.fd)
-            .map_err(std::io::Error::from)
-            .ctx(|| format!("inspect {}", self.path.display()))?;
+        let st = sys(fstat(&self.fd)).ctx(|| format!("inspect {}", self.path.display()))?;
         Ok(id_of(&st))
+    }
+
+    fn entry(&self, name: &OsStr) -> PathBuf {
+        self.path.join(name)
+    }
+
+    /// The directory `name` (`..` too), opened with `flags`, never through a symlink.
+    fn child(&self, name: &OsStr, flags: OFlag) -> nix::Result<Dir> {
+        let flags = flags | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let fd = openat(&self.fd, name, flags, Mode::empty())?;
+        let path = match name == ".." {
+            true => self.path.parent().unwrap_or(&self.path).to_path_buf(),
+            false => self.entry(name),
+        };
+        Ok(Dir { fd, path })
     }
 
     /// One component: `..`, a directory, a missing entry or a symlink.
     fn step(&self, name: &OsStr, me: u32, budget: &mut u32) -> Result<Next> {
-        let path = match name == ".." {
-            true => self.path.parent().unwrap_or(&self.path).to_path_buf(),
-            false => self.path.join(name),
-        };
-        let flags = SEARCH | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-        match openat(&self.fd, name, flags, Mode::empty()) {
-            Ok(fd) => Ok(Next::Into(Dir { fd, path })),
+        match self.child(name, SEARCH) {
+            Ok(dir) => Ok(Next::Into(dir)),
             Err(Errno::ENOENT) => Ok(Next::Missing),
-            Err(Errno::ELOOP | Errno::ENOTDIR) => self.follow(name, path, me, budget),
-            Err(e) => Ok(Next::Blocked(path, e.desc().into())),
+            Err(Errno::ELOOP | Errno::ENOTDIR) => self.follow(name, self.entry(name), me, budget),
+            Err(e) => Ok(Next::Blocked(self.entry(name), e.desc().into())),
         }
     }
 
@@ -133,9 +186,7 @@ impl Dir {
             Ok(dir) => dir,
             Err(blocked) => return Ok(blocked),
         };
-        let st = fstat(&target.fd)
-            .map_err(std::io::Error::from)
-            .ctx(|| format!("inspect {}", target.path.display()))?;
+        let st = sys(fstat(&target.fd)).ctx(|| format!("inspect {}", target.path.display()))?;
         if let Err(why) = trusted(&target.path, &st, st.st_mode as u32 & 0o7777, me) {
             return Ok(Next::Blocked(path, format!("symlink target is not safe: {why}")));
         }
@@ -162,6 +213,220 @@ impl Dir {
             Walked::Ready(dir) => Ok(Ok(dir)),
             Walked::Missing { .. } => blocked("symlink does not resolve"),
             Walked::Blocked { path, reason } => Ok(Err(Next::Blocked(path, reason))),
+        }
+    }
+
+    /// What is at `name` now, without following a symlink there.
+    pub fn inspect(&self, name: &OsStr) -> Result<Observed> {
+        let path = self.entry(name);
+        let st = match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Err(Errno::ENOENT) => return Ok(Observed::Missing),
+            other => sys(other).ctx(|| format!("inspect {}", path.display()))?,
+        };
+        Ok(match kind(&st) {
+            SFlag::S_IFLNK => {
+                let text = sys(readlinkat(&self.fd, name)).ctx(|| format!("read symlink {}", path.display()))?;
+                Observed::Symlink(text.into())
+            }
+            SFlag::S_IFDIR => Observed::Dir,
+            SFlag::S_IFREG => self.observe_file(name)?,
+            _ => Observed::Other,
+        })
+    }
+
+    /// Hash and metadata of the regular file `name`.
+    fn observe_file(&self, name: &OsStr) -> Result<Observed> {
+        let (mut file, meta) = self.open_regular(name)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .ctx(|| format!("read {}", self.entry(name).display()))?;
+        Ok(Observed::File {
+            hash: Hash::of(&bytes),
+            mode: meta.mode() & 0o7777,
+            uid: meta.uid(),
+            gid: meta.gid(),
+        })
+    }
+
+    /// Opens the regular file `name` for reading; fails on a symlink or a
+    /// special file. `O_NONBLOCK` keeps a FIFO from blocking the open.
+    fn open_regular(&self, name: &OsStr) -> Result<(File, fs::Metadata)> {
+        let path = self.entry(name);
+        let flags = OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC;
+        let fd = sys(openat(&self.fd, name, flags, Mode::empty()))
+            .ctx(|| format!("open {} (symlinks are not followed)", path.display()))?;
+        let file = File::from(fd);
+        let meta = file.metadata().ctx(|| format!("stat {}", path.display()))?;
+        if !meta.is_file() {
+            return Err(Error::Failed(format!("{} is not a regular file", path.display())));
+        }
+        Ok((file, meta))
+    }
+
+    /// Writes `bytes` to `name` through a new temporary file in this
+    /// directory: private (0600) from creation, then owner, `mode` and
+    /// fsync, then renamed to `name`. `replace` replaces a file or symlink
+    /// at `name` (never a directory); otherwise anything there fails it.
+    pub fn write(
+        &self,
+        name: &OsStr,
+        bytes: &[u8],
+        mode: u32,
+        owner: (Option<u32>, Option<u32>),
+        replace: bool,
+    ) -> Result<()> {
+        let dest = self.entry(name);
+        let temp = temp_name();
+        let flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let fd = sys(openat(&self.fd, temp.as_str(), flags, Mode::from_bits_truncate(0o600)))
+            .ctx(|| format!("write {}", dest.display()))?;
+        let done = fill(File::from(fd), &dest, bytes, mode, owner).and_then(|()| {
+            self.publish(OsStr::new(&temp), name, replace)
+                .ctx(|| format!("replace {}", dest.display()))
+        });
+        if done.is_err() {
+            let _ = unlinkat(&self.fd, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+        }
+        done?;
+        self.sync();
+        Ok(())
+    }
+
+    fn publish(&self, temp: &OsStr, name: &OsStr, replace: bool) -> io::Result<()> {
+        match replace {
+            true => sys(renameat(&self.fd, temp, &self.fd, name)),
+            false => rename_noreplace(&self.fd, temp, &self.fd, name),
+        }
+    }
+
+    /// Creates the symlink `name` with `text`. `replace` replaces a file or
+    /// symlink there atomically (never a directory); otherwise anything
+    /// there fails it.
+    pub fn symlink(&self, name: &OsStr, text: &Path, replace: bool) -> Result<()> {
+        let made = match replace {
+            false => sys(symlinkat(text, &self.fd, name)),
+            true => {
+                let temp = temp_name();
+                let swapped = sys(symlinkat(text, &self.fd, temp.as_str()))
+                    .and_then(|()| sys(renameat(&self.fd, temp.as_str(), &self.fd, name)));
+                if swapped.is_err() {
+                    let _ = unlinkat(&self.fd, temp.as_str(), UnlinkatFlags::NoRemoveDir);
+                }
+                swapped
+            }
+        };
+        made.ctx(|| format!("create symlink {}", self.entry(name).display()))?;
+        self.sync();
+        Ok(())
+    }
+
+    /// Changes owner and mode of the regular file `name`; refuses a symlink.
+    pub fn set_meta(&self, name: &OsStr, meta: FileMeta) -> Result<()> {
+        let (file, _) = self.open_regular(name)?;
+        chown_chmod(&file, &self.entry(name), (meta.uid, meta.gid), meta.mode)
+    }
+
+    /// Removes the file or symlink `name`, never a directory.
+    pub fn remove(&self, name: &OsStr) -> Result<()> {
+        sys(unlinkat(&self.fd, name, UnlinkatFlags::NoRemoveDir))
+            .map_err(|e| Error::Failed(format!("remove {}: {e}", self.entry(name).display())))
+    }
+
+    /// Removes `name` when it is an empty directory; true when it did.
+    pub fn rmdir(&self, name: &OsStr) -> bool {
+        unlinkat(&self.fd, name, UnlinkatFlags::RemoveDir).is_ok()
+    }
+
+    /// The directory `name`, created with `mode` when it is missing (true
+    /// in the result). An existing one must be a real directory that
+    /// `check_dir` accepts for `me`, such as one an earlier item created.
+    pub fn mkdir(&self, name: &OsStr, mode: u32, me: u32) -> Result<(Dir, bool)> {
+        let path = self.entry(name);
+        if Path::new(name).components().ne([Component::Normal(name)]) {
+            return Err(Error::Failed(format!("{}: not a directory name", path.display())));
+        }
+        let made = match mkdirat(&self.fd, name, Mode::from_bits_truncate(mode)) {
+            Ok(()) => true,
+            Err(Errno::EEXIST) => false,
+            Err(e) => return Err(io::Error::from(e)).ctx(|| format!("create directory {}", path.display())),
+        };
+        let dir = sys(self.child(name, SEARCH)).ctx(|| format!("create directory {}", path.display()))?;
+        if !made {
+            let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
+            trusted(&path, &st, st.st_mode as u32 & 0o7777, me).map_err(Error::Failed)?;
+        }
+        Ok((dir, made))
+    }
+
+    /// The private directory `name`: created with mode 0700, or an existing
+    /// real directory that `me` owns, with group and other access removed.
+    pub(super) fn private(&self, name: &OsStr, me: u32) -> Result<Dir> {
+        let path = self.entry(name);
+        match mkdirat(&self.fd, name, Mode::from_bits_truncate(0o700)) {
+            Ok(()) | Err(Errno::EEXIST) => {}
+            Err(e) => return Err(io::Error::from(e)).ctx(|| format!("create {}", path.display())),
+        }
+        let dir = match self.child(name, OFlag::O_RDONLY) {
+            Ok(dir) => dir,
+            Err(Errno::ELOOP | Errno::ENOTDIR) => {
+                let why = format!("{} is not a directory (symlinks are not followed)", path.display());
+                return Err(Error::Failed(why));
+            }
+            Err(e) => return Err(io::Error::from(e)).ctx(|| format!("open {}", path.display())),
+        };
+        let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
+        if st.st_uid != me {
+            return Err(Error::Failed(format!(
+                "{} is owned by uid {}, not by the current user (uid {me})",
+                path.display(),
+                st.st_uid
+            )));
+        }
+        if st.st_mode & 0o077 != 0 {
+            sys(fchmod(&dir.fd, Mode::from_bits_truncate(0o700))).ctx(|| format!("restrict {}", path.display()))?;
+        }
+        Ok(dir)
+    }
+
+    /// Moves the file or symlink `name` to `to_name` in `to`, never over
+    /// anything there. Across filesystems it copies, then removes `name`.
+    pub fn move_to(&self, name: &OsStr, to: &Dir, to_name: &OsStr) -> Result<()> {
+        let (from, dest) = (self.entry(name), to.entry(to_name));
+        let what = || format!("back up {} to {}", from.display(), dest.display());
+        match rename_noreplace(&self.fd, name, &to.fd, to_name) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(Error::Failed(format!("backup {} already exists", dest.display())));
+            }
+            Err(e) if e.kind() == io::ErrorKind::CrossesDevices => self
+                .copy_to(name, to, to_name)
+                .and_then(|()| sys(unlinkat(&self.fd, name, UnlinkatFlags::NoRemoveDir)))
+                .ctx(what)?,
+            other => other.ctx(what)?,
+        }
+        to.sync();
+        self.sync();
+        Ok(())
+    }
+
+    /// Copies the file or symlink `name` to the new entry `to_name` in `to`.
+    fn copy_to(&self, name: &OsStr, to: &Dir, to_name: &OsStr) -> io::Result<()> {
+        let st = sys(fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW))?;
+        if kind(&st) == SFlag::S_IFLNK {
+            return sys(symlinkat(sys(readlinkat(&self.fd, name))?.as_os_str(), &to.fd, to_name));
+        }
+        let flags = OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC;
+        let src = File::from(sys(openat(&self.fd, name, flags, Mode::empty()))?);
+        let flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let mut dst = File::from(sys(openat(&to.fd, to_name, flags, Mode::from_bits_truncate(0o600)))?);
+        io::copy(&mut &src, &mut dst)?;
+        dst.set_permissions(src.metadata()?.permissions())?;
+        dst.sync_all()
+    }
+
+    /// Best effort: makes a change of entries durable. Failure only weakens crash safety.
+    fn sync(&self) {
+        if let Ok(fd) = openat(&self.fd, ".", OFlag::O_RDONLY | OFlag::O_CLOEXEC, Mode::empty()) {
+            let _ = File::from(fd).sync_all();
         }
     }
 }
@@ -192,6 +457,56 @@ fn walk_in(mut cur: Dir, rel: &Path, me: u32, budget: &mut u32) -> Result<Walked
         };
     }
     Ok(Walked::Ready(cur))
+}
+
+/// Writes the content, sets owner and mode, and syncs the temporary file of `dest`.
+fn fill(mut file: File, dest: &Path, bytes: &[u8], mode: u32, owner: (Option<u32>, Option<u32>)) -> Result<()> {
+    file.write_all(bytes).ctx(|| format!("write {}", dest.display()))?;
+    chown_chmod(&file, dest, owner, Some(mode))?;
+    file.sync_all().ctx(|| format!("write {}", dest.display()))
+}
+
+/// Sets the owner and group, then the mode, of the open file of `path`.
+fn chown_chmod(file: &File, path: &Path, (uid, gid): (Option<u32>, Option<u32>), mode: Option<u32>) -> Result<()> {
+    if uid.is_some() || gid.is_some() {
+        std::os::unix::fs::fchown(file, uid, gid).ctx(|| format!("set owner of {}", path.display()))?;
+    }
+    if let Some(mode) = mode {
+        file.set_permissions(Permissions::from_mode(mode))
+            .ctx(|| format!("set mode of {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Renames without replacing anything at `to`. Where the kernel or the
+/// filesystem has no such rename, a hard link (which fails when `to`
+/// exists) and an unlink do the same.
+fn rename_noreplace(from_dir: &OwnedFd, from: &OsStr, to_dir: &OwnedFd, to: &OsStr) -> io::Result<()> {
+    use rustix::fs::{RenameFlags, renameat_with};
+    use rustix::io::Errno as E;
+    match renameat_with(from_dir, from, to_dir, to, RenameFlags::NOREPLACE) {
+        Err(E::INVAL | E::NOSYS) => {
+            sys(linkat(from_dir, from, to_dir, to, AtFlags::empty()))?;
+            let _ = unlinkat(from_dir, from, UnlinkatFlags::NoRemoveDir);
+            Ok(())
+        }
+        other => other.map_err(io::Error::from),
+    }
+}
+
+/// A new name for a temporary file: `TEMP_PREFIX`, the process id, the
+/// time and a counter, so two calls never give the same name.
+fn temp_name() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!("{TEMP_PREFIX}{}-{nanos:x}-{n}", std::process::id())
+}
+
+fn sys<T>(r: nix::Result<T>) -> io::Result<T> {
+    r.map_err(io::Error::from)
 }
 
 /// `check_dir` for `me` on what `st` describes, with `mode` as its permission bits.

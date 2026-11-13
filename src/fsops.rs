@@ -3,7 +3,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use crate::hash::Hash;
 use crate::paths::RelPath;
 
 mod dir;
-pub use dir::{Dir, DirId, Walked};
+pub use dir::{Dir, DirId, Walked, open_planned, open_ready};
 
 /// Name prefix of every temporary file rustow creates. Names with it are
 /// reserved at any depth, so a file left by a crash is never deployed.
@@ -56,38 +56,15 @@ pub enum Observed {
     Other,
 }
 
+/// What is at `path` now (`Dir::inspect`). The directories above it are
+/// resolved as the kernel does: this only reads.
 pub fn inspect(path: &Path) -> Result<Observed> {
-    let meta = match fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Observed::Missing),
-        Err(e) => return Err(e).ctx(|| format!("inspect {}", path.display())),
-    };
-    let kind = meta.file_type();
-    if kind.is_symlink() {
-        let text = fs::read_link(path).ctx(|| format!("read symlink {}", path.display()))?;
-        return Ok(Observed::Symlink(text));
+    let (parent, name) = split(path)?;
+    match Dir::at(parent) {
+        Ok(dir) => dir.inspect(name),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Observed::Missing),
+        Err(e) => Err(e).ctx(|| format!("inspect {}", path.display())),
     }
-    if kind.is_dir() {
-        return Ok(Observed::Dir);
-    }
-    if !kind.is_file() {
-        return Ok(Observed::Other);
-    }
-    inspect_file(path)
-}
-
-/// Hash and metadata of a regular file.
-fn inspect_file(path: &Path) -> Result<Observed> {
-    let (mut file, meta) = open_regular(path)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .ctx(|| format!("read {}", path.display()))?;
-    Ok(Observed::File {
-        hash: Hash::of(&bytes),
-        mode: meta.mode() & 0o7777,
-        uid: meta.uid(),
-        gid: meta.gid(),
-    })
 }
 
 /// Opens a file for reading with `flags` and its metadata. `O_NONBLOCK`
@@ -149,168 +126,89 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Replaces `dest` with `bytes` through a same-directory temporary file
-/// that is private (0600) from creation, then gets owner and `mode`, and
-/// is renamed over `dest`. A symlink at `dest` is replaced, not followed.
+/// Replaces `dest` with `bytes` (`Dir::write`) in the directory of `dest`,
+/// walked for the current user. A symlink at `dest` is replaced, not followed.
 pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
-    write_file(dest, bytes, mode, (uid, gid), true)
+    let dest = std::path::absolute(dest).ctx(|| format!("write {}", dest.display()))?;
+    let (parent, name) = split(&dest)?;
+    open_ready(parent, geteuid().as_raw())?.write(name, bytes, mode, (uid, gid), true)
 }
 
 /// Like `write_atomic`, but fails when anything exists at `dest` by the
 /// time the file is published, so a concurrent creation is never replaced.
 pub fn write_new(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
-    write_file(dest, bytes, mode, (uid, gid), false)
-}
-
-fn write_file(dest: &Path, bytes: &[u8], mode: u32, owner: (Option<u32>, Option<u32>), clobber: bool) -> Result<()> {
-    let parent = parent_of(dest)?;
-    let mut tmp = tempfile::Builder::new()
-        .prefix(TEMP_PREFIX)
-        .tempfile_in(parent)
-        .ctx(|| format!("write {}", dest.display()))?;
-    fill_temp(&mut tmp, dest, bytes, mode, owner)?;
-    let published = if clobber {
-        tmp.persist(dest)
-    } else {
-        tmp.persist_noclobber(dest)
-    };
-    published
-        .map_err(|e| e.error)
-        .ctx(|| format!("replace {}", dest.display()))?;
-    sync_dir(parent);
-    Ok(())
+    let (parent, name) = split(dest)?;
+    open_ready(parent, geteuid().as_raw())?.write(name, bytes, mode, (uid, gid), false)
 }
 
 /// Creates the symlink `link`; fails when anything already exists there.
 pub fn symlink_new(link: &Path, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(target, link).ctx(|| format!("create symlink {}", link.display()))?;
-    sync_dir(parent_of(link)?);
-    Ok(())
-}
-
-/// Writes the content, sets owner and mode, and syncs the temporary file of `dest`.
-fn fill_temp(
-    tmp: &mut tempfile::NamedTempFile,
-    dest: &Path,
-    bytes: &[u8],
-    mode: u32,
-    (uid, gid): (Option<u32>, Option<u32>),
-) -> Result<()> {
-    let what = || format!("write {}", dest.display());
-    tmp.write_all(bytes).ctx(what)?;
-    if uid.is_some() || gid.is_some() {
-        std::os::unix::fs::fchown(tmp.as_file(), uid, gid).ctx(|| format!("set owner of {}", dest.display()))?;
-    }
-    tmp.as_file()
-        .set_permissions(fs::Permissions::from_mode(mode))
-        .ctx(what)?;
-    tmp.as_file().sync_all().ctx(what)
+    let (parent, name) = split(link)?;
+    open_ready(parent, geteuid().as_raw())?.symlink(name, target, false)
 }
 
 /// Creates or replaces the symlink `link` (never a directory) atomically.
 pub fn symlink_atomic(link: &Path, target: &Path) -> Result<()> {
-    let parent = parent_of(link)?;
-    let what = || format!("create symlink {}", link.display());
-    let tmp = tempfile::Builder::new()
-        .prefix(TEMP_PREFIX)
-        .make_in(parent, |p| std::os::unix::fs::symlink(target, p))
-        .ctx(what)?;
-    tmp.persist(link).map_err(|e| e.error).ctx(what)?;
-    sync_dir(parent);
-    Ok(())
+    let (parent, name) = split(link)?;
+    open_ready(parent, geteuid().as_raw())?.symlink(name, target, true)
 }
 
 /// Changes owner and mode of an existing regular file, refusing symlinks.
 pub fn set_meta(path: &Path, meta: FileMeta) -> Result<()> {
-    let (file, _) = open_regular(path)?;
-    if meta.uid.is_some() || meta.gid.is_some() {
-        std::os::unix::fs::fchown(&file, meta.uid, meta.gid).ctx(|| format!("set owner of {}", path.display()))?;
-    }
-    if let Some(mode) = meta.mode {
-        file.set_permissions(fs::Permissions::from_mode(mode))
-            .ctx(|| format!("set mode of {}", path.display()))?;
-    }
-    Ok(())
+    let (parent, name) = split(path)?;
+    open_ready(parent, geteuid().as_raw())?.set_meta(name, meta)
 }
 
-/// Moves `path` (file or symlink) to `backup`, whose parent is created private.
+/// Moves `path` (file or symlink) to `backup`, whose parent is created
+/// private; never over an existing backup.
 pub fn backup(path: &Path, backup: &Path) -> Result<()> {
-    ensure_private_dir(parent_of(backup)?)?;
-    if fs::symlink_metadata(backup).is_ok() {
-        return Err(Error::Failed(format!("backup {} already exists", backup.display())));
-    }
-    let what = || format!("back up {} to {}", path.display(), backup.display());
-    match fs::rename(path, backup) {
-        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => move_across_devices(path, backup).ctx(what),
-        other => other.ctx(what),
-    }
+    let (parent, name) = split(path)?;
+    let (to, to_name) = split(backup)?;
+    let me = geteuid().as_raw();
+    let dir = open_ready(parent, me)?;
+    ensure_private_dir(to)?;
+    dir.move_to(name, &open_ready(to, me)?, to_name)
 }
 
-/// Copies a file or symlink to `backup`, then removes `path`.
-fn move_across_devices(path: &Path, backup: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(path)?, backup)?;
-    } else {
-        fs::copy(path, backup)?;
-    }
-    fs::remove_file(path)
-}
-
-/// Creates `dir` and missing parents with mode 0700, and checks that the
-/// final directory is a real directory owned by the current user with no
-/// group or other access (tightening it if needed).
+/// Creates `dir` and missing parents with mode 0700. The final directory
+/// must be a real directory that the current user owns; group and other
+/// access is removed (`Dir::private`).
 pub fn ensure_private_dir(dir: &Path) -> Result<()> {
+    private_dir(dir).map(drop)
+}
+
+fn private_dir(dir: &Path) -> Result<Dir> {
+    let (parent, name) = split(dir)?;
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(dir)
-        .ctx(|| format!("create {}", dir.display()))?;
-    let meta = fs::symlink_metadata(dir).ctx(|| format!("inspect {}", dir.display()))?;
-    if !meta.is_dir() {
-        return Err(Error::Failed(format!(
-            "{} is not a directory (symlinks are not followed)",
-            dir.display()
-        )));
-    }
-    let euid = geteuid().as_raw();
-    if meta.uid() != euid {
-        return Err(Error::Failed(format!(
-            "{} is owned by uid {}, not by the current user (uid {euid})",
-            dir.display(),
-            meta.uid()
-        )));
-    }
-    if meta.mode() & 0o077 != 0 {
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).ctx(|| format!("restrict {}", dir.display()))?;
-    }
-    Ok(())
+        .create(parent)
+        .ctx(|| format!("create {}", parent.display()))?;
+    let me = geteuid().as_raw();
+    open_ready(parent, me)?.private(name, me)
 }
 
-/// `ensure_private_dir` for `root` and for each level from it down to
-/// `dir`, so a symlink at any level below `root` is an error and nothing
-/// written into `dir` can leave the tree.
-pub fn ensure_private_tree(root: &Path, dir: &Path) -> Result<()> {
+/// The directory `dir` below the private directory `root`, open. Each
+/// level from `root` down is a private directory (`Dir::private`) opened
+/// from the one above it, so a symlink at any level is an error and
+/// nothing written into `dir` can leave the tree.
+pub fn private_tree(root: &Path, dir: &Path) -> Result<Dir> {
     let below = dir
         .strip_prefix(root)
         .map_err(|_| Error::Failed(format!("{} is not inside {}", dir.display(), root.display())))?;
-    let mut level = root.to_path_buf();
-    ensure_private_dir(&level)?;
+    let me = geteuid().as_raw();
+    let mut cur = private_dir(root)?;
     for part in below.components() {
-        level.push(part);
-        ensure_private_dir(&level)?;
+        cur = cur.private(part.as_os_str(), me)?;
     }
-    Ok(())
+    Ok(cur)
 }
 
-fn parent_of(path: &Path) -> Result<&Path> {
-    path.parent()
-        .ok_or_else(|| Error::Failed(format!("{} has no parent directory", path.display())))
-}
-
-/// Best effort: makes a rename durable. Failure only weakens crash safety.
-fn sync_dir(dir: &Path) {
-    if let Ok(d) = File::open(dir) {
-        let _ = d.sync_all();
+/// The parent directory and the last component of `path`.
+pub fn split(path: &Path) -> Result<(&Path, &OsStr)> {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => Ok((parent, name)),
+        _ => Err(Error::Failed(format!("{} has no parent directory", path.display()))),
     }
 }
 
@@ -694,15 +592,18 @@ mod tests {
     }
 
     #[test]
-    fn ensure_private_tree_refuses_a_symlink_at_any_level() {
+    fn private_tree_refuses_a_symlink_at_any_level() {
         let (_t, d) = tmp();
         fs::create_dir(d.join("elsewhere")).unwrap();
-        ensure_private_tree(&d.join("c"), &d.join("c/x/y")).unwrap();
+        let dir = private_tree(&d.join("c"), &d.join("c/x/y")).unwrap();
+        assert_eq!(dir.path, d.join("c/x/y"));
         assert_eq!(mode_of(&d.join("c/x/y")), 0o700);
+        dir.write(OsStr::new("f"), b"in", 0o600, (None, None), true).unwrap();
+        assert_eq!(fs::read(d.join("c/x/y/f")).unwrap(), b"in");
         std::os::unix::fs::symlink(d.join("elsewhere"), d.join("c/l")).unwrap();
-        assert!(ensure_private_tree(&d.join("c"), &d.join("c/l/y")).is_err());
+        assert!(private_tree(&d.join("c"), &d.join("c/l/y")).is_err());
         assert_eq!(fs::read_dir(d.join("elsewhere")).unwrap().count(), 0);
-        assert!(ensure_private_tree(&d.join("c"), &d.join("other")).is_err());
+        assert!(private_tree(&d.join("c"), &d.join("other")).is_err());
     }
 
     #[test]
