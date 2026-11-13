@@ -41,54 +41,50 @@ pub enum Recorded<'a> {
     Copy(&'a Hash),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Why a destination cannot simply change. `Display` gives the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum Conflict {
     /// Something rustow did not create is in the way.
+    #[error("existing destination is not managed by rustow")]
     Unmanaged,
     /// A file rustow wrote was changed by someone else.
+    #[error("destination was modified since rustow last applied it")]
     Modified,
     /// An unmodified managed copy would become a symlink (needs authorization).
+    #[error("managed copy would be replaced by a symlink")]
     FileToSymlink,
     /// A directory is in the way; never replaced.
+    #[error("a directory is in the way")]
     Directory,
     /// A FIFO, socket or device is in the way; never replaced.
+    #[error("a special file is in the way")]
     Special,
     /// Several sources map to this destination.
+    #[error("several sources map to this destination")]
     Collision,
     /// An ancestor directory is a file or an unsafe symlink.
+    #[error("a parent directory is blocked")]
     ParentBlocked,
     /// Parent directories are missing and `create_directories = false`.
+    #[error("parent directory is missing and create_directories = false")]
     NoParent,
     /// A symlink would point at a file that someone other than root or the
     /// destination directory's owner can change.
+    #[error("untrusted link target")]
     Untrusted,
     /// A system file would come from a source that someone other than
     /// root or the user can change.
+    #[error("untrusted source")]
     UntrustedSource,
     /// The user cannot read the destination, and the state has no record of it.
+    #[error("cannot read the destination; rustow has no record of it")]
     Unreadable,
     /// A folded directory holds files that are not sources.
+    #[error("cannot unfold the folded directory")]
     FoldedStrays,
 }
 
 impl Conflict {
-    pub fn describe(self) -> &'static str {
-        match self {
-            Conflict::Unmanaged => "existing destination is not managed by rustow",
-            Conflict::Modified => "destination was modified since rustow last applied it",
-            Conflict::FileToSymlink => "managed copy would be replaced by a symlink",
-            Conflict::Directory => "a directory is in the way",
-            Conflict::Special => "a special file is in the way",
-            Conflict::Collision => "several sources map to this destination",
-            Conflict::ParentBlocked => "a parent directory is blocked",
-            Conflict::NoParent => "parent directory is missing and create_directories = false",
-            Conflict::Untrusted => "untrusted link target",
-            Conflict::UntrustedSource => "untrusted source",
-            Conflict::Unreadable => "cannot read the destination; rustow has no record of it",
-            Conflict::FoldedStrays => "cannot unfold the folded directory",
-        }
-    }
-
     /// Conflicts that `--backup` / `--force` may resolve.
     pub fn resolvable(self) -> bool {
         matches!(
@@ -812,15 +808,19 @@ fn needs_sudo(
     owner: (Option<u32>, Option<u32>),
     unreadable: bool,
 ) -> (Option<String>, bool) {
-    let changes = match decision {
+    let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| !my_group(g));
+    match scope {
+        Scope::Root if changes(decision) && (unwritable.is_some() || foreign || unreadable) => (None, true),
+        _ => (unwritable, false),
+    }
+}
+
+/// True when `decision` changes the destination (under `--force` too).
+fn changes(decision: Decision) -> bool {
+    match decision {
         Decision::Create | Decision::Update | Decision::FixMetadata => true,
         Decision::Conflict(c) => c.resolvable(),
         Decision::UpToDate | Decision::Adopt => false,
-    };
-    let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| !my_group(g));
-    match scope {
-        Scope::Root if changes && (unwritable.is_some() || foreign || unreadable) => (None, true),
-        _ => (unwritable, false),
     }
 }
 
@@ -839,7 +839,8 @@ fn observe_dest(path: &Path, missing_dirs: &MissingDirs) -> std::result::Result<
     fsops::inspect(path).map_err(|e| Step::Failed(with_privilege_hint(e)))
 }
 
-/// Checks the cache trust, then reads the destination; `Err` carries the step that ends planning.
+/// Checks the trust of a system source and of a link target, then reads
+/// the destination; `Err` carries the step that ends planning.
 fn inspect_dest(
     ctx: &Context,
     source: &Source,
@@ -847,6 +848,9 @@ fn inspect_dest(
     missing_dirs: &MissingDirs,
     want: &Want,
 ) -> Result<std::result::Result<Observed, Step>> {
+    if let Some(why) = untrusted_source(ctx, source) {
+        return Ok(Err(blocked(Conflict::UntrustedSource, why)));
+    }
     if let Some(step) = check_link_trust(ctx, source, path, missing_dirs, want)? {
         return Ok(Err(step));
     }
@@ -889,9 +893,6 @@ fn plan_one(
         Located::At(path, dir_id, missing_dirs) => (path, dir_id, missing_dirs),
         Located::Early(step) => return Ok(step),
     };
-    if let Some(why) = untrusted_source(ctx, source) {
-        return Ok(blocked(Conflict::UntrustedSource, why));
-    }
     let want = match want(ctx, source, &path) {
         Ok(w) => w,
         Err(msg) => return Ok(Step::Failed(msg)),
@@ -1279,19 +1280,7 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
         if !wanted || !selector.includes_label(&record.mode) {
             continue;
         }
-        let (path, verdict) = match observe_recorded(ctx, record, dest, rel) {
-            Ok((path, found)) => (path, removal_verdict(found, record)),
-            Err(e) => (dest.clone(), Verdict::Fail(with_privilege_hint(e))),
-        };
-        let sudo = removal_needs_sudo(record.scope, &verdict, &path, &state.created_dirs);
-        out.push(Removal {
-            source: record.source.clone(),
-            mode: shown_label(&record.mode, record.backend),
-            dest: dest.clone(),
-            path,
-            verdict,
-            sudo,
-        });
+        out.push(removal(ctx, dest, record, rel, &state.created_dirs));
     }
     if out.is_empty() && !prefixes.is_empty() {
         let list: Vec<&str> = prefixes.iter().map(RelPath::as_str).collect();
@@ -1301,6 +1290,24 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
         )));
     }
     Ok(out)
+}
+
+/// The removal of the recorded destination `dest` (`rel` below its target
+/// root). An error while rustow looks at it fails this item only.
+fn removal(ctx: &Context, dest: &Path, record: &Record, rel: &Path, created: &BTreeSet<PathBuf>) -> Removal {
+    let (path, verdict) = match observe_recorded(ctx, record, dest, rel) {
+        Ok((path, found)) => (path, removal_verdict(found, record)),
+        Err(e) => (dest.to_path_buf(), Verdict::Fail(with_privilege_hint(e))),
+    };
+    let sudo = removal_needs_sudo(record.scope, &verdict, &path, created);
+    Removal {
+        source: record.source.clone(),
+        mode: shown_label(&record.mode, record.backend),
+        dest: dest.to_path_buf(),
+        path,
+        verdict,
+        sudo,
+    }
 }
 
 /// Parses removal arguments into source prefixes; `.` means everything.

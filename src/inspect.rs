@@ -107,7 +107,7 @@ fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Resu
 fn step_text(item: &PlanItem, label: &str, old: Option<&Record>) -> Result<(String, bool)> {
     Ok(match &item.step {
         Step::Failed(_) => (String::new(), false),
-        Step::Blocked { conflict, detail } => (format!("{label}: {}: {}\n", conflict.describe(), shown(detail)), false),
+        Step::Blocked { conflict, detail } => (format!("{label}: {conflict}: {}\n", shown(detail)), false),
         Step::Unfold { .. } => (
             format!("{label}: folded directory link; would become a real directory\n"),
             false,
@@ -374,7 +374,7 @@ fn classify_item(item: &PlanItem, old: Option<&Record>) -> (&'static str, Option
     match &item.step {
         Step::Failed(msg) => ("ERROR", Some(msg.clone())),
         Step::Deploy(d) if d.unwritable.is_some() => ("ERROR", d.unwritable.clone()),
-        Step::Blocked { conflict, detail } => ("CONFLICT", Some(format!("{}: {detail}", conflict.describe()))),
+        Step::Blocked { conflict, detail } => ("CONFLICT", Some(format!("{conflict}: {detail}"))),
         Step::Unfold { .. } => ("OUTDATED", Some("folded directory will be unfolded".into())),
         Step::Deploy(d) => classify_deploy(d, &item.source.mode, old),
     }
@@ -398,7 +398,7 @@ fn classify_deploy(d: &Deploy, mode: &Mode, old: Option<&Record>) -> (&'static s
         (Decision::Conflict(Conflict::Modified), _) | (_, Some(Decision::Conflict(Conflict::Modified))) => {
             ("MODIFIED", None)
         }
-        (Decision::Conflict(c), _) | (_, Some(Decision::Conflict(c))) => ("CONFLICT", Some(c.describe().into())),
+        (Decision::Conflict(c), _) | (_, Some(Decision::Conflict(c))) => ("CONFLICT", Some(c.to_string())),
         (Decision::Create, _) => ("MISSING", None),
         (Decision::Update | Decision::FixMetadata, _) | (_, Some(Decision::Create | Decision::Update)) => {
             ("OUTDATED", None)
@@ -509,7 +509,7 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
         .collect();
     findings.extend(meta_problems.iter().map(|s| format!("{}: {}", s.path, s.reason)));
     findings.extend(unknown_ids(ctx));
-    let untrusted = crate::plan::Conflict::UntrustedSource.describe();
+    let untrusted = crate::plan::Conflict::UntrustedSource;
     findings.extend(
         discovery
             .sources

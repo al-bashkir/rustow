@@ -112,7 +112,7 @@ pub fn predict(item: &PlanItem, policy: Policy) -> (Action, Option<String>) {
             Action::Update,
             Some("unfold the folded directory link into a real directory".into()),
         ),
-        Step::Blocked { conflict, detail } => unresolved(policy, format!("{}: {detail}", conflict.describe())),
+        Step::Blocked { conflict, detail } => unresolved(policy, format!("{conflict}: {detail}")),
         Step::Deploy(d) => predict_deploy(d, policy),
     }
 }
@@ -139,7 +139,7 @@ fn deploy_conflict(d: &Deploy) -> Option<(Conflict, String)> {
     let dest = conflict_of(d.decision);
     let conflict = dest.or_else(|| d.cache.as_ref().and_then(|c| conflict_of(c.decision)))?;
     let what = if dest.is_some() { "" } else { "cache entry: " };
-    let mut detail = format!("{what}{}", conflict.describe());
+    let mut detail = format!("{what}{conflict}");
     if let Some(extra) = &d.detail {
         detail = format!("{detail} ({extra})");
     }
@@ -602,7 +602,7 @@ fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed, expect: Opt
     }
     match (expect, now) {
         (Some(want), Observed::File { hash, .. }) if hash != *want => {
-            Err(Error::Conflict(Conflict::Modified.describe().into()))
+            Err(Error::Conflict(Conflict::Modified.to_string()))
         }
         (Some(_), Observed::Unreadable { .. }) => Err(Error::Io {
             context: format!("cannot read {}", path.display()),
