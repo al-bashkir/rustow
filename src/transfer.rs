@@ -1,15 +1,18 @@
 //! `rustow state export|import`: the registrations of `file add` and
 //! copy-mode `link` as JSON, to move them to another machine. The records
-//! of deployed files stay: they belong to one machine.
+//! of deployed files stay: they belong to one machine. `rustow state
+//! adopt`: the whole state of this repository from its path before a move.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use nix::fcntl::OFlag;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, IoContext, Result};
 use crate::fsops;
+use crate::hash::Hash;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Printer};
@@ -90,6 +93,91 @@ fn check_paths(ctx: &Context, state: &State, regs: &Registrations) -> Result<()>
     regs.links
         .iter()
         .try_for_each(|link| crate::app::check_link(ctx, &discovery, state, link.as_str()))
+}
+
+/// Takes over the state of the repository that was at `old` before a move:
+/// sets the root, moves its cache entries to this repository id, saves it
+/// as this repository's state, and keeps the old file as
+/// `backups/<old-id>/state-adopted.json`. `apply` then updates the links.
+pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Result<i32> {
+    let bad = |why: String| Error::Usage(format!("{}: {why}", old.display()));
+    let old: PathBuf = std::path::absolute(old)
+        .map_err(|e| bad(e.to_string()))?
+        .components()
+        .collect();
+    if fs::symlink_metadata(&old).is_ok() {
+        return Err(bad(
+            "still exists; rustow adopts only the state of a repository that was moved".into(),
+        ));
+    }
+    let old_id = Hash::of(old.as_os_str().as_encoded_bytes()).short().to_owned();
+    let file = State::file(&ctx.state_dir, &old_id);
+    if fs::symlink_metadata(&file).is_err() {
+        let dir = ctx.state_dir.display();
+        return Err(Error::Usage(format!(
+            "no state of a repository at {} in {dir}",
+            old.display()
+        )));
+    }
+    let ours = State::file(&ctx.state_dir, &ctx.repo_id);
+    if fs::symlink_metadata(&ours).is_ok() {
+        return Err(Error::Usage(format!(
+            "this repository already has a state ({}); move it away first",
+            ours.display()
+        )));
+    }
+    let mut state = State::load(&ctx.state_dir, &old_id, &old)?;
+    state.repo = ctx.root.clone();
+    for record in state.entries.values_mut() {
+        if let Some(path) = record
+            .cache_path
+            .as_deref()
+            .and_then(|p| moved_cache_path(ctx, p, &old_id))
+        {
+            record.cache_path = Some(path);
+        }
+    }
+    if !dry_run {
+        move_cache(ctx, &old_id)?;
+        state.save(&ctx.state_dir, &ctx.repo_id)?;
+        let backups = ctx.state_dir.join("backups").join(&old_id);
+        fsops::ensure_private_dir(&backups)?;
+        let kept = backups.join("state-adopted.json");
+        fs::rename(&file, &kept).ctx(|| format!("move {} to {}", file.display(), kept.display()))?;
+    }
+    let detail = format!("{} records", state.entries.len());
+    printer.changes(
+        None,
+        &[Change::new(&old.display().to_string(), "adopt", Some(detail))],
+        dry_run,
+    );
+    Ok(0)
+}
+
+/// `path` of a cache entry below `<kind>/<old_id>` in the old cache, below
+/// `<kind>/<repo-id>` in this repository's cache.
+fn moved_cache_path(ctx: &Context, path: &Path, old_id: &str) -> Option<PathBuf> {
+    let parts: Vec<&std::ffi::OsStr> = path.iter().collect();
+    let kind = |p: &std::ffi::OsStr| p == "rendered" || p == "decrypted";
+    let at = parts.windows(2).position(|w| kind(w[0]) && w[1] == old_id)?;
+    let mut new = ctx.cache_dir.join(parts[at]).join(&ctx.repo_id);
+    new.extend(&parts[at + 2..]);
+    Some(new)
+}
+
+/// Renames the cache entries of `old_id` to this repository id, in each
+/// cache kind that has them.
+fn move_cache(ctx: &Context, old_id: &str) -> Result<()> {
+    for kind in ["rendered", "decrypted"] {
+        let base = ctx.cache_dir.join(kind);
+        if !fs::symlink_metadata(base.join(old_id)).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        let dir = fsops::private_tree(&ctx.cache_dir, &base)?;
+        let (from, to) = (dir.path.join(old_id), dir.path.join(&ctx.repo_id));
+        fs::rename(&from, &to).ctx(|| format!("move {} to {}", from.display(), to.display()))?;
+    }
+    Ok(())
 }
 
 /// Reads and checks an export. Each path is checked as a repository path.

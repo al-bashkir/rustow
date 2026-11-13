@@ -165,6 +165,10 @@ fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Resul
             let _lock = lock(&ctx, p, g.dry_run)?;
             crate::transfer::import(&mut ctx, p, &file, g.dry_run)
         }
+        StateCommand::Adopt { old_root } => {
+            let _lock = lock(&ctx, p, g.dry_run)?;
+            crate::transfer::adopt(&ctx, p, &old_root, g.dry_run)
+        }
     }
 }
 

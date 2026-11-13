@@ -105,6 +105,14 @@ impl Context {
             &root_target,
         ));
         let repo_id = Hash::of(root.as_os_str().as_encoded_bytes()).short().to_owned();
+        if std::fs::symlink_metadata(State::file(&state_dir, &repo_id)).is_err() {
+            notices.extend(crate::state::moved_roots(&state_dir).iter().map(|old| {
+                let old = old.display();
+                format!(
+                    "the state of a moved repository was found: {old}; run `rustow state adopt {old}` to take it over"
+                )
+            }));
+        }
         Ok(Context {
             root,
             config,

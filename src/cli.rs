@@ -185,6 +185,11 @@ pub enum StateCommand {
         #[arg(value_name = "FILE")]
         file: PathBuf,
     },
+    /// Take over the state of this repository from its path before a move
+    Adopt {
+        #[arg(value_name = "OLD_ROOT")]
+        old_root: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]

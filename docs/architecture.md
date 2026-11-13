@@ -29,7 +29,7 @@ rustow has one planner and one executor. Every command that changes files builds
 | `fsops`             | Safe file operations (temp file, rename, ancestors).   |
 | `state`             | Per-repository JSON state and lock.                    |
 | `pending`           | Journal of temporary files; cleanup after a crash.     |
-| `transfer`          | `state export/import` of the registrations.            |
+| `transfer`          | `state export/import/adopt`.                           |
 | `sudo`              | The sudo helper: client (`call`) and helper (`serve`). |
 | `cache`             | Rendered and decrypted entries, edit workspaces.       |
 | `template`          | MiniJinja context and rendering.                       |
@@ -93,6 +93,8 @@ Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<sc
 ## State
 
 `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow` (or `defaults.state_dir`). The file `<repo-id>.json` (mode 0600, directory 0700) is keyed by absolute destination. It also holds the registrations of this machine: `files` (`file add`) and `links` (`link <path>` in copy mode). It holds content hashes, not plaintext. The hashes are sensitive metadata. The file `<repo-id>.lock` stops concurrent runs (exit 4, "another rustow process"). `state::lock` keeps a lock only when the path still names the locked file (device and inode); else it tries again, at most 3 times. When the lock file is removed or replaced during a run (`Lock::replaced`), `app::save` warns before it saves the state. rustow refuses corrupt, foreign or newer state. Move such a file away to continue. You must own the state directory.
+
+The repository id is a hash of the repository path, and the field `repo` records that path. So a moved repository has no state file. `Context::open` then looks for state files whose `repo` does not exist (`state::moved_roots`) and adds a notice for each. `transfer::adopt` (`state adopt`) loads such a file with the checks of `State::load`, sets `repo`, renames `<cache>/rendered|decrypted/<old-id>` to the new id and rewrites each `cache_path` to match, saves it as this repository's state, and keeps the old file as `backups/<old-id>/state-adopted.json`. The next `apply` sees rustow's own links with the old text and updates them.
 
 The file has a `version` (`state::STATE_VERSION`, now 1). `State::load` reads each version from 1 up to it and runs the steps in `state::MIGRATIONS` that the file needs, in order. A newer version fails with "written by a newer rustow". After a migration, `save` first keeps the old bytes as `backups/<repo-id>/state-v<N>.json`. A new field with a default needs no new version: `files` and `links` came that way. An older rustow ignores such a field and drops it when it saves. Raise `STATE_VERSION` only for a change that needs a step, and add one step that turns the old JSON into the new JSON.
 

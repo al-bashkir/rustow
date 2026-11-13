@@ -111,6 +111,10 @@ Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file t
 
 rustow refuses corrupt, foreign or newer state. For newer state ("written by a newer rustow"), upgrade rustow. Otherwise move the file `<state_dir>/<repo-id>.json` away. Then run `rustow status`. Existing correct destinations appear as UNMANAGED. `rustow apply` adopts them. The registrations of `file add` and copy-mode `link` are lost then: register them again, or `rustow state import` an earlier export.
 
+## Moved repository
+
+After you move the repository, old links are "not managed (broken symlink)", and the registrations of `file add` and copy-mode `link` seem lost. Each command prints "note: the state of a moved repository was found: <old path>; run `rustow state adopt <old path>` to take it over". Run that command, then `rustow apply`. It updates the links to the new path. Copies and registrations stay. Do not use `--force` before you adopt the state: a registered copy then looks like a plain file, and `--force` would replace your copy with a symlink. See [state adopt](cli.md#state-adopt).
+
 ## Stale edit workspace
 
 After an `enc edit` conflict (exit 3), rustow keeps your plaintext in `<cache>/edit/edit-XXXX/`. Copy what you need. Then run `rustow cache clean`.

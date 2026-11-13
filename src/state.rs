@@ -208,6 +208,26 @@ impl State {
     }
 }
 
+/// The recorded roots of the state files in `dir` whose repository does not
+/// exist: the state of a moved (or removed) repository. A file that rustow
+/// cannot read or parse is left out.
+pub fn moved_roots(dir: &Path) -> Vec<PathBuf> {
+    #[derive(Deserialize)]
+    struct Root {
+        repo: PathBuf,
+    }
+    let files = fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path());
+    let mut roots: Vec<PathBuf> = files
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| fsops::read_limited(&p, OFlag::O_NOFOLLOW, MAX_STATE_SIZE).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Root>(&bytes).ok())
+        .map(|r| r.repo)
+        .filter(|repo| fs::symlink_metadata(repo).is_err())
+        .collect();
+    roots.sort();
+    roots
+}
+
 /// Parses state JSON of version 1 up to `steps.len() + 1` (with
 /// `MIGRATIONS`: `STATE_VERSION`) and runs the steps it needs, in order.
 /// The error is the reason, without the file name.

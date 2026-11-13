@@ -49,6 +49,7 @@ Without a command, rustow runs `apply`.
 | `cache clean`                   | Remove unused cache entries and stale edit workspaces.                                                                                 |
 | `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON.                                                            |
 | `state import FILE`             | Add the registrations in FILE (`-` for stdin) to this machine.                                                                         |
+| `state adopt OLD_ROOT`          | Take over the state of this repository from its path before a move.                                                                    |
 | `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                                                                                      |
 | `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                                                                              |
 | `completions <SHELL>`           | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). See [shell completions](installation.md#shell-completions). |
@@ -192,3 +193,15 @@ rustow state import regs.json      # on the new machine ("-" reads stdin)
 ```
 
 The export is JSON: `{"version": 1, "files": [...], "links": [...]}`. It holds repository-relative paths only. The records of deployed files stay out: they belong to one machine. `import` adds each registration that is not there yet and prints it. It removes nothing. A file has one registration: a path in both lists imports as a copy, and an imported copy replaces a link registration of the same path. A link of a registered copy exits 2, as `rustow link <path>` does. It checks each `files` path as `file add` does, and each `links` path as `rustow link <path>` does: the path must name one file that can deploy that way. It rejects a bad path, an unknown version or an unknown key with exit 2. The message names the path and the reason. Then it changes nothing. `import` reads at most 512 MiB. A larger input, or a FILE that is not a regular file (a directory, a FIFO, a device such as `/dev/zero`), is refused with exit 2. The state file has the same limit: a state file that is larger, or that is not a regular file, stops every command with exit 2. `import -n` shows what it would add. `export` has no `--dry-run`.
+
+## state adopt
+
+The state file belongs to the repository path. After you move the repository (`mv ~/dotfiles ~/dotfiles2`), rustow finds no state for the new path. When it finds a state file whose recorded repository path does not exist any more, each command prints a notice:
+
+```
+note: the state of a moved repository was found: /home/me/dotfiles; run `rustow state adopt /home/me/dotfiles` to take it over
+```
+
+`rustow state adopt OLD_ROOT` takes the lock. It reads the state of OLD_ROOT with the same checks as every command. It sets the repository path to this repository, and moves the cache entries of the old path to the cache entries of this repository. It saves the result as the state of this repository. It keeps the old file as `<state_dir>/backups/<old-repo-id>/state-adopted.json`. Then run `rustow apply`: it updates rustow's links to the new path. Copies and registrations stay. `adopt -n` shows what it would do.
+
+`adopt` refuses with exit 2 when OLD_ROOT still exists, when there is no state for OLD_ROOT, or when this repository already has a state file (move it away first). A corrupt, foreign or newer old state exits 4, as for every command. The notice also shows for the state of a repository that you removed: move that file away from the state directory.
