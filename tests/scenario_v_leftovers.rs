@@ -187,3 +187,30 @@ fn a_failed_backup_across_filesystems_leaves_no_partial_backup() {
         "no partial backup"
     );
 }
+
+/// rustow makes the backup directories of an item before the change. An
+/// item that moves nothing there (here, it fails: rustow cannot read the
+/// destination) leaves no empty backup directory.
+#[test]
+fn an_item_that_backs_up_nothing_leaves_no_backup_directory() {
+    if nix::unistd::geteuid().is_root() {
+        return; // root reads the destination
+    }
+    let fx = Fixture::new();
+    fx.write(".config/sub/c", "v1\n");
+    fx.ok(&["file", "add", ".config/sub/c"]);
+    fx.ok(&["apply"]);
+    let dest = fx.home_path(".config/sub/c");
+    fs::set_permissions(&dest, fs::Permissions::from_mode(0o000)).unwrap();
+    fx.write(".config/sub/c", "v2\n");
+    let out = fx.run(&["apply", "--backup"]);
+    fs::set_permissions(&dest, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(out.code, 4, "{out:?}");
+    let backups = fx.state.join("rustow/backups");
+    let runs: Vec<String> = fs::read_dir(&backups)
+        .into_iter()
+        .flatten()
+        .flat_map(|repo| names(&repo.unwrap().path()))
+        .collect();
+    assert!(runs.is_empty(), "{runs:?}");
+}

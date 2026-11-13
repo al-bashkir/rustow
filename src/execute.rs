@@ -220,6 +220,8 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
     if !queued.is_empty() {
         run_sudo(&queued, run, state, &mut out);
     }
+    // An item that moved nothing away (it failed, or found nothing to save) left its backup directories empty.
+    fsops::remove_empty_tree(run.backup_dir);
     out
 }
 

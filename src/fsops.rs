@@ -215,6 +215,17 @@ pub fn remove_empty<'a>(dirs: impl IntoIterator<Item = &'a Path>, me: u32) -> Ve
     removed
 }
 
+/// Removes `dir` and each empty directory below it, deepest first; never
+/// follows a symlink below `dir`. A directory that holds anything stays.
+pub fn remove_empty_tree(dir: &Path) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            remove_empty_tree(&entry.path());
+        }
+    }
+    fs::remove_dir(dir).ok();
+}
+
 /// Creates `dir` and missing parents with mode 0700. The final directory
 /// must be a real directory that the current user owns; group and other
 /// access is removed (`Dir::private`). So is the setgid bit that a new
@@ -516,6 +527,23 @@ mod tests {
 
     fn rel(s: &str) -> RelPath {
         RelPath::parse(s).unwrap()
+    }
+
+    #[test]
+    fn remove_empty_tree_keeps_what_holds_anything_and_follows_no_symlink() {
+        let (_t, d) = tmp();
+        for dir in ["run/home/a/b", "run/cache/c", "outside/empty"] {
+            fs::create_dir_all(d.join(dir)).unwrap();
+        }
+        fs::write(d.join("run/cache/c/saved"), "x").unwrap();
+        std::os::unix::fs::symlink(d.join("outside"), d.join("run/home/link")).unwrap();
+        remove_empty_tree(&d.join("run"));
+        assert!(!d.join("run/home/a").exists(), "empty: removed");
+        assert!(d.join("run/cache/c/saved").exists());
+        assert!(d.join("outside/empty").is_dir(), "the symlink is not followed");
+        assert!(d.join("run/home/link").is_symlink());
+        remove_empty_tree(&d.join("outside"));
+        assert!(!d.join("outside").exists(), "the whole tree, when all of it is empty");
     }
 
     /// Under `O_NOFOLLOW` a symlink is "not a regular file"; without it,
