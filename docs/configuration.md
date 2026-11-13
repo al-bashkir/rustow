@@ -103,7 +103,7 @@ rustow uses one symlink for the shallowest home directory when all these conditi
 - The repository directory holds only ordinary link sources, and each of them may fold: its [`[[file_rules]]`](#file_rules) value, or `fold_directories` when no rule covers it, is `true`.
 - It holds no reserved directory, such as `.git` or an in-repository `cache_dir` or `state_dir`. This is also true for a configured directory that does not exist yet.
 - No destination collision is on the directory or below it.
-- The destination directory does not exist.
+- The destination directory does not exist, or it is a symlink to this repository directory. rustow adopts such a symlink without a state record when its text is what rustow writes: `status` shows UNMANAGED and `apply` records it. A symlink in other text, such as an absolute path, becomes rustow's link text. This covers a lost state file, `state import` on a new machine and a fold that GNU Stow made.
 - For a new fold, the run selects every source below the directory. A selective run (a path argument, or a command such as `rustow link`) folds a new directory only then. It keeps an existing fold.
 
 rustow never folds in `rustowroot/`.

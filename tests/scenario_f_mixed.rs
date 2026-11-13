@@ -468,3 +468,47 @@ fn selective_apply_keeps_an_existing_fold() {
     assert!(out.stdout.contains("0 changed"), "{out:?}");
     assert!(is_symlink(&fx.home_path(".config/nvim")));
 }
+
+/// The fold record of `~/.config/nvim`, or null.
+fn fold_record(fx: &Fixture) -> serde_json::Value {
+    let key = fx.home_path(".config/nvim").display().to_string();
+    fx.state_json()["entries"][key.as_str()].clone()
+}
+
+/// A folded link without a state record (a lost state file, `state import`
+/// on a new machine, a fold that GNU Stow made) is adopted when its text is
+/// what rustow writes.
+#[test]
+fn unrecorded_folded_link_is_adopted() {
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    let dir = fx.home_path(".config/nvim");
+    let text = link_text(&dir);
+    let before = mtime(&dir);
+    fs::remove_dir_all(fx.state.join("rustow")).unwrap();
+    let out = fx.run(&["status"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stdout.contains("UNMANAGED ~/.config/nvim  <- .config/nvim"),
+        "{out:?}"
+    );
+    let out = fx.ok(&["apply"]);
+    assert!(out.stdout.contains("adopt ~/.config/nvim"), "{out:?}");
+    assert_eq!(link_text(&dir), text);
+    assert_eq!(mtime(&dir), before, "the link is not written again");
+    assert_eq!(fold_record(&fx)["folded_dir"], true, "{:?}", fx.state_json());
+    fx.ok(&["status"]);
+}
+
+/// An unrecorded link in other text to the same repository directory (an
+/// absolute path) becomes rustow's link text, as for a file link.
+#[test]
+fn unrecorded_folded_link_in_other_text_is_rewritten() {
+    let fx = nvim(FOLD);
+    let dir = fx.home_path(".config/nvim");
+    std::os::unix::fs::symlink(fx.repo.join(".config/nvim"), &dir).unwrap();
+    let out = fx.ok(&["apply"]);
+    assert!(out.stdout.contains("update ~/.config/nvim"), "{out:?}");
+    assert_eq!(link_text(&dir), std::path::Path::new("../dotfiles/.config/nvim"));
+    assert_eq!(fold_record(&fx)["folded_dir"], true, "{:?}", fx.state_json());
+}

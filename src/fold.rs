@@ -13,7 +13,7 @@ use std::fs;
 
 use crate::error::{Error, Result};
 use crate::fsops::{self, ParentState};
-use crate::paths::{RelPath, Scope};
+use crate::paths::{RelPath, Scope, same_link_target};
 use crate::repo::Context;
 use crate::source::{Discovery, Mode, Source};
 use crate::state::{Record, State};
@@ -134,7 +134,7 @@ fn fold_candidates(
         // expose sources that this run does not select.
         let record = recorded.get(&dir).copied();
         let allowed = if record.is_some() { &link_sources } else { &chosen };
-        if qualifies(ctx, &dir, record, allowed, collided)? {
+        if qualifies(ctx, &dir, record.is_some(), allowed, collided)? {
             folds.insert(dir);
         }
     }
@@ -146,14 +146,14 @@ fn fold_candidates(
 fn qualifies(
     ctx: &Context,
     dir: &RelPath,
-    record: Option<&Record>,
+    recorded: bool,
     allowed: &BTreeSet<&RelPath>,
     collided: &Collided,
 ) -> Result<bool> {
     let collides = collided
         .keys()
         .any(|(scope, dest)| *scope == Scope::Home && dest.starts_with(dir));
-    Ok(!collides && dest_allows_fold(ctx, dir, record)? && holds_only(ctx, dir, allowed)?)
+    Ok(!collides && dest_allows_fold(ctx, dir, recorded)? && holds_only(ctx, dir, allowed)?)
 }
 
 /// Recorded folded links that a selected source now lies below and that are no longer folded.
@@ -220,18 +220,31 @@ fn still_linked(ctx: &Context, dir: &RelPath, record: &Record) -> bool {
     text.is_some() && text == record.link_target
 }
 
-/// The destination of `dir` is missing (with usable parents) or is still
-/// rustow's own folded link. `record` is one of the recorded folds that
-/// `analyze` kept, so its link is still in place.
-fn dest_allows_fold(ctx: &Context, dir: &RelPath, record: Option<&Record>) -> Result<bool> {
+/// The destination of `dir` is missing (with usable parents) or is a
+/// folded link that rustow keeps: a recorded fold that `analyze` kept
+/// (`recorded`: its link is still in place), or a symlink without a record
+/// that reaches this repository directory. The plan adopts such a link, or
+/// rewrites it in rustow's text.
+fn dest_allows_fold(ctx: &Context, dir: &RelPath, recorded: bool) -> Result<bool> {
     match fs::symlink_metadata(ctx.home_target.join(dir.as_path())) {
         Err(_) => Ok(!matches!(
             fsops::parent_state(&ctx.home_target, dir)?,
             ParentState::Blocked { .. }
         )),
-        Ok(m) if m.file_type().is_symlink() => Ok(record.is_some()),
+        Ok(m) if m.file_type().is_symlink() => Ok(recorded || reaches_dir(ctx, dir)?),
         Ok(_) => Ok(false),
     }
+}
+
+/// The symlink at the destination of `dir` names the repository directory
+/// `dir`, in any text. A link elsewhere is the user's.
+fn reaches_dir(ctx: &Context, dir: &RelPath) -> Result<bool> {
+    let ParentState::Ready(parent) = fsops::parent_state(&ctx.home_target, dir)? else {
+        return Ok(false);
+    };
+    let link = parent.join(dir.file_name());
+    let target = ctx.root.join(dir.as_path());
+    Ok(fs::read_link(&link).is_ok_and(|text| same_link_target(&link, &text, &target)))
 }
 
 /// No entry below `dir` is reserved (cache, state, `.git`), not even a
