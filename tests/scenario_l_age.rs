@@ -139,6 +139,25 @@ fn enc_migrates_registration_and_template_rule() {
     assert_eq!(mode(&fx.home_path("x.json")), 0o600);
 }
 
+/// `enc` renames the entry in the file that a symlinked `rustow.toml`
+/// names; the symlink stays.
+#[test]
+fn enc_edits_the_file_that_a_symlinked_configuration_names() {
+    let (fx, _key) = keyed();
+    let real = fx.base.join("laptop.toml");
+    fs::write(
+        &real,
+        read(&fx.repo.join("rustow.toml")) + "[[files]]\nsource = \"c.conf\"\n",
+    )
+    .unwrap();
+    fs::remove_file(fx.repo.join("rustow.toml")).unwrap();
+    std::os::unix::fs::symlink(&real, fx.repo.join("rustow.toml")).unwrap();
+    fx.write("c.conf", "c\n");
+    fx.ok(&["enc", "c.conf"]);
+    assert!(is_symlink(&fx.repo.join("rustow.toml")));
+    assert!(read(&real).contains("source = \"c.conf.age\""), "{}", read(&real));
+}
+
 #[test]
 fn enc_moves_state_registrations_to_the_encrypted_name() {
     let (fx, _key) = keyed();

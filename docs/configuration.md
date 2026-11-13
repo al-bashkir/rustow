@@ -2,7 +2,7 @@
 
 The file is `<repo>/rustow.toml`. It is optional. Without it, rustow uses the defaults. If the file exists, it must contain `version = 1`.
 
-`rustow.toml` and `.rustowignore` must be regular files of at most 16 MiB, in UTF-8. A symlink to a regular file is accepted. A directory, a FIFO, a device (for example a symlink to `/dev/zero`), a symlink that does not resolve or a larger file stops every command with exit 2. A dangling symlink is not a missing file: rustow does not fall back to the defaults. The message names the file and the cause.
+`rustow.toml` and `.rustowignore` must be regular files of at most 16 MiB, in UTF-8. A symlink to a regular file is accepted. The commands that edit these files (`init`, `file remove`, `enc`) change the file that the symlink names, in its own directory, and keep the symlink. A directory, a FIFO, a device (for example a symlink to `/dev/zero`), a symlink that does not resolve or a larger file stops every command with exit 2. A dangling symlink is not a missing file: rustow does not fall back to the defaults. The message names the file and the cause.
 
 rustow rejects unknown keys everywhere, except under `[vars]` and the `vars` of a `[[global_rules]]` entry. A configuration error gives exit code 2. A problem with one source or one `[[files]]` or `[[template_rules]]` entry is a warning instead: rustow skips that source and deploys the rest. See [skipped sources](cli.md#skipped-sources).
 

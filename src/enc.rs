@@ -118,7 +118,7 @@ fn file_mode(abs: &Path, rel: &RelPath) -> Result<u32> {
 
 /// Moves registrations of `rel` to the encrypted name; removes the new file when that fails.
 fn migrate_config(ctx: &Context, rel: &RelPath, sealed: &Sealed) -> Result<ConfigMigration> {
-    let path = ctx.root.join(CONFIG_FILE);
+    let path = crate::config::edited_file(&ctx.root, CONFIG_FILE);
     let old = fs::read_to_string(&path).ok();
     let mode = fs::metadata(&path).map_or(0o644, |m| m.permissions().mode() & 0o7777);
     let discard = |_: &Error| drop(fs::remove_file(&sealed.out));

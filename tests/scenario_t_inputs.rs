@@ -61,6 +61,34 @@ fn a_dangling_symlink_as_configuration_or_ignore_file_is_refused() {
     }
 }
 
+/// Every command accepts a symlink to a regular file. The commands that
+/// edit the file (`init`, `file remove`) change the file that the symlink
+/// names, and the symlink stays.
+#[test]
+fn edits_of_a_symlinked_configuration_change_the_file_it_names() {
+    let fx = Fixture::new();
+    let hosts = fx.base.join("hosts");
+    fs::create_dir(&hosts).unwrap();
+    fs::write(hosts.join("laptop.toml"), "# mine\n[[files]]\nsource = \"a.conf\"\n").unwrap();
+    fs::write(hosts.join("ignore"), "").unwrap();
+    std::os::unix::fs::symlink("../../hosts/laptop.toml", fx.repo.join("rustow.toml")).unwrap();
+    std::os::unix::fs::symlink("../../hosts/ignore", fx.repo.join(".rustowignore")).unwrap();
+    fx.write("a.conf", "a\n");
+    fx.ok(&["init"]);
+    let out = fx.ok(&["file", "remove", "a.conf"]);
+    assert!(out.stdout.contains("unregister a.conf"), "{out:?}");
+    for name in ["rustow.toml", ".rustowignore"] {
+        assert!(is_symlink(&fx.repo.join(name)), "{name}");
+    }
+    let config = read(&hosts.join("laptop.toml"));
+    assert!(
+        config.starts_with("version = 1\n") && config.contains("# mine\n"),
+        "{config}"
+    );
+    assert!(!config.contains("a.conf"), "{config}");
+    assert!(read(&hosts.join("ignore")).contains("/.rustowcache/"));
+}
+
 #[test]
 fn a_device_or_directory_as_configuration_or_ignore_file_is_refused() {
     for name in ["rustow.toml", ".rustowignore"] {

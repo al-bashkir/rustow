@@ -34,6 +34,17 @@ pub fn read_config_file(path: &Path, flags: OFlag) -> Result<Option<String>> {
     Ok(Some(text))
 }
 
+/// The file that an edit of the repository file `name` (`rustow.toml`,
+/// `.rustowignore`) reads and replaces: the file that a symlink there
+/// names, so that the symlink stays; else `root/name`.
+pub fn edited_file(root: &Path, name: &str) -> std::path::PathBuf {
+    let path = root.join(name);
+    match path.is_symlink() {
+        true => std::fs::canonicalize(&path).unwrap_or(path),
+        false => path,
+    }
+}
+
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default, clap::ValueEnum,

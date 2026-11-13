@@ -28,7 +28,9 @@ Path arguments of commands are always relative to the repository. They are never
 - Handles a missing final newline and CRLF.
 - Creates the cache directory with mode 0700, or tightens it to 0700.
 
-init does all its checks before it writes. When a check fails, init changes nothing. If a symlink or directory stands in place of one of these files, or something other than a directory is at the cache path, init stops with exit code 3. A configuration error stops it with exit code 2.
+When `rustow.toml` or `.rustowignore` is a symlink to a regular file, init changes the file that the symlink names, and the symlink stays.
+
+init does all its checks before it writes. When a check fails, init changes nothing. If a directory, a symlink that does not name a regular file, or a symlink named `.gitignore` (Git does not read one) stands in place of one of these files, or something other than a directory is at the cache path, init stops with exit code 3. A configuration error stops it with exit code 2.
 
 A second run writes nothing. It prints "0 changed".
 

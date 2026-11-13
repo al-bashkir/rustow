@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use nix::fcntl::OFlag;
 
 use crate::config::edit;
-use crate::config::{CONFIG_FILE, Config, read_config_file};
+use crate::config::{CONFIG_FILE, Config, edited_file, read_config_file};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops;
 use crate::ignore::{DEFAULT_CACHE_DIR, IGNORE_FILE};
@@ -60,7 +60,7 @@ fn plan(root: &Path, env: &Env, writes: &mut Writes, changes: &mut Vec<Change>) 
 }
 
 fn init_config(root: &Path, writes: &mut Writes, changes: &mut Vec<Change>) -> Result<Config> {
-    let path = root.join(CONFIG_FILE);
+    let path = edited_file(root, CONFIG_FILE);
     let (text, change) = match read_text(&path)? {
         None => {
             let text = edit::minimal();
@@ -89,7 +89,11 @@ fn init_ignore_file(
     writes: &mut Writes,
     changes: &mut Vec<Change>,
 ) -> Result<()> {
-    let path = root.join(name);
+    // Git does not read a `.gitignore` that is a symlink; rustow reads its own files through one.
+    let path = match name {
+        IGNORE_FILE => edited_file(root, name),
+        _ => root.join(name),
+    };
     let existing = read_text(&path)?;
     let mut text = existing.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
     let mut added = Vec::new();

@@ -4,10 +4,11 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use nix::fcntl::OFlag;
 
-use crate::config::{CONFIG_FILE, edit, read_config_file};
+use crate::config::{CONFIG_FILE, edit, edited_file, read_config_file};
 use crate::error::{Error, Result};
 use crate::fsops;
 use crate::paths::RelPath;
@@ -86,14 +87,15 @@ fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) 
 /// Removes registrations from the state and from `[[files]]` in `rustow.toml`.
 pub fn remove(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: bool) -> Result<i32> {
     let mut state = ctx.load_state()?;
-    let (old, mode) = read_config(ctx)?;
+    let path = edited_file(&ctx.root, CONFIG_FILE);
+    let (old, mode) = read_config(&path)?;
     let mut text = old.clone();
     let mut changes = Vec::new();
     for arg in paths {
         changes.push(unregister(&mut text, &mut state, arg)?);
     }
     if !dry_run && text != old {
-        write_config(ctx, &text, mode)?;
+        fsops::write_atomic(&path, text.as_bytes(), mode, None, None)?;
     }
     finish(ctx, printer, &state, &changes, dry_run)
 }
@@ -166,17 +168,12 @@ fn why_not(ctx: &Context, discovery: &Discovery, path: &RelPath) -> String {
 }
 
 /// Current configuration text ("" when absent) and its file mode.
-fn read_config(ctx: &Context) -> Result<(String, u32)> {
-    let path = ctx.root.join(CONFIG_FILE);
-    match fs::symlink_metadata(&path) {
+fn read_config(path: &Path) -> Result<(String, u32)> {
+    match fs::symlink_metadata(path) {
         Err(_) => Ok((String::new(), 0o644)),
         Ok(m) => {
-            let text = read_config_file(&path, OFlag::O_NOFOLLOW)?.unwrap_or_default();
+            let text = read_config_file(path, OFlag::O_NOFOLLOW)?.unwrap_or_default();
             Ok((text, m.permissions().mode() & 0o7777))
         }
     }
-}
-
-fn write_config(ctx: &Context, text: &str, mode: u32) -> Result<()> {
-    fsops::write_atomic(&ctx.root.join(CONFIG_FILE), text.as_bytes(), mode, None, None)
 }
