@@ -245,7 +245,7 @@ fn shell_word(path: &Path) -> String {
 /// The temporary files that the journal at `path` lists; none when there
 /// is no journal. A line that is not an absolute path with a temporary
 /// name is skipped.
-fn entries(path: &Path) -> Result<Vec<PathBuf>> {
+pub fn entries(path: &Path) -> Result<Vec<PathBuf>> {
     let bytes = match fsops::read_limited(path, OFlag::O_NOFOLLOW, MAX_STATE_SIZE) {
         Ok(bytes) => bytes,
         Err(_) if fs::symlink_metadata(path).is_err() => return Ok(Vec::new()),

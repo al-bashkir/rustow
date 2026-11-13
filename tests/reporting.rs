@@ -116,6 +116,30 @@ fn doctor_flags_relative_identity_path() {
     assert!(out.stdout.contains("must be absolute"), "{out:?}");
 }
 
+/// `enc` sets the plaintext aside under a temporary name that it does not
+/// journal; a run stopped at once can leave it. `doctor` shows it.
+#[test]
+fn doctor_reports_an_unjournaled_temp_file_in_the_repository() {
+    let fx = Fixture::new();
+    let clean = fx.run(&["doctor"]);
+    assert!(clean.stdout.contains("ok  temp files: none left"), "{clean:?}");
+    fx.write("dir/.rustow-tmp-Ab12Cd", "plain\n");
+    let out = fx.run(&["doctor"]);
+    let line = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("dir/.rustow-tmp-Ab12Cd"))
+        .unwrap_or_else(|| panic!("{out:?}"));
+    assert!(
+        line.starts_with(" warn  temp file: ")
+            && line.contains(
+                "dir/.rustow-tmp-Ab12Cd: an interrupted run left it, and it can hold the plaintext of a file that `rustow enc` encrypted"
+            ),
+        "{line}"
+    );
+    assert!(!out.stdout.contains("none left"), "{out:?}");
+}
+
 #[test]
 fn replaced_folded_link_becomes_the_users_own_directory() {
     let fx = Fixture::new();

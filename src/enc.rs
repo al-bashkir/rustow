@@ -66,7 +66,7 @@ pub fn encrypt_source(
 ) -> Result<i32> {
     let rel = RelPath::parse(arg)?;
     let abs = ctx.root.join(rel.as_path());
-    let sealed = seal_source(ctx, &rel, &abs, backend)?;
+    let sealed = seal_unless_stopped(ctx, &rel, &abs, backend)?;
     fsops::write_new(&sealed.out, &sealed.ciphertext, sealed.mode)?;
     let migration = migrate_config(ctx, &rel, &sealed)?;
     retire_plaintext(&rel, &abs, &sealed, &migration)?;
@@ -84,6 +84,21 @@ pub fn encrypt_source(
     );
     report_encrypted(&rel, &sealed, migrated, printer);
     Ok(0)
+}
+
+/// `seal_source` under the signal handler of the executor. A first signal
+/// before anything is written cancels `enc`; a first signal after that only
+/// sets the flag, so `enc` finishes and the plaintext never loses its name.
+fn seal_unless_stopped(ctx: &Context, rel: &RelPath, abs: &Path, backend: Option<Backend>) -> Result<Sealed> {
+    let stop = crate::app::interrupt_flag()?;
+    let sealed = seal_source(ctx, rel, abs, backend);
+    // A Ctrl-C at the terminal stops gpg too: report the signal, not gpg's failure.
+    match stop.load(Ordering::SeqCst) {
+        true => Err(Error::Failed(format!(
+            "interrupted; {rel} is not encrypted and nothing changed"
+        ))),
+        false => sealed,
+    }
 }
 
 /// Validates the source and encrypts it (without writing anything).

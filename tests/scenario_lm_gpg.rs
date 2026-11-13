@@ -30,6 +30,48 @@ fn enc_backend_flag_creates_gpg_that_plain_gpg_decrypts() {
     assert_eq!(home.decrypt(&ct), "gpg secret\n");
 }
 
+/// A first signal while `enc` encrypts cancels it: nothing is written and
+/// the plaintext keeps its name. A gpg wrapper sends rustow SIGTERM once.
+#[test]
+fn signal_during_enc_cancels_it() {
+    let Some((fx, _home)) = setup("") else { return };
+    fx.write("p", "plain\n");
+    let real = Command::new("sh")
+        .args(["-c", "command -v gpg"])
+        .output()
+        .unwrap()
+        .stdout;
+    let marker = fx.base.join("signalled").display().to_string();
+    fx.editor(
+        "gpg",
+        &format!(
+            "[ -e '{marker}' ] || {{ : > '{marker}'; kill -TERM $PPID; }}\nexec '{}' \"$@\"",
+            String::from_utf8(real).unwrap().trim()
+        ),
+    );
+    let path = format!("{}:{}", fx.base.join("bin").display(), std::env::var("PATH").unwrap());
+    let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("PATH", &path)]);
+    assert!(std::path::Path::new(&marker).exists(), "the wrapper ran: {out:?}");
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("interrupted; p is not encrypted and nothing changed"),
+        "{out:?}"
+    );
+    assert_eq!(read(&fx.repo.join("p")), "plain\n");
+    let names: Vec<_> = fs::read_dir(&fx.repo)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.to_string_lossy().contains("p.gpg") || n.to_string_lossy().starts_with(".rustow-tmp-")),
+        "{names:?}"
+    );
+}
+
 /// A locked key encrypts, but unattended it cannot verify: the output says
 /// that the key is locked, not that it is missing.
 #[test]

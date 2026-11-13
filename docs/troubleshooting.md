@@ -55,6 +55,8 @@ The state records a destination whose source is gone. `status` and the deploy co
 
 "<path>: cannot look for a temporary file that an interrupted run left: <dir>: <reason>": the path to that directory is not safe now, for example a symlink that another user owns. rustow does not look there, and it gives no command: do not run `sudo rm` through that path. Find out who changed the path. The line goes when the path is safe again and the file is gone.
 
+"<path>: an interrupted run left it, and it can hold the plaintext of a file that `rustow enc` encrypted" (`doctor`): `enc` stopped at once, for example after a second signal, while the plaintext had a reserved name. Look at the file. If it is the plaintext that you want to keep, rename it back to its old name. Otherwise remove it. Do not commit it.
+
 ## Exit code 2: configuration
 
 Read the message. A TOML error gives the line, the column and the key path: `rustow.toml: line L, column C, key <path>: <message>`. Common causes: missing `version = 1`, an unknown key, a bad mode string, a template `mode` without owner read (0400).

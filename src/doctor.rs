@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::crypto;
 use crate::error::Result;
+use crate::fsops::TEMP_PREFIX;
 use crate::repo::Context;
 use crate::report::Printer;
 
@@ -118,11 +119,11 @@ fn writable(name: &'static str, dir: &Path, level: &'static str) -> Check {
     }
 }
 
-/// The temporary files that an interrupted run left (the journal lists them).
+/// The temporary files that an interrupted run left: the ones the journal
+/// lists, and the others in the repository.
 fn temp_files(ctx: &Context) -> Vec<Check> {
     let journal = ctx.state_dir.join(format!("{}.pending", ctx.repo_id));
-    match crate::pending::report(&journal) {
-        Ok(left) if left.is_empty() => vec![check("ok", "temp files", "none left by an interrupted run")],
+    let mut out: Vec<Check> = match crate::pending::report(&journal) {
         Ok(left) => (left.into_iter())
             .map(|line| Check {
                 shown: true,
@@ -130,7 +131,35 @@ fn temp_files(ctx: &Context) -> Vec<Check> {
             })
             .collect(),
         Err(e) => vec![check("warn", "temp files", e.to_string())],
+    };
+    let journaled = crate::pending::entries(&journal).unwrap_or_default();
+    out.extend(unjournaled(&ctx.root, &journaled));
+    if out.is_empty() {
+        out.push(check("ok", "temp files", "none left by an interrupted run"));
     }
+    out
+}
+
+/// Each file in the repository (not in `.git`) with a temporary name that
+/// the journal does not list. `enc` sets the plaintext aside under such a
+/// name and does not journal it, because it can be the only copy.
+fn unjournaled(root: &Path, journaled: &[PathBuf]) -> Vec<Check> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| e.file_name() != ".git")
+        .flatten()
+        .filter(|e| e.file_type().is_file() && e.file_name().to_string_lossy().starts_with(TEMP_PREFIX))
+        .filter(|e| !journaled.iter().any(|j| j == e.path()))
+        .map(|e| {
+            let detail = format!(
+                "{}: an interrupted run left it, and it can hold the plaintext of a file that \
+                 `rustow enc` encrypted; rustow never removes it. Look at it, then rename it back \
+                 to its old name or remove it",
+                e.path().display()
+            );
+            check("warn", "temp file", detail)
+        })
+        .collect()
 }
 
 /// Age identity files and the GPG home, without loading any key.
@@ -215,6 +244,39 @@ fn foreign_dirs(dir: &Path, uid: u32, out: &mut Vec<(PathBuf, u32)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unjournaled_temp_files_skip_git_directories_and_the_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for name in [
+            "a/.rustow-tmp-aside",
+            ".rustow-tmp-journaled",
+            ".git/.rustow-tmp-git",
+            "a/plain",
+            ".rustow-tmp-dir/x",
+        ] {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "x").unwrap();
+        }
+        let found = unjournaled(root, &[root.join(".rustow-tmp-journaled")]);
+        assert_eq!(
+            found.len(),
+            1,
+            "{:?}",
+            found.iter().map(|c| &c.detail).collect::<Vec<_>>()
+        );
+        let aside = root.join("a/.rustow-tmp-aside");
+        assert!(
+            found[0]
+                .detail
+                .starts_with(&format!("{}: an interrupted run left it", aside.display())),
+            "{}",
+            found[0].detail
+        );
+        assert_eq!((found[0].level, found[0].name), ("warn", "temp file"));
+    }
 
     #[test]
     fn a_backup_directory_of_another_owner_is_reported() {

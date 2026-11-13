@@ -183,6 +183,7 @@ rustow writes each file through a temporary file (`.rustow-tmp-…`) in the same
 - `doctor` shows a "temp file" warning for each leftover, with the same advice.
 - When rustow cannot start the journal (for example, the state directory is read-only), it prints "warning: …; the temporary files of this run are not journaled" and goes on.
 - `init` and `state export` do not take the lock, so they journal nothing. `enc` keeps the plaintext under a temporary name while it checks it; that file is not journaled, because it can be your only copy.
+- `doctor` also shows each file in the repository (outside `.git`) whose name starts with `.rustow-tmp-` and that the journal does not list: "<path>: an interrupted run left it, and it can hold the plaintext of a file that `rustow enc` encrypted; rustow never removes it. Look at it, then rename it back to its old name or remove it". See [encrypt a file](encryption.md#encrypt-a-file).
 
 ## unlink and undeploy
 

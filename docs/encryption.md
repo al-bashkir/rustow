@@ -102,6 +102,8 @@ rustow enc --backend gpg .ssh/secret.conf
 
 It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
 
+SIGINT (Ctrl-C), SIGTERM or SIGHUP while `enc` reads, encrypts or verifies the file cancels it. rustow writes nothing and exits with 4: "interrupted; PATH is not encrypted and nothing changed". After that point, a first signal does not stop `enc`: it finishes, so the plaintext keeps its name until the encrypted file is complete. A second signal exits at once with 130. Then the plaintext can stay under a reserved name `.rustow-tmp-…` in its directory, without its own name. rustow does not journal that file and never removes it, because it can be your only copy. `rustow doctor` shows it as a "temp file" warning. Look at it, then rename it back or remove it. Git does not ignore it.
+
 `enc` prints a notice: Git history, backups and deployed files keep the old plaintext. rustow does not erase them.
 
 `enc` rejects reserved paths, symlinks, missing files and already encrypted files (exit 2). It rejects empty or invalid recipients (exit 2). It has no `--dry-run`. A file named `edit` is written `./edit`.
