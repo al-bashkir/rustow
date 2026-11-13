@@ -59,7 +59,15 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 
 With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a TemplateCopy with empty metadata. A home Link or DecryptLink stays a link source. `app::selected` decides if the command deploys it (`may_link`): only `rustow link <path>`, or a link registration in the state (`State::links`). `app::prepare` adds the registrations for `rustow link <path>`; `unlink` removes them.
 
-`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). A source is registered for copy deployment when `[[files]]` (`Config::files`) or `file add` (`State::files`) lists it. `Context::load_state` copies `State::files` into `Config::added_files`, and `Config::registration` checks both. A copy mode carries the metadata of its `[[files]]` or `[[template_rules]]` entry (`Mode::metadata`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy.
+`classify` returns the reason as its error. `discover` puts the file in `Discovery::skipped`, and the commands print a warning for it (`report::Printer::warn`). A source is registered for copy deployment when `[[files]]` (`Config::files`) or `file add` (`State::files`) lists it. `Context::load_state` copies `State::files` into `Config::added_files`, and `Config::registration` checks both. A copy mode carries the metadata of its `[[files]]` or `[[template_rules]]` entry (`Mode::metadata`). `file add` discovers with a copy of the configuration in which each argument is registered. So `classify` decides with the same rule whether the file can deploy as a copy. `state import` runs the same check (`files::check_copies`) on each imported copy, and the check of `rustow link <path>` (`app::check_link`) on each imported link.
+
+A skipped entry has a kind (`source::SkipKind`): `Present` for a path in the repository that cannot deploy (also a path that rustow cannot read), `Missing` for a registration whose source does not exist. Only a `Present` entry counts as an existing source, so a recorded destination of a `Missing` one is ORPHANED.
+
+## Input and output
+
+- rustow reads `rustow.toml`, `.rustowignore`, the state file and `state import` input with `fsops::read_limited`: a regular file, opened with `O_NONBLOCK`, with a size limit.
+- rustow starts `gpg`, the sudo program and the editor by the absolute path that `fsops::find_program` returns. The lookup skips relative `PATH` entries.
+- Human output passes each path and message through `report::shown`, which escapes control characters. `Printer::path` does it for destinations. JSON output does not use it.
 
 ## Cache
 
