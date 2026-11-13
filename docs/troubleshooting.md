@@ -122,4 +122,4 @@ After you move the repository, old links are "not managed (broken symlink)", and
 
 ## Stale edit workspace
 
-After an `enc edit` conflict (exit 3), rustow keeps your plaintext in `<cache>/edit/edit-XXXX/`. Copy what you need. Then run `rustow cache clean`.
+After an `enc edit` conflict (exit 3), rustow keeps your plaintext in `<cache>/edit/edit-XXXX/file/`. Copy what you need. Then run `rustow cache clean`.

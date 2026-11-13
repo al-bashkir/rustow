@@ -119,7 +119,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - The backend comes from the suffix. `enc edit` never converts.
 - It refuses nested suffixes such as `x.age.gpg` (exit 2, "nested encryption suffixes are not supported"). It also refuses a name that is empty after rustow removes the suffixes, such as `.age` or `.tmpl.age` (exit 2).
 - It checks the recipients of the backend before it decrypts. Empty or invalid recipients give exit 2. A GPG fingerprint that is not in the keyring, or a key that is not trusted (validity unknown), revoked, expired or cannot encrypt, gives exit 4. Then the editor does not start and rustow leaves no workspace.
-- rustow decrypts into `<cache>/edit/edit-XXXX/` (mode 0700) as a 0600 file with the logical name.
+- rustow decrypts into `<cache>/edit/edit-XXXX/file/` as a 0600 file with the logical name. Both directories have mode 0700. The workspace `edit-XXXX` also holds a `.lock` file; the subdirectory `file` keeps it apart from your file, so any name works, also `.lock`.
 - The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell. A program name without a `/` is looked up in the absolute directories of `PATH` only.
 - `enc edit` holds the repository lock while the editor is open. Until the editor exits, another rustow command for this repository fails with "another rustow process is using this repository" (exit 4). This also applies to a timer that runs `apply`.
 - If the editor fails, the ciphertext stays unchanged and rustow removes the workspace.

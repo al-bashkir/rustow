@@ -3,7 +3,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -419,7 +419,13 @@ impl Workspace {
             .file_name()
             .strip_suffix(backend.suffix())
             .unwrap_or(rel.file_name());
-        let file = dir.path().join(name);
+        // The plaintext has a directory of its own, so no name can be the lock's.
+        let own = dir.path().join("file");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&own)
+            .ctx(|| format!("create {}", own.display()))?;
+        let file = own.join(name);
         let mut f = OpenOptions::new()
             .write(true)
             .create_new(true)

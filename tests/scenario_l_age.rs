@@ -268,6 +268,21 @@ fn edit_persists_ciphertext_and_leaves_destination_until_apply() {
     assert_eq!(read(&fx.home_path(".ssh/private.conf")), "v2\n");
 }
 
+/// The workspace holds a lock file; a plain name can be the same name.
+#[test]
+fn edit_of_a_file_named_like_the_workspace_lock() {
+    let (fx, key) = keyed();
+    let ct = fx.age_encrypt(".lock.age", "v1\n", &[&key]);
+    let editor = fx.editor(
+        "ed",
+        "[ \"$(basename \"$1\")\" = .lock ] && [ \"$(cat \"$1\")\" = v1 ] && printf 'v2\\n' > \"$1\"",
+    );
+    let out = fx.run_env(&["enc", "edit", ".lock.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(fx.age_decrypt(&ct, &key), "v2\n");
+    assert!(fx.workspaces().is_empty());
+}
+
 #[test]
 fn edit_unchanged_does_not_rewrite() {
     let (fx, key) = keyed();
