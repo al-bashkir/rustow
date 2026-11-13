@@ -65,13 +65,15 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
 }
 
 /// What `diff` shows for one item; `None` when the item does not differ.
-/// A destination that the user cannot read and that would change is an
-/// error of that item only.
+/// A destination that the user cannot read takes the decision of the plan:
+/// nothing when it is up to date, else an error of that item only.
 fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
     if let Step::Deploy(d) = &item.step
         && matches!(d.observed, Observed::Unreadable { .. })
-        && d.decision != Decision::UpToDate
     {
+        if d.decision == Decision::UpToDate {
+            return Ok(None);
+        }
         let why = "cannot read the destination (Permission denied); elevated privileges may be required";
         return Ok(Some(Shown {
             item,

@@ -453,6 +453,19 @@ fn a_system_file_you_cannot_read_is_compared_with_the_state() {
     assert_eq!(read(&app), "a\n");
 }
 
+/// `diff` takes the decision of the plan, as `status` and `apply` do: an
+/// unreadable file that the state shows up to date is not a difference.
+#[test]
+fn diff_shows_nothing_for_an_unreadable_system_file_that_is_up_to_date() {
+    let s = Sudo::new(FAKE);
+    assert_eq!(s.run(&["apply"]).code, 0);
+    unreadable(&s, "etc/app.conf");
+
+    let diff = s.run(&["diff"]);
+    assert_eq!((diff.code, diff.stdout.as_str()), (0, ""), "{diff:?}");
+    assert!(!diff.stderr.contains("app.conf"), "{diff:?}");
+}
+
 #[test]
 fn an_unreadable_system_file_without_a_record_is_a_conflict() {
     let s = Sudo::new(FAKE);

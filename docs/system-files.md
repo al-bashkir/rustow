@@ -28,7 +28,7 @@ Run rustow as yourself. Your HOME, your state, your keys and your cache stay in 
 
 A system file can be unreadable for you, for example a `[[files]]` entry with `mode = "0640"`, `owner = "root"` and `group = "root"`. rustow plans as you, so it sees only the owner, the group and the mode of such a file. It compares the file with your state:
 
-- The state records the content that rustow wrote last. When the desired content is that content and the metadata is as desired, the item is clean. `status` shows it as ok. With `-v`, the detail is "not readable by you; compared with the state". `apply` does not run sudo for it.
+- The state records the content that rustow wrote last. When the desired content is that content and the metadata is as desired, the item is clean. `status` shows it as ok. With `-v`, the detail is "not readable by you; compared with the state". `apply` does not run sudo for it. `diff` shows nothing for it.
 - When the desired content changed, the item is an update through sudo. The helper reads the file as root before it changes it. When the content is not the recorded one (someone changed it), the item is a MODIFIED conflict: "destination was modified since rustow last applied it", and the file stays. With `--force`, the helper replaces it. With `--backup`, it saves it first.
 - When the state has no record of the file, the item is a conflict: "cannot read the destination; rustow has no record of it". `--force` and `--backup` replace it through sudo.
 - `undeploy` removes such a file through the helper. The helper removes it only when its content is the recorded one. One item that fails never stops the other removals.
