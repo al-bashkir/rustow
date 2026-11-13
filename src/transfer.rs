@@ -47,10 +47,17 @@ pub fn export(ctx: &Context, file: Option<&Path>) -> Result<i32> {
 }
 
 /// Adds the registrations in `file` ("-" is stdin) to the state of this
-/// machine. Registrations that are there already stay.
-pub fn import(ctx: &Context, printer: &Printer, file: &Path, dry_run: bool) -> Result<i32> {
+/// machine. Registrations that are there already stay. Each path must pass
+/// the check of `file add` or of `link <path>`; else nothing changes.
+pub fn import(ctx: &mut Context, printer: &Printer, file: &Path, dry_run: bool) -> Result<i32> {
     let regs = read(file)?;
-    let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
+    let mut state = ctx.load_state()?;
+    let strings = |list: &BTreeSet<RelPath>| list.iter().map(ToString::to_string).collect::<Vec<_>>();
+    crate::files::check_copies(ctx, &strings(&regs.files))?;
+    let discovery = ctx.discover()?;
+    for link in strings(&regs.links) {
+        crate::app::check_link(ctx, &discovery, &state, &link)?;
+    }
     let mut changes = Vec::new();
     for (list, into, kind) in [
         (regs.files, &mut state.files, "copy"),

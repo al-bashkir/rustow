@@ -68,3 +68,33 @@ fn import_rejects_a_bad_file_and_changes_nothing() {
     }
     assert_eq!(fx.state_json(), Value::Null);
 }
+
+/// `import` checks each path as `file add` and `link <path>` do: a bad path
+/// exits 2, names the path and the reason, and changes nothing.
+#[test]
+fn import_refuses_paths_that_file_add_and_link_refuse() {
+    let fx = machine();
+    fx.write(".t.tmpl", "t\n");
+    fx.write(".config/d/x", "x\n");
+    let none: &[&str] = &[];
+    for (file, link, word) in [
+        ("nonexist", none, "'nonexist' does not match any deployable source"),
+        (".t.tmpl", none, "source '.t.tmpl': templates cannot be registered"),
+        (".git/config", none, "'.git/config' is reserved"),
+        (".rustow-tmp-a", none, "'.rustow-tmp-a' is reserved"),
+        (".rustowcache/x", none, "'.rustowcache/x' is reserved"),
+        (".config/d", none, "'.config/d' is a directory"),
+        ("a.conf", &["nolink"], "'nolink' does not match any deployable source"),
+        ("a.conf", &[".t.tmpl"], "'.t.tmpl' has no sources this command deploys"),
+        ("a.conf", &[".config/d"], "'.config/d' is a directory"),
+    ] {
+        let path = fx.base.join("regs.json");
+        let links: Vec<&str> = [".bashrc"].iter().chain(link).copied().collect();
+        let regs = json!({"version": 1, "files": ["a.conf", file], "links": links});
+        write_file(&path, &regs.to_string());
+        let out = fx.run(&["state", "import", path.to_str().unwrap()]);
+        assert_eq!(out.code, 2, "{regs}: {out:?}");
+        assert!(out.stderr.contains(word), "{regs}: {out:?}");
+        assert_eq!(fx.state_json(), Value::Null, "nothing changes: {regs}");
+    }
+}

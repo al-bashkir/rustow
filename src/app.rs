@@ -10,6 +10,7 @@ use crate::cli::{
 use crate::config::DefaultMode;
 use crate::error::{Error, Result};
 use crate::execute::{self, Action, ItemReport, Policy, Run};
+use crate::paths::RelPath;
 use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
 use crate::report::{Printer, RunKind};
@@ -139,7 +140,7 @@ fn cache_clean(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 }
 
 fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Result<i32> {
-    let ctx = open(g, env, p)?;
+    let mut ctx = open(g, env, p)?;
     match cmd {
         StateCommand::Export { .. } if g.dry_run => Err(Error::Usage(
             "`rustow state export` has no --dry-run; it changes no state".into(),
@@ -147,7 +148,7 @@ fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Resul
         StateCommand::Export { file } => crate::transfer::export(&ctx, file.as_deref()),
         StateCommand::Import { file } => {
             let _lock = lock(&ctx, g.dry_run)?;
-            crate::transfer::import(&ctx, p, &file, g.dry_run)
+            crate::transfer::import(&mut ctx, p, &file, g.dry_run)
         }
     }
 }
@@ -280,6 +281,19 @@ fn selected<'a>(
         }
     }
     Ok(all.into_iter().filter(deploys).collect())
+}
+
+/// The check of `rustow link <path>` registration, also for `state
+/// import`: `path` must be one file that `rustow link` would register.
+pub fn check_link(ctx: &Context, discovery: &Discovery, state: &State, path: &str) -> Result<()> {
+    let rel = RelPath::parse(path)?;
+    let found = selected(ctx, discovery, state, &[path.to_owned()], Selector::Link)?;
+    match found.iter().any(|s| s.path == rel) {
+        true => Ok(()),
+        false => Err(Error::Usage(format!(
+            "'{rel}' is a directory; a link registration names a file"
+        ))),
+    }
 }
 
 /// The usage error for a path argument whose sources this command does not deploy.

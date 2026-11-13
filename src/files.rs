@@ -51,9 +51,18 @@ fn discover_registered(ctx: &Context, paths: &[String]) -> Result<Discovery> {
     discover(&ctx.root, &ctx.ignore, &config, &crate::template::Host::current())
 }
 
-/// Registers one source in the state. `discovery` comes from
-/// `discover_registered`, so a selected file is a copy source.
-fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) -> Result<Change> {
+/// The check of `file add`, also for `state import`: each of `paths` must
+/// be one file that deploys as a copy once registered.
+pub fn check_copies(ctx: &Context, paths: &[String]) -> Result<()> {
+    let discovery = discover_registered(ctx, paths)?;
+    paths
+        .iter()
+        .try_for_each(|arg| check_copy(ctx, &discovery, arg).map(drop))
+}
+
+/// `arg` as a copy source. `discovery` comes from `discover_registered`,
+/// so a selected file is a copy source.
+fn check_copy(ctx: &Context, discovery: &Discovery, arg: &str) -> Result<RelPath> {
     let rel = RelPath::parse(arg)?;
     let selected = ctx.select(discovery, std::slice::from_ref(&arg.to_owned()))?;
     if !selected.iter().any(|s| s.path == rel) {
@@ -61,6 +70,12 @@ fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) 
             "'{rel}' is a directory; `rustow file add` takes files"
         )));
     }
+    Ok(rel)
+}
+
+/// Registers one source in the state.
+fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) -> Result<Change> {
+    let rel = check_copy(ctx, discovery, arg)?;
     if ctx.config.files.contains_key(&rel) || !state.files.insert(rel.clone()) {
         return Ok(Change::new(rel.as_str(), "ok", Some("already registered".into())));
     }
