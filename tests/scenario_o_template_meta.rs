@@ -87,6 +87,28 @@ fn meta_lines_in_an_encrypted_template_fail_to_render() {
 }
 
 #[test]
+fn check_reports_an_unknown_meta_owner_or_group_as_apply_does() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    fx.write(".u.tmpl", "{%- meta.owner = \"no-such-user-rustow\" %}\nu\n");
+    fx.write(".g.tmpl", "{%- meta.group = \"no-such-group-rustow\" %}\ng\n");
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    for want in [
+        "problem: .u.tmpl: template meta block: unknown user 'no-such-user-rustow'",
+        "problem: .g.tmpl: template meta block: unknown group 'no-such-group-rustow'",
+    ] {
+        assert!(out.stdout.contains(want), "{want}: {out:?}");
+    }
+    let applied = fx.run(&["apply"]);
+    assert_eq!(applied.code, 4, "{applied:?}");
+    assert!(
+        applied.stdout.contains("unknown user 'no-such-user-rustow'"),
+        "{applied:?}"
+    );
+}
+
+#[test]
 fn check_fails_on_a_broken_meta_block_but_apply_only_warns() {
     let fx = Fixture::new();
     fx.write(

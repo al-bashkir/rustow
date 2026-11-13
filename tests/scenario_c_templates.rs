@@ -26,6 +26,25 @@ fn cache_target(fx: &Fixture, dest: &str) -> PathBuf {
     target.canonicalize().unwrap()
 }
 
+/// A plaintext template that is not UTF-8 fails `apply`, so `check`
+/// reports it with the same text.
+#[test]
+fn check_reports_a_template_that_is_not_utf8() {
+    let fx = Fixture::new();
+    fs::write(fx.repo.join("nu.tmpl"), b"\xff\xfe {{ 1 }}\n").unwrap();
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stdout.contains("problem: template nu.tmpl is not valid UTF-8"),
+        "{out:?}"
+    );
+    let applied = fx.run(&["apply"]);
+    assert!(
+        applied.stdout.contains("template nu.tmpl is not valid UTF-8"),
+        "{applied:?}"
+    );
+}
+
 #[test]
 fn scenario_c_full_flow() {
     let fx = templated();

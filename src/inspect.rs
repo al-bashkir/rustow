@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::config::CONFIG_FILE;
+use crate::config::{CONFIG_FILE, Metadata};
 use crate::diff;
 use crate::error::{IoContext, Result};
 use crate::execute::{Action, ItemReport, deploy_conflict};
@@ -18,7 +18,9 @@ use crate::paths::RelPath;
 use crate::plan::{Conflict, Content, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::{self, Printer, shown};
-use crate::source::{Discovery, Mode, Selector, SkipKind, Skipped, check_collisions, not_a_source, shown_label};
+use crate::source::{
+    Discovery, Mode, Selector, SkipKind, Skipped, Source, check_collisions, not_a_source, shown_label,
+};
 use crate::state::{Record, State};
 use crate::template;
 
@@ -563,7 +565,7 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
         .map(ToString::to_string)
         .collect();
     findings.extend(meta_problems.iter().map(|s| format!("{}: {}", s.path, s.reason)));
-    findings.extend(unknown_ids(ctx));
+    findings.extend(unknown_ids(ctx, &discovery.sources));
     let untrusted = crate::plan::Conflict::UntrustedSource;
     findings.extend(
         discovery
@@ -571,18 +573,7 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
             .iter()
             .filter_map(|s| crate::plan::untrusted_source(ctx, s).map(|why| format!("{}: {untrusted}: {why}", s.path))),
     );
-    let context = template::context(&ctx.config.vars, &ctx.home_target);
-    for s in discovery
-        .sources
-        .iter()
-        .filter(|s| matches!(s.mode, Mode::TemplateLink(None) | Mode::TemplateCopy(None, _)))
-    {
-        let bytes = fsops::read_file(&ctx.root.join(s.path.as_path()))?;
-        let text = String::from_utf8_lossy(&bytes);
-        if let Err(e) = template::render_plain(s.path.as_str(), &text, &context) {
-            findings.push(e);
-        }
-    }
+    findings.extend(render_problems(ctx, &discovery.sources)?);
     if printer.json {
         outln!(
             "{}",
@@ -603,20 +594,51 @@ pub fn check(ctx: &Context, printer: &mut Printer) -> Result<i32> {
     Ok(i32::from(!findings.is_empty()))
 }
 
-/// Each `[[files]]` or `[[template_rules]]` owner or group that this system does not know.
-fn unknown_ids(ctx: &Context) -> Vec<String> {
+/// Why each plaintext template fails as `apply` would render it: not
+/// text, or a render error.
+fn render_problems(ctx: &Context, sources: &[Source]) -> Result<Vec<String>> {
+    let context = template::context(&ctx.config.vars, &ctx.home_target);
+    let mut out = Vec::new();
+    for s in sources
+        .iter()
+        .filter(|s| matches!(s.mode, Mode::TemplateLink(None) | Mode::TemplateCopy(None, _)))
+    {
+        let bytes = fsops::read_file(&ctx.root.join(s.path.as_path()))?;
+        let name = s.path.as_str();
+        if let Err(e) = template::text(name, &bytes).and_then(|text| template::render_plain(name, text, &context)) {
+            out.push(e);
+        }
+    }
+    Ok(out)
+}
+
+/// Each owner or group that this system does not know: of a `[[files]]`
+/// or `[[template_rules]]` entry, or of the meta block of a plaintext
+/// template copy without a rule (its settings come from the block).
+fn unknown_ids(ctx: &Context, sources: &[Source]) -> Vec<String> {
     let mut out = Vec::new();
     for (table, entries) in [
         ("files", &ctx.config.files),
         ("template_rules", &ctx.config.template_rules),
     ] {
         for (path, meta) in entries {
-            for (id, group) in [(&meta.owner, false), (&meta.group, true)] {
-                if let Some(Err(why)) = id.as_ref().map(|o| resolve_id(o, group)) {
-                    out.push(format!("{CONFIG_FILE}: [[{table}]] source '{path}': {why}"));
-                }
-            }
+            out.extend(unknown_names(meta).map(|why| format!("{CONFIG_FILE}: [[{table}]] source '{path}': {why}")));
+        }
+    }
+    for s in sources
+        .iter()
+        .filter(|s| !ctx.config.template_rules.contains_key(&s.path))
+    {
+        if let Mode::TemplateCopy(None, meta) = &s.mode {
+            out.extend(unknown_names(meta).map(|why| format!("{}: template meta block: {why}", s.path)));
         }
     }
     out
+}
+
+/// Why each owner or group name of `meta` is unknown on this system.
+fn unknown_names(meta: &Metadata) -> impl Iterator<Item = String> + '_ {
+    [(&meta.owner, false), (&meta.group, true)]
+        .into_iter()
+        .filter_map(|(id, group)| resolve_id(id.as_ref()?, group).err())
 }

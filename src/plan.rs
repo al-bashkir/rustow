@@ -1224,7 +1224,7 @@ fn want_template(
 ) -> std::result::Result<Want, String> {
     // Encrypted templates are decrypted (and authenticated) before rendering.
     let plaintext = plaintext(backend, source, bytes, ctx)?;
-    let text = std::str::from_utf8(&plaintext).map_err(|_| format!("template {} is not valid UTF-8", source.path))?;
+    let text = template::text(source.path.as_str(), &plaintext)?;
     let context = template::context(&ctx.config.vars, &ctx.home_target);
     // Only plaintext templates have a meta block (it was read at discovery).
     let rendered = match backend {

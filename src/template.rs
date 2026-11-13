@@ -69,6 +69,11 @@ pub fn context(vars: &serde_json::Map<String, Value>, home_dir: &Path) -> Value 
     })
 }
 
+/// The bytes of template `name` as text. The planner and `check` both use it.
+pub fn text<'a>(name: &str, bytes: &'a [u8]) -> Result<&'a str, String> {
+    std::str::from_utf8(bytes).map_err(|_| format!("template {name} is not valid UTF-8"))
+}
+
 /// Renders `source`. Errors name the template and line, never values.
 pub fn render(name: &str, source: &str, context: &Value) -> Result<String, String> {
     render_at(name, source, context, 0)
