@@ -3,9 +3,9 @@
 //! of deployed files stay: they belong to one machine.
 
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::path::Path;
 
+use nix::fcntl::OFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -13,7 +13,7 @@ use crate::fsops;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Printer};
-use crate::state::State;
+use crate::state::{MAX_STATE_SIZE, State};
 
 /// Version of the export format; independent of the state version.
 const FORMAT: u32 = 1;
@@ -72,14 +72,11 @@ pub fn import(ctx: &Context, printer: &Printer, file: &Path, dry_run: bool) -> R
 /// Reads and checks an export. Each path is checked as a repository path.
 fn read(file: &Path) -> Result<Registrations> {
     let bad = |why: String| Error::Usage(format!("{}: {why}", file.display()));
-    let mut bytes = Vec::new();
-    if file == Path::new("-") {
-        std::io::stdin()
-            .read_to_end(&mut bytes)
-            .map_err(|e| bad(e.to_string()))?;
-    } else {
-        bytes = std::fs::read(file).map_err(|e| bad(e.to_string()))?;
+    let bytes = match file == Path::new("-") {
+        true => fsops::read_at_most(std::io::stdin(), "standard input", MAX_STATE_SIZE),
+        false => fsops::read_limited(file, OFlag::empty(), MAX_STATE_SIZE),
     }
+    .map_err(|e| Error::Usage(e.to_string()))?;
     let regs: Registrations = serde_json::from_slice(&bytes).map_err(|e| bad(e.to_string()))?;
     if regs.version != FORMAT {
         return Err(bad(format!(

@@ -137,6 +137,32 @@ impl Fixture {
         cmd
     }
 
+    /// Like `run`, but fails instead of hanging or exhausting memory: rustow
+    /// gets 1 GiB of address space and is killed after `secs` seconds.
+    pub fn run_within(&self, secs: u64, args: &[&str]) -> Out {
+        use std::os::unix::process::CommandExt;
+        use std::time::{Duration, Instant};
+        let mut cmd = self.command(args, &[]);
+        let limit = nix::sys::resource::Resource::RLIMIT_AS;
+        // SAFETY: setrlimit is async-signal-safe; nothing else runs between fork and exec.
+        unsafe {
+            cmd.pre_exec(move || Ok(nix::sys::resource::setrlimit(limit, 1 << 30, 1 << 30)?));
+        }
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().expect("run rustow");
+        let end = Instant::now() + Duration::from_secs(secs);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() > end {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("rustow {args:?} still ran after {secs} s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        to_out(child.wait_with_output().unwrap())
+    }
+
     /// Runs and asserts the exit code.
     pub fn ok(&self, args: &[&str]) -> Out {
         let out = self.run(args);
@@ -146,7 +172,10 @@ impl Fixture {
 }
 
 fn output(mut cmd: Command) -> Out {
-    let out = cmd.output().expect("run rustow");
+    to_out(cmd.output().expect("run rustow"))
+}
+
+fn to_out(out: std::process::Output) -> Out {
     Out {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),

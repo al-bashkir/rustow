@@ -87,19 +87,54 @@ fn inspect_file(path: &Path) -> Result<Observed> {
     })
 }
 
-/// Opens a regular file for reading; fails on a symlink or special file.
-fn open_regular(path: &Path) -> Result<(File, fs::Metadata)> {
-    let flags = (OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits();
+/// Opens a file for reading with `flags` and its metadata. `O_NONBLOCK`
+/// keeps a FIFO from blocking the open; the caller checks the file type.
+fn open_nonblocking(path: &Path, flags: OFlag) -> Result<(File, fs::Metadata)> {
+    let note = match flags.contains(OFlag::O_NOFOLLOW) {
+        true => " (symlinks are not followed)",
+        false => "",
+    };
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(flags)
+        .custom_flags((flags | OFlag::O_NONBLOCK).bits())
         .open(path)
-        .ctx(|| format!("open {} (symlinks are not followed)", path.display()))?;
+        .ctx(|| format!("open {}{note}", path.display()))?;
     let meta = file.metadata().ctx(|| format!("stat {}", path.display()))?;
+    Ok((file, meta))
+}
+
+/// Opens a regular file for reading; fails on a symlink or special file.
+fn open_regular(path: &Path) -> Result<(File, fs::Metadata)> {
+    let (file, meta) = open_nonblocking(path, OFlag::O_NOFOLLOW)?;
     if !meta.is_file() {
         return Err(Error::Failed(format!("{} is not a regular file", path.display())));
     }
     Ok((file, meta))
+}
+
+/// Reads an input file of rustow (configuration, ignore rules, state): a
+/// regular file of at most `limit` bytes, opened with `flags`. A FIFO, a
+/// device, a directory or a larger file is a configuration error that
+/// names the file, never its content.
+pub fn read_limited(path: &Path, flags: OFlag, limit: u64) -> Result<Vec<u8>> {
+    let (file, meta) = open_nonblocking(path, flags)?;
+    if !meta.is_file() {
+        return Err(Error::Config(format!("{} is not a regular file", path.display())));
+    }
+    read_at_most(file, &path.display().to_string(), limit)
+}
+
+/// Reads at most `limit` bytes from `reader` (called `name` in messages); more is an error.
+pub fn read_at_most(reader: impl Read, name: &str, limit: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .ctx(|| format!("read {name}"))?;
+    if bytes.len() as u64 > limit {
+        return Err(Error::Config(format!("{name} is larger than {} MiB", limit >> 20)));
+    }
+    Ok(bytes)
 }
 
 /// Reads a regular file without following a symlink at `path`.

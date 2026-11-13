@@ -4,9 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::path::Path;
 
+use nix::fcntl::OFlag;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, IoContext, Result};
+use crate::error::{Error, Result};
+use crate::fsops;
 use crate::paths::RelPath;
 use crate::template::{Condition, Fact, Host};
 
@@ -14,6 +16,13 @@ pub mod edit;
 
 pub const CONFIG_FILE: &str = "rustow.toml";
 pub const SCHEMA_VERSION: u32 = 1;
+/// The largest `rustow.toml` or `.rustowignore` that rustow reads.
+pub const MAX_FILE_SIZE: u64 = 16 << 20;
+
+/// The text of a configuration file that `fsops::read_limited` read.
+pub fn text_of(path: &Path, bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes).map_err(|_| Error::Config(format!("{} is not valid UTF-8", path.display())))
+}
 
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
 #[derive(
@@ -184,10 +193,10 @@ impl Config {
     /// Loads `<repo>/rustow.toml`; an absent file gives the defaults.
     pub fn load(repo: &Path) -> Result<Config> {
         let path = repo.join(CONFIG_FILE);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Config::parse(&text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
-            Err(e) => Err(e).ctx(|| format!("read {}", path.display())),
+        match fsops::read_limited(&path, OFlag::empty(), MAX_FILE_SIZE) {
+            Ok(bytes) => Config::parse(&text_of(&path, bytes)?),
+            Err(e) if e.is_not_found() => Ok(Config::default()),
+            Err(e) => Err(e),
         }
     }
 

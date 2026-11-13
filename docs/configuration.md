@@ -2,6 +2,8 @@
 
 The file is `<repo>/rustow.toml`. It is optional. Without it, rustow uses the defaults. If the file exists, it must contain `version = 1`.
 
+`rustow.toml` and `.rustowignore` must be regular files of at most 16 MiB, in UTF-8. A symlink to a regular file is accepted. A directory, a FIFO, a device (for example a symlink to `/dev/zero`) or a larger file stops every command with exit 2. The message names the file and the cause.
+
 rustow rejects unknown keys everywhere, except under `[vars]` and the `vars` of a `[[global_rules]]` entry. A configuration error gives exit code 2. A problem with one source or one `[[files]]` or `[[template_rules]]` entry is a warning instead: rustow skips that source and deploys the rest. See [skipped sources](cli.md#skipped-sources).
 
 A TOML error reads `rustow.toml: line L, column C, key <path>: <message>`, for example `rustow.toml: line 7, column 22, key defaults.create_directories: invalid type, expected a boolean`. The key part is missing when rustow cannot find the key. The message never shows the source line or a value. Other validation messages can name values that are not secret, such as a `mode`, an `owner`, the `engine`, the `extension` or a source path. rustow never shows `[vars]` values.

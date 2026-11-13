@@ -7,6 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use nix::fcntl::OFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Backend;
@@ -18,6 +19,10 @@ use crate::paths::{RelPath, Scope};
 /// The state format this rustow writes. Raise it only for a change that
 /// needs a step in `MIGRATIONS`: a new field with a default needs none.
 pub const STATE_VERSION: u32 = 1;
+
+/// The largest state file or `state import` input that rustow reads. The
+/// state of 100 000 files is about 32 MiB.
+pub const MAX_STATE_SIZE: u64 = 512 << 20;
 
 /// One upgrade step: turns the JSON of version N into version N + 1.
 type Migration = fn(&mut serde_json::Value);
@@ -92,7 +97,7 @@ impl State {
     /// Loads the state of `repo`; a missing file gives an empty state.
     pub fn load(dir: &Path, repo_id: &str, repo: &Path) -> Result<State> {
         let file = State::file(dir, repo_id);
-        let bytes = match fsops::read_file(&file) {
+        let bytes = match fsops::read_limited(&file, OFlag::O_NOFOLLOW, MAX_STATE_SIZE) {
             Ok(b) => b,
             Err(_) if fs::symlink_metadata(&file).is_err() => {
                 return Ok(State {

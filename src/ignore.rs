@@ -8,9 +8,11 @@
 use std::path::Path;
 
 use ::ignore::gitignore::{Gitignore, GitignoreBuilder};
+use nix::fcntl::OFlag;
 
-use crate::config::{CONFIG_FILE, GlobalRule};
+use crate::config::{CONFIG_FILE, GlobalRule, MAX_FILE_SIZE, text_of};
 use crate::error::{Error, Result};
+use crate::fsops;
 use crate::paths::RelPath;
 use crate::template::Host;
 
@@ -36,10 +38,27 @@ impl Ignore {
     pub fn load(repo: &Path, internal: Vec<RelPath>) -> Result<Ignore> {
         let mut builder = GitignoreBuilder::new(repo);
         let file = repo.join(IGNORE_FILE);
-        if file.exists()
-            && let Some(err) = builder.add(&file)
-        {
-            return Err(Error::Config(format!("{IGNORE_FILE}: {err}")));
+        let text = match fsops::read_limited(&file, OFlag::empty(), MAX_FILE_SIZE) {
+            Ok(bytes) => text_of(&file, bytes)?,
+            Err(e) if e.is_not_found() => String::new(),
+            Err(e) => return Err(e),
+        };
+        let errors: Vec<String> = text
+            .lines()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                // Git ignores a byte order mark at the start of the file.
+                let line = if i == 0 {
+                    line.trim_start_matches('\u{feff}')
+                } else {
+                    line
+                };
+                let added = builder.add_line(Some(file.clone()), line);
+                added.err().map(|e| format!("line {}: {e}", i + 1))
+            })
+            .collect();
+        if !errors.is_empty() {
+            return Err(Error::Config(format!("{IGNORE_FILE}: {}", errors.join("; "))));
         }
         let matcher = builder
             .build()

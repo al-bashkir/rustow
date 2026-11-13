@@ -36,6 +36,11 @@ impl Error {
             Error::Io { .. } | Error::Failed(_) => 4,
         }
     }
+
+    /// True for a filesystem error that says the path does not exist.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Error::Io { source, .. } if source.kind() == io::ErrorKind::NotFound)
+    }
 }
 
 /// Adds a description of the failed operation to an `io::Error`.

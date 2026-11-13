@@ -29,8 +29,9 @@ walkdir = "2.5.0"
 zeroize = { version = "1.9.1", features = ["serde"] }
 
 [dev-dependencies]
-# openpty for tests that answer a prompt on a terminal
-nix = { version = "0.31.3", features = ["term"] }
+# openpty for tests that answer a prompt on a terminal; setrlimit for tests
+# that must not exhaust memory
+nix = { version = "0.31.3", features = ["resource", "term"] }
 
 [profile.release]
 lto = "thin"

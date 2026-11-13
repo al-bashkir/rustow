@@ -6,8 +6,10 @@ use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use nix::fcntl::OFlag;
+
 use crate::config::edit;
-use crate::config::{CONFIG_FILE, Config};
+use crate::config::{CONFIG_FILE, Config, MAX_FILE_SIZE, text_of};
 use crate::error::{Error, IoContext, Result};
 use crate::fsops;
 use crate::ignore::{DEFAULT_CACHE_DIR, IGNORE_FILE};
@@ -142,7 +144,6 @@ fn read_text(path: &Path) -> Result<Option<(String, u32)>> {
             path.display()
         )));
     }
-    let text = String::from_utf8(fsops::read_file(path)?)
-        .map_err(|_| Error::Config(format!("{} is not valid UTF-8", path.display())))?;
+    let text = text_of(path, fsops::read_limited(path, OFlag::O_NOFOLLOW, MAX_FILE_SIZE)?)?;
     Ok(Some((text, meta.permissions().mode() & 0o7777)))
 }
