@@ -95,7 +95,7 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 - `skip` (default): leave conflicting destinations. Deploy the rest. An item that fails to plan (for example a render error) does not stop the other items. Exit 3, or 4 for an error.
 - `abort`: if any item conflicts or fails to plan, rustow writes nothing. The summary then starts with "conflicts found", "errors found" or "conflicts and errors found", then ", nothing written: …".
-- `backup`: move the old object to `<state_dir>/backups/<repo-id>/<UTC YYYYmmddTHHMMSSZ>-<pid>/<home|root|cache>/<dest-rel>`. The directories are private. When the state directory is on another filesystem, rustow copies the object into a temporary file there, renames it to the backup name, and then removes the original. When the copy fails (for example, the disk is full), no partial backup stays, the original stays in place, and the item fails.
+- `backup`: move the old object to `<state_dir>/backups/<repo-id>/<UTC YYYYmmddTHHMMSSZ>-<pid>/<home|root|cache>/<dest-rel>`. The directories are private. rustow makes them as you before it changes the item, also for a system file that the sudo helper replaces. When the state directory is on another filesystem, rustow copies the object into a temporary file there, renames it to the backup name, and then removes the original. When the copy fails (for example, the disk is full), no partial backup stays, the original stays in place, and the item fails.
 - `overwrite`: replace the file or symlink.
 
 `backup` and `overwrite` never replace a directory or a special file. They never act through an unsafe ancestor symlink. They never touch a destination that resolves inside the repository or the cache.
@@ -154,7 +154,9 @@ When the source and the destination both changed, `diff` prints "<dest>: conflic
 
 `check` is offline. It checks the configuration, ignore rules, registrations, collisions, and the `owner` and `group` names of template rules. It renders plaintext templates. It never decrypts. Exit 0, 1 or 2. It prints a warning for each [skipped source](#skipped-sources). A warning is not a problem and does not change the exit code. Exception: a mistake in a template [meta block](templates.md#meta-block) is a problem. `check --json` prints `sources`, `problems` and `warnings`.
 
-`doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, temporary files that an interrupted run left, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
+`doctor` checks the repository, the configuration, the safety of cache and state directories, target writability, privileges, the owner of the backup directories, temporary files that an interrupted run left, age identity files, the GnuPG home and `gpg` in `PATH`. It exits with 1 on any failure.
+
+- Each directory under `<state_dir>/backups` that another user owns gets a "backups" warning: a backup into it fails. The warning gives the command that gives it back to you, for example "give it back with `sudo chown -R 1000 -- <path>`".
 
 ## Temporary files of an interrupted run
 

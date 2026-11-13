@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nix::unistd::{AccessFlags, access, geteuid};
 use serde_json::json;
@@ -45,6 +45,7 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
             format!("running as uid {uid}{}", if uid == 0 { " (root)" } else { "" }),
         ),
     ];
+    checks.extend(backups(&ctx.state_dir, uid));
     checks.extend(temp_files(ctx));
     checks.extend(encryption_checks(ctx));
     checks.push(match crate::fsops::find_program("gpg") {
@@ -153,4 +154,74 @@ fn gpg_check(ctx: &Context, forbidden: &[&Path]) -> Option<Check> {
             Err(e) => check("fail", "gpg home", e),
         },
     )
+}
+
+/// A warning for each directory under `<state_dir>/backups` that the user
+/// does not own: a backup into it fails. Only the topmost one counts,
+/// because the advice fixes everything below it.
+fn backups(state_dir: &Path, uid: u32) -> Vec<Check> {
+    let dir = state_dir.join("backups");
+    let mut foreign = Vec::new();
+    foreign_dirs(&dir, uid, &mut foreign);
+    if foreign.is_empty() {
+        return vec![check(
+            "ok",
+            "backups",
+            format!("{} has only your directories", dir.display()),
+        )];
+    }
+    foreign
+        .into_iter()
+        .map(|(path, owner)| {
+            let path = path.display();
+            let advice = format!("give it back with `sudo chown -R {uid} -- {path}`");
+            check(
+                "warn",
+                "backups",
+                format!("{path} is owned by uid {owner}, not uid {uid}, so backups there fail; {advice}"),
+            )
+        })
+        .collect()
+}
+
+/// Pushes `dir` when it is a directory of another owner, else does the
+/// same for each entry of it. Symlinks are not followed.
+fn foreign_dirs(dir: &Path, uid: u32, out: &mut Vec<(PathBuf, u32)>) {
+    let Ok(meta) = fs::symlink_metadata(dir) else { return };
+    if !meta.is_dir() {
+        return;
+    }
+    if meta.uid() != uid {
+        return out.push((dir.to_path_buf(), meta.uid()));
+    }
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        foreign_dirs(&entry.path(), uid, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_backup_directory_of_another_owner_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("backups/id/time")).unwrap();
+        let me = geteuid().as_raw();
+        let mine = backups(tmp.path(), me);
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].level, "ok", "{}", mine[0].detail);
+        let other = backups(tmp.path(), me + 1);
+        assert_eq!(other.len(), 1, "only the topmost directory");
+        assert_eq!(other[0].level, "warn");
+        let top = tmp.path().join("backups");
+        assert_eq!(
+            other[0].detail,
+            format!(
+                "{0} is owned by uid {me}, not uid {1}, so backups there fail; give it back with `sudo chown -R {1} -- {0}`",
+                top.display(),
+                me + 1
+            )
+        );
+    }
 }

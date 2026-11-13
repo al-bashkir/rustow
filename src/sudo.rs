@@ -408,6 +408,36 @@ mod tests {
         assert_eq!(fs::read_dir(&d).unwrap().count(), 0, "no file and no temp");
     }
 
+    /// The helper runs as root, so it never makes a directory for a backup:
+    /// rustow makes them as the user first. A job whose backup directory is
+    /// missing fails, and the conflicting file stays.
+    #[test]
+    fn the_helper_makes_no_backup_directory() {
+        let (_t, d) = tmp();
+        fs::write(d.join("f"), "old").unwrap();
+        let file = Desired::File {
+            hash: Hash::of(b"new"),
+            meta: FileMeta::default(),
+        };
+        let mut deploy = crate::execute::tests::create(&d.join("f"), file, Some(b"new"));
+        deploy.observed = fsops::inspect(&d.join("f")).unwrap();
+        deploy.decision = crate::plan::Decision::Conflict(crate::plan::Conflict::Unmanaged);
+        let job = Job::Write {
+            deploy: &deploy,
+            policy: Policy::Backup,
+            backup: d.join("backups/root/f"),
+            temp: format!("{TEMP_PREFIX}test"),
+        };
+        let mut input = Vec::new();
+        frame(&mut input, &job);
+        let mut output = Vec::new();
+        serve_on(&mut input.as_slice(), &mut output).unwrap();
+        let done: Done = serde_json::from_slice(&output).unwrap();
+        assert!(done.result.is_err());
+        assert!(!d.join("backups").exists(), "no directory made");
+        assert_eq!(fs::read(d.join("f")).unwrap(), b"old");
+    }
+
     /// Frames follow each other directly: each header starts where the
     /// content of the one before ends, also when a job reads nothing.
     #[test]

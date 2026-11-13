@@ -345,10 +345,16 @@ pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
 }
 
 /// A temporary name (`fsops::temp_name`), journaled in `dir`, and in the
-/// directory of `backup` when `decision` is a conflict that goes to a backup.
+/// directory of `backup` when `decision` is a conflict that goes to a
+/// backup. That directory is made here, private and as the user: the sudo
+/// helper runs as root and makes none.
 fn temp_in(dir: Option<&Path>, decision: Decision, policy: Policy, backup: &Path) -> Result<String> {
     let away = matches!(decision, Decision::Conflict(_)) && policy == Policy::Backup;
-    let dirs: Vec<&Path> = dir.into_iter().chain(backup.parent().filter(|_| away)).collect();
+    let to = backup.parent().filter(|_| away);
+    if let Some(to) = to {
+        fsops::ensure_private_dir(to)?;
+    }
+    let dirs: Vec<&Path> = dir.into_iter().chain(to).collect();
     fsops::temp_name(&dirs)
 }
 
@@ -398,7 +404,7 @@ fn write_in(
         None => (parent, &[][..]),
     };
     let dir = make_dirs(fsops::open_planned(base, d.dir_id, me)?, missing, d.dir_mode, me, made)?;
-    let detail = apply_dest(&dir, name, d, new, policy, backup)?;
+    let detail = apply_dest(&dir, name, d, new, (policy, backup), me)?;
     verify(&dir, name, d)?;
     Ok(detail)
 }
@@ -429,7 +435,7 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     let temp = temp_in(Some(&dir.path), cache.decision, run.policy, &to)?;
     let mut detail = None;
     if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
-        detail = Some(backup(&dir, name, &to, &temp)?);
+        detail = Some(backup(&dir, name, &to, &temp, me())?);
     }
     write_cache(&dir, name, &temp, cache).map(|()| detail)
 }
@@ -445,19 +451,20 @@ fn write_cache(dir: &Dir, name: &OsStr, temp: &str, cache: &CacheWrite) -> Resul
 }
 
 /// Performs the planned decision on `name` in `dir` (the caller already
-/// checked that the policy allows it); returns the backup note, if any.
+/// checked that the policy allows it), with the backup path for a
+/// conflict and the user `me`; returns the backup note, if any.
 fn apply_dest(
     dir: &Dir,
     name: &OsStr,
     d: &Deploy,
     new: &mut NewFile,
-    policy: Policy,
-    backup: &Path,
+    away: (Policy, &Path),
+    me: u32,
 ) -> Result<Option<String>> {
     match d.decision {
         Decision::Create => put(dir, name, d, new, false).map(|()| None),
         Decision::Update => update(dir, name, d, new).map(|()| None),
-        Decision::Conflict(_) => replace_conflicting(dir, name, d, new, policy, backup),
+        Decision::Conflict(_) => replace_conflicting(dir, name, d, new, away, me),
         Decision::FixMetadata => fix_metadata(dir, name, d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
@@ -475,11 +482,11 @@ fn replace_conflicting(
     name: &OsStr,
     d: &Deploy,
     new: &mut NewFile,
-    policy: Policy,
-    backup: &Path,
+    away: (Policy, &Path),
+    me: u32,
 ) -> Result<Option<String>> {
     recheck(dir, name, &d.path, &d.observed)?;
-    let detail = clear_conflict(dir, name, policy, backup, new.temp)?;
+    let detail = clear_conflict(dir, name, away, new.temp, me)?;
     put(dir, name, d, new, false)?;
     Ok(detail)
 }
@@ -508,17 +515,25 @@ fn fix_metadata(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
     Ok(())
 }
 
-/// Moves the conflicting destination to the backup dir, or removes it.
-fn clear_conflict(dir: &Dir, name: &OsStr, policy: Policy, to: &Path, temp: &str) -> Result<Option<String>> {
+/// Moves the conflicting destination to the backup path `to` (its
+/// directory walked for `me`), or removes it.
+fn clear_conflict(
+    dir: &Dir,
+    name: &OsStr,
+    (policy, to): (Policy, &Path),
+    temp: &str,
+    me: u32,
+) -> Result<Option<String>> {
     if policy == Policy::Backup {
-        return backup(dir, name, to, temp).map(Some);
+        return backup(dir, name, to, temp, me).map(Some);
     }
     dir.remove(name)?;
     Ok(None)
 }
 
-fn backup(dir: &Dir, name: &OsStr, to: &Path, temp: &str) -> Result<String> {
-    fsops::backup(dir, name, to, me(), temp)?;
+/// Moves `name` to `to`, whose directory the user made (`temp_in`).
+fn backup(dir: &Dir, name: &OsStr, to: &Path, temp: &str, me: u32) -> Result<String> {
+    fsops::backup(dir, name, to, me, temp)?;
     Ok(format!("backup saved to {}", to.display()))
 }
 

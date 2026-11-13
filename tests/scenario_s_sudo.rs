@@ -279,6 +279,54 @@ fn the_helper_refuses_a_symlink_swapped_in_after_the_plan() {
     );
 }
 
+/// The real helper runs as root: a directory that it made in the state
+/// directory would be root's, and each later backup of the user would fail.
+/// So rustow makes the backup directories as the user before sudo starts,
+/// and the helper only moves the old file into them. The fake sudo takes
+/// the helper's write access to the state directory away.
+#[test]
+fn the_backup_directories_of_a_system_file_are_made_by_the_user() {
+    let s = Sudo::new(&FAKE.replacen(
+        "\"$@\"\n",
+        "chmod 500 \"$XDG_STATE_HOME/rustow\"\n\"$@\"\ncode=$?\nchmod 700 \"$XDG_STATE_HOME/rustow\"\n",
+        1,
+    ));
+    set_mode(&s.etc, 0o755);
+    fs::write(s.etc.join("app.conf"), "old\n").unwrap();
+    set_mode(&s.etc, 0o555);
+    s.fx.write(".homeconf", "new\n");
+    s.fx.write_home(".homeconf", "old home\n");
+
+    let out = s.run(&["apply", "--backup", "rustowroot"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(s.calls(), 1);
+    assert_eq!(read(&s.fx.root_path("etc/app.conf")), "a\n");
+    let backups = s.fx.state.join("rustow/backups");
+    let saved: Vec<_> = walk(&backups)
+        .into_iter()
+        .filter(|p| p.ends_with("etc/app.conf"))
+        .collect();
+    assert_eq!(saved.len(), 1, "{out:?}");
+    assert_eq!(read(&saved[0]), "old\n");
+    assert_eq!(mode(saved[0].parent().unwrap()), 0o700, "private");
+
+    let home = s.run(&["apply", "--backup", ".homeconf"]);
+    assert_eq!(home.code, 0, "{home:?}");
+    assert!(is_symlink(&s.fx.home_path(".homeconf")));
+    assert_eq!(s.calls(), 1, "a home file never uses sudo");
+}
+
+/// Every path below `dir`.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir).into_iter().flatten() {
+        let path = entry.unwrap().path();
+        out.extend(walk(&path));
+        out.push(path);
+    }
+    out
+}
+
 /// A sudo program named without a `/` is looked up only in absolute PATH
 /// entries: an empty entry would run `./fake-sudo` from the current directory.
 #[test]

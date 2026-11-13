@@ -164,12 +164,12 @@ fn write_path(
     dir.write(name, &temp_name(&[parent])?, &mut &bytes[..], want, meta, replace)
 }
 
-/// Moves the file or symlink `name` of `dir` to `backup`, whose parent is
-/// created private and walked for `me`; never over an existing backup.
-/// `temp` names the copy across filesystems.
+/// Moves the file or symlink `name` of `dir` to `backup`, whose parent
+/// must exist (the user made it: the sudo helper makes no directory) and
+/// is walked for `me`; never over an existing backup. `temp` names the
+/// copy across filesystems.
 pub fn backup(dir: &Dir, name: &OsStr, backup: &Path, me: u32, temp: &str) -> Result<()> {
     let (to, to_name) = split(backup)?;
-    ensure_private_dir(to)?;
     dir.move_to(name, &open_ready(to, me)?, to_name, temp)
 }
 
@@ -605,18 +605,19 @@ mod tests {
     }
 
     #[test]
-    fn backup_moves_into_private_dir() {
+    fn backup_moves_into_an_existing_dir_only() {
         let (_t, d) = tmp();
         let (dir, me) = (open(&d), geteuid().as_raw());
         fs::write(d.join("f"), b"data").unwrap();
         symlink("t", d.join("l")).unwrap();
+        assert!(backup(&dir, name("f"), &d.join("bk/a/f"), me, T).is_err());
+        assert!(!d.join("bk").exists() && d.join("f").exists(), "it makes no directory");
+        ensure_private_dir(&d.join("bk/a")).unwrap();
         backup(&dir, name("f"), &d.join("bk/a/f"), me, T).unwrap();
         backup(&dir, name("l"), &d.join("bk/a/l"), me, T).unwrap();
         assert!(!d.join("f").exists());
         assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
         assert_eq!(fs::read_link(d.join("bk/a/l")).unwrap(), PathBuf::from("t"));
-        assert_eq!(mode_of(&d.join("bk")), 0o700);
-        assert_eq!(mode_of(&d.join("bk/a")), 0o700);
         // Never overwrite an existing backup.
         fs::write(d.join("f"), b"again").unwrap();
         let e = backup(&dir, name("f"), &d.join("bk/a/f"), me, T).unwrap_err();
@@ -905,6 +906,7 @@ mod tests {
         fs::set_permissions(src.path().join("f"), fs::Permissions::from_mode(0o640)).unwrap();
         symlink("t", src.path().join("l")).unwrap();
         let (from, me) = (open(src.path()), geteuid().as_raw());
+        ensure_private_dir(&dst.path().join("bk")).unwrap();
         backup(&from, name("f"), &dst.path().join("bk/f"), me, T).unwrap();
         backup(&from, name("l"), &dst.path().join("bk/l"), me, T).unwrap();
         assert!(!src.path().join("f").exists() && fs::symlink_metadata(src.path().join("l")).is_err());
