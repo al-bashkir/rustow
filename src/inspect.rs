@@ -18,7 +18,7 @@ use crate::paths::RelPath;
 use crate::plan::{Conflict, Content, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::{self, Printer, shown};
-use crate::source::{Discovery, Mode, Selector, SkipKind, Skipped, check_collisions, shown_label};
+use crate::source::{Discovery, Mode, Selector, SkipKind, Skipped, check_collisions, not_a_source, shown_label};
 use crate::state::{Record, State};
 use crate::template;
 
@@ -273,12 +273,12 @@ pub fn status(
     rows.extend(
         orphans(ctx, discovery, state, args)?
             .into_iter()
-            .map(|(dest, record)| Row {
+            .map(|(dest, record, above)| Row {
                 source: record.source.to_string(),
                 dest: Some(dest.clone()),
                 mode: shown_label(&record.mode, record.backend),
-                status: "ORPHANED",
-                detail: Some(orphan_detail(ctx, discovery, record)),
+                status: if above.is_some() { "SKIPPED" } else { "ORPHANED" },
+                detail: Some(above.map_or_else(|| orphan_detail(ctx, discovery, record), |s| s.reason.clone())),
             }),
     );
     // An inactive template that is already an ORPHANED row gets no second row.
@@ -427,21 +427,31 @@ fn source_exists(ctx: &Context, known: &HashSet<&RelPath>, record: &Record) -> b
     known.contains(&record.source) || (record.folded_dir && ctx.root.join(record.source.as_path()).is_dir())
 }
 
-/// Recorded destinations in the current targets whose source no longer exists.
-fn orphans<'a>(
+/// A recorded destination whose source is not a source now, and the
+/// skipped path above that source, if any.
+type Gone<'a, 'd> = (&'a PathBuf, &'a Record, Option<&'d Skipped>);
+
+/// Recorded destinations in the current targets whose source no longer
+/// exists. A source below a skipped path (an unreadable directory) comes
+/// with that path: rustow cannot tell if it is still there.
+fn orphans<'a, 'd>(
     ctx: &Context,
-    discovery: &Discovery,
+    discovery: &'d Discovery,
     state: &'a State,
     args: &[String],
-) -> Result<Vec<(&'a PathBuf, &'a Record)>> {
+) -> Result<Vec<Gone<'a, 'd>>> {
     let prefixes: Vec<RelPath> = args
         .iter()
         .filter(|a| !matches!(a.as_str(), "." | "./"))
         .map(|a| RelPath::parse(a))
         .collect::<Result<_>>()?;
-    let present = discovery.skipped.iter().filter(|s| s.kind == SkipKind::Present);
+    let present: Vec<&Skipped> = discovery
+        .skipped
+        .iter()
+        .filter(|s| s.kind == SkipKind::Present)
+        .collect();
     let paths: HashSet<&RelPath> = (discovery.sources.iter().map(|s| &s.path))
-        .chain(present.map(|s| &s.path))
+        .chain(present.iter().map(|s| &s.path))
         .collect();
     let mut found = Vec::new();
     for (dest, record) in &state.entries {
@@ -450,7 +460,8 @@ fn orphans<'a>(
         if known || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;
         }
-        found.push((dest, record));
+        let above = present.iter().find(|s| record.source.strip_prefix(&s.path).is_some());
+        found.push((dest, record, above.copied()));
     }
     Ok(found)
 }
@@ -458,13 +469,15 @@ fn orphans<'a>(
 /// Names the command that removes one orphaned destination (`undeploy`
 /// with no path would remove every managed destination).
 /// A template whose meta condition turned false names that condition; a
-/// source that a `[[global_rules]]` entry ignores names the rule.
+/// source that a `[[global_rules]]` entry ignores names the rule; a path
+/// that is there but is not a source says why.
 fn orphan_detail(ctx: &Context, discovery: &Discovery, record: &Record) -> String {
     let inactive = discovery.inactive.iter().find(|s| s.path == record.source);
     let why = match (inactive, ctx.ignore.ignoring_rule(&record.source, record.folded_dir)) {
         (Some(s), _) => s.reason.clone(),
         (None, Some(rule)) => format!("ignored by {rule}"),
-        (None, None) => "source removed".into(),
+        (None, None) => not_a_source(&ctx.root, &ctx.ignore, &record.source)
+            .map_or_else(|| "source removed".into(), |why| format!("source {why}")),
     };
     format!("{why}; `rustow undeploy {}` removes it", record.source)
 }
@@ -481,8 +494,8 @@ pub fn orphan_reports(
     let found = orphans(ctx, discovery, state, args)?;
     Ok(found
         .into_iter()
-        .filter(|(_, record)| selector.includes_label(&record.mode))
-        .map(|(dest, record)| ItemReport {
+        .filter(|(_, record, above)| above.is_none() && selector.includes_label(&record.mode))
+        .map(|(dest, record, _)| ItemReport {
             source: record.source.clone(),
             dest: dest.clone(),
             mode: shown_label(&record.mode, record.backend),

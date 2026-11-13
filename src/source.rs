@@ -145,10 +145,11 @@ pub struct Skipped {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SkipKind {
     /// A path in the repository that cannot deploy: it still counts as a
-    /// source, so a recorded destination is not orphaned.
+    /// source, so a recorded destination at or below it is not orphaned.
     Present,
-    /// A configuration entry or registration whose source does not exist.
-    Missing,
+    /// A configuration entry or registration that names no source: the
+    /// path does not exist, is ignored or reserved, or is a directory.
+    NoSource,
 }
 
 const META_ERROR: &str = "template meta block, ";
@@ -397,14 +398,13 @@ fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
 }
 
 /// Each `[[files]]`, `[[template_rules]]` and `rustow file add` entry that
-/// names no discovered or skipped file, with the reason.
+/// names no discovered file, and no file at or below a skipped path, with
+/// the reason.
 fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Discovery) -> Vec<Skipped> {
-    let known: BTreeSet<&RelPath> = found
-        .sources
-        .iter()
-        .map(|s| &s.path)
-        .chain(found.skipped.iter().chain(&found.inactive).map(|s| &s.path))
+    let known: BTreeSet<&RelPath> = (found.sources.iter().map(|s| &s.path))
+        .chain(found.inactive.iter().map(|s| &s.path))
         .collect();
+    let skipped = |path: &RelPath| found.skipped.iter().any(|s| path.starts_with(&s.path));
     let config = crate::config::CONFIG_FILE;
     let entries = cfg.files.keys().map(|p| (format!("{config} [[files]] entry"), p));
     let entries = entries.chain(
@@ -419,31 +419,30 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
     );
     entries
         // A path that a matching [[global_rules]] entry ignores is not for this host: no warning.
-        .filter(|(_, path)| !known.contains(path) && ignore.ignoring_rule(path, false).is_none())
+        .filter(|(_, path)| !known.contains(path) && !skipped(path) && ignore.ignoring_rule(path, false).is_none())
         .map(|(entry, path)| {
-            let (kind, why) = unmatched_entry(repo, ignore, path);
+            let why = not_a_source(repo, ignore, path)
+                .unwrap_or("does not exist (remove the entry, e.g. with `rustow file remove`)");
             Skipped {
                 path: path.clone(),
                 reason: format!("{entry} {why}"),
-                kind,
+                kind: SkipKind::NoSource,
             }
         })
         .collect()
 }
 
-/// Why a configuration entry names no deployable file.
-fn unmatched_entry(repo: &Path, ignore: &Ignore, path: &RelPath) -> (SkipKind, &'static str) {
+/// Why a repository path that is not a source is still there, or `None`
+/// when it does not exist.
+pub fn not_a_source(repo: &Path, ignore: &Ignore, path: &RelPath) -> Option<&'static str> {
     if ignore.is_reserved(path, false) {
-        (SkipKind::Present, "is reserved and can never be deployed")
+        Some("is reserved and can never be deployed")
     } else if ignore.is_ignored(path, false) {
-        (SkipKind::Present, "is ignored by .rustowignore")
+        Some("is ignored by .rustowignore")
     } else if repo.join(path.as_path()).is_dir() {
-        (SkipKind::Present, "is a directory, not a file")
+        Some("is a directory, not a file")
     } else {
-        (
-            SkipKind::Missing,
-            "does not exist (remove the entry, e.g. with `rustow file remove`)",
-        )
+        None
     }
 }
 

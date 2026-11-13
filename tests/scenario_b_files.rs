@@ -480,3 +480,40 @@ fn removed_source_of_a_registered_copy_is_orphaned() {
         assert_eq!(read(&fx.home_path(".d")), "d\n", "rustow removes nothing");
     }
 }
+
+/// A registered copy whose source is now ignored or a directory is
+/// orphaned, as a link in the same case is. rustow removes nothing.
+#[test]
+fn registered_copy_whose_path_is_no_source_is_orphaned() {
+    for (change, why) in [
+        ("ignored", "source is ignored by .rustowignore"),
+        ("a directory", "source is a directory, not a file"),
+    ] {
+        let fx = Fixture::new();
+        fx.write(".d", "d\n");
+        fx.write(".l", "l\n");
+        fx.ok(&["file", "add", ".d"]);
+        fx.ok(&["apply"]);
+        match change {
+            "ignored" => drop(fx.write(".rustowignore", ".d\n.l\n")),
+            _ => {
+                fs::remove_file(fx.repo.join(".d")).unwrap();
+                fs::remove_file(fx.repo.join(".l")).unwrap();
+                fx.write(".d/inner", "i\n");
+                fx.write(".l/inner", "i\n");
+            }
+        }
+        let status = fx.run(&["status"]);
+        assert_eq!(status.code, 1, "{change}: {status:?}");
+        for (name, mode) in [(".d", "copy"), (".l", "link")] {
+            let row = format!("ORPHANED ~/{name}  <- {name} ({mode}): {why}; `rustow undeploy {name}` removes it");
+            assert!(status.stdout.contains(&row), "{change}: {status:?}");
+        }
+        let apply = fx.run(&["apply"]);
+        assert!(
+            apply.stdout.contains("orphaned ~/.d  <- .d (copy)"),
+            "{change}: {apply:?}"
+        );
+        assert_eq!(read(&fx.home_path(".d")), "d\n", "rustow removes nothing");
+    }
+}

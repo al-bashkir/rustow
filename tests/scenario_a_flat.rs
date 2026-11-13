@@ -260,6 +260,35 @@ fn absolute_link_to_the_source_is_taken_over() {
     assert!(twice.stdout.contains("0 changed, 1 unchanged"), "{twice:?}");
 }
 
+/// A recorded destination below an unreadable directory is not orphaned:
+/// rustow cannot tell if its source is still there. `status` shows it as
+/// SKIPPED with the reason of the directory.
+#[test]
+fn a_record_below_an_unreadable_directory_is_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
+    fx.write("locked/x", "x\n");
+    fx.write("locked/y", "y\n");
+    fx.ok(&["file", "add", "locked/y"]);
+    fx.ok(&["apply"]);
+    let locked = fx.repo.join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let status = fx.run(&["status"]);
+    let apply = fx.run(&["apply"]);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(status.code, 0, "{status:?}");
+    for (name, mode) in [("x", "link"), ("y", "copy")] {
+        let row = format!("SKIPPED ~/locked/{name}  <- locked/{name} ({mode}): cannot read: Permission denied");
+        assert!(status.stdout.contains(&row), "{status:?}");
+    }
+    assert!(status.stdout.contains("SKIPPED locked: cannot read"), "{status:?}");
+    assert!(!status.stdout.contains("ORPHANED"), "{status:?}");
+    assert!(!status.stderr.contains("does not exist"), "{status:?}");
+    assert_eq!(apply.code, 0, "{apply:?}");
+    assert!(!apply.stdout.contains("orphaned"), "{apply:?}");
+}
+
 /// An unreadable directory is one skipped entry: the other sources
 /// deploy, and the directory above it does not fold.
 #[test]
