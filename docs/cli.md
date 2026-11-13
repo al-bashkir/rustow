@@ -188,7 +188,7 @@ rustow also removes parent directories that it created, only when they are empty
 
 A destination that changed stays in place, and the item is a conflict. Under the default policy (`skip`), rustow removes the other items. Under `--on-conflict abort`, it removes nothing when any item is a conflict or an error. `unlink` and `undeploy` do not take `--backup`, `--force`, `--on-conflict backup` or `--on-conflict overwrite`: they exit 2. Move or remove a changed destination yourself.
 
-`undeploy` without a path removes every managed destination. So a real run asks first. It prints the list on stderr, then "Remove N destinations? [y/N]". Only `y` or `yes` continues. Any other answer prints "cancelled, nothing removed" and exits 0. Use `--yes` (`-y`) to skip the question. Without a terminal on stdin and without `--yes`, rustow removes nothing and exits 2. rustow does not ask for `--dry-run`, for a path argument, for `unlink`, or when nothing would be removed.
+`undeploy` without a path removes every managed destination. So a real run asks first. It prints the list on stderr, then "Remove N destinations? [y/N]". Only `y` or `yes` continues. Upper or lower case and spaces before or after the word are accepted, for example `Y` or ` YES`. Any other answer prints "cancelled, nothing removed" and exits 0. Use `--yes` (`-y`) to skip the question. Without a terminal on stdin and without `--yes`, rustow removes nothing and exits 2. rustow does not ask for `--dry-run`, for a path argument, for `unlink`, or when nothing would be removed.
 
 ## cache clean
 
