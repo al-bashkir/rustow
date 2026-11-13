@@ -68,6 +68,11 @@ fn template_list_shows_templates() {
         "{out:?}"
     );
     assert!(!out.stdout.contains(".bashrc"), "{out:?}");
+    assert!(out.stdout.contains("-> ~/.gitconfig ("), "{out:?}");
+    let json = fx.ok(&["template", "list", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    let dest = fx.home_path(".gitconfig").display().to_string();
+    assert_eq!(v["templates"][0]["dest"], dest.as_str(), "JSON has absolute paths");
 }
 
 #[test]

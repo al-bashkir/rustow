@@ -13,7 +13,7 @@ use crate::execute::{self, Action, ItemReport, Policy, Run};
 use crate::paths::RelPath;
 use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
-use crate::report::{Printer, RunKind};
+use crate::report::{Listed, Printer, RunKind};
 use crate::source::{Discovery, Mode, Selector, Source};
 use crate::state::{self, Lock, State};
 use crate::{files, fsops, inspect};
@@ -113,8 +113,14 @@ fn template_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: TemplateCommand) ->
 fn template_list(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
     let ctx = open(g, env, p)?;
     let discovery = ctx.discover()?;
-    let templates: Vec<&Source> = discovery.sources.iter().filter(|s| s.mode.is_template()).collect();
-    p.sources(&ctx, &templates, "templates");
+    let templates: Vec<Listed> = (discovery.sources.iter().filter(|s| s.mode.is_template()))
+        .map(|s| Listed {
+            source: s.path.to_string(),
+            dest: Some(ctx.dest_path(s)),
+            mode: s.mode.shown_label(),
+        })
+        .collect();
+    p.list("templates", &templates);
     Ok(0)
 }
 

@@ -312,23 +312,29 @@ impl Change {
     }
 }
 
+/// One row of `file list` or `template list`.
+pub struct Listed {
+    pub source: String,
+    /// Absolute destination; None when the source cannot deploy.
+    pub dest: Option<PathBuf>,
+    pub mode: String,
+}
+
 impl Printer {
-    /// Lists sources with destination and mode (`template list`).
-    pub fn sources(&self, ctx: &crate::repo::Context, sources: &[&crate::source::Source], key: &str) {
-        let rows: Vec<(String, String, String)> = sources
-            .iter()
-            .map(|s| (s.path.to_string(), self.path(&ctx.dest_path(s)), s.mode.shown_label()))
-            .collect();
+    /// Lists sources with destination and mode, as JSON under `key` (with
+    /// absolute destinations, as all JSON output) or as text.
+    pub fn list(&self, key: &str, rows: &[Listed]) {
         if self.json {
             let list: Vec<_> = rows
                 .iter()
-                .map(|(s, d, m)| json!({ "source": s, "dest": d, "mode": m }))
+                .map(|r| json!({ "source": r.source, "dest": r.dest, "mode": r.mode }))
                 .collect();
             outln!("{}", json!({ key: list }));
-        } else {
-            for (source, dest, mode) in &rows {
-                outln!("{} -> {dest} ({mode})", shown(source));
-            }
+            return;
+        }
+        for r in rows {
+            let dest = r.dest.as_deref().map(|d| self.path(d)).unwrap_or_default();
+            outln!("{} -> {dest} ({})", shown(&r.source), shown(&r.mode));
         }
     }
 }

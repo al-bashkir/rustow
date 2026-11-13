@@ -6,14 +6,13 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 use nix::fcntl::OFlag;
-use serde_json::json;
 
 use crate::config::{CONFIG_FILE, MAX_FILE_SIZE, edit, text_of};
 use crate::error::{Error, Result};
 use crate::fsops;
 use crate::paths::RelPath;
 use crate::repo::Context;
-use crate::report::{Change, Printer};
+use crate::report::{Change, Listed, Printer};
 use crate::source::{Discovery, classify, discover};
 use crate::state::State;
 
@@ -124,28 +123,21 @@ fn unregister(text: &mut String, state: &mut State, arg: &str) -> Result<Change>
 pub fn list(ctx: &mut Context, printer: &Printer) -> Result<i32> {
     ctx.load_state()?;
     let paths: std::collections::BTreeSet<&RelPath> = ctx.config.files.keys().chain(&ctx.config.added_files).collect();
-    let rows: Vec<(String, String, String)> = paths
+    let rows: Vec<Listed> = paths
         .into_iter()
-        .map(|path| match classify(path, &ctx.config) {
-            Ok(s) => (path.to_string(), printer.path(&ctx.dest_path(&s)), s.mode.shown_label()),
-            Err(e) => (path.to_string(), String::new(), format!("invalid: {e}")),
+        .map(|path| {
+            let (dest, mode) = match classify(path, &ctx.config) {
+                Ok(s) => (Some(ctx.dest_path(&s)), s.mode.shown_label()),
+                Err(e) => (None, format!("invalid: {e}")),
+            };
+            Listed {
+                source: path.to_string(),
+                dest,
+                mode,
+            }
         })
         .collect();
-    if printer.json {
-        let files: Vec<_> = rows
-            .iter()
-            .map(|(s, d, m)| json!({ "source": s, "dest": d, "mode": m }))
-            .collect();
-        outln!("{}", json!({ "files": files }));
-    } else {
-        for (source, dest, mode) in &rows {
-            outln!(
-                "{} -> {dest} ({})",
-                crate::report::shown(source),
-                crate::report::shown(mode)
-            );
-        }
-    }
+    printer.list("files", &rows);
     Ok(0)
 }
 

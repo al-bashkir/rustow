@@ -117,10 +117,13 @@ fn file_list_shows_registrations() {
     fx.write("b.conf", "b");
     let out = fx.ok(&["file", "list"]);
     assert!(out.stdout.contains(SRC) && out.stdout.contains("copy"), "{out:?}");
+    assert!(out.stdout.contains(&format!("-> ~/{SRC} (copy)")), "{out:?}");
     let json = fx.ok(&["file", "list", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
     assert_eq!(v["files"][0]["source"], SRC);
     assert_eq!(v["files"][1]["source"], "b.conf");
+    let dest = fx.home_path(SRC).display().to_string();
+    assert_eq!(v["files"][0]["dest"], dest.as_str(), "JSON has absolute paths");
 }
 
 #[test]

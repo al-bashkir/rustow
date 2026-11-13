@@ -38,7 +38,7 @@ A registration whose file no longer exists gives a warning, for example "warning
 
 ## list
 
-`file list` shows the sources of both lists.
+`file list` shows the sources of both lists, each with its destination and mode. The text output shortens the home directory to `~`. `file list --json` gives `{"files": [{"source", "dest", "mode"}]}` with the absolute destination, as all JSON output does. `dest` is null for a registration that cannot deploy.
 
 ## Copy rules
 
