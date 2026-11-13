@@ -10,12 +10,12 @@ use crate::cli::{
 use crate::config::DefaultMode;
 use crate::error::{Error, Result};
 use crate::execute::{self, Action, ItemReport, Policy, Run};
-use crate::paths::RelPath;
+use crate::paths::{RelPath, Scope};
 use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
 use crate::report::{Listed, Printer, RunKind};
 use crate::source::{Discovery, Mode, Selector, Source};
-use crate::state::{self, Lock, State};
+use crate::state::{self, Lock, Registration, State};
 use crate::{files, fsops, inspect};
 
 /// Runs the parsed command and returns the process exit code.
@@ -287,7 +287,10 @@ fn prepare(
     let sources = selected(&ctx, &discovery, &state, paths, selector)?;
     if explicit_link(selector, paths) && ctx.config.defaults.mode == DefaultMode::Copy {
         // Only a real deploy saves the state; a dry run or a blocked run registers nothing.
-        state.links.extend(sources.iter().map(|s| s.path.clone()));
+        // A registered copy never gets here: it is not a link source (`nothing_deployed`).
+        for s in &sources {
+            state.registrations.insert(s.path.clone(), Registration::Link);
+        }
     }
     let plan = plan::build(&ctx, &discovery, &sources, &state)?;
     Ok(Prepared {
@@ -341,6 +344,14 @@ fn nothing_deployed(arg: &str, found: &[&Source], selector: Selector) -> Error {
             "'{arg}' is not linked; in copy mode, `rustow link {arg}` links a plain file and `rustow file add {arg}` registers a copy"
         ));
     }
+    // A system file never links, also without its registration.
+    let copy = |s: &&&Source| s.scope == Scope::Home && matches!(s.mode, Mode::FileCopy(_) | Mode::DecryptCopy(..));
+    if let Some(s) = found.iter().find(copy).filter(|_| selector == Selector::Link) {
+        return Error::Usage(format!(
+            "'{}' is registered as a copy; run `rustow file remove {}` first to link it",
+            s.path, s.path
+        ));
+    }
     let modes: Vec<&str> = found.iter().map(|s| s.mode.label()).collect();
     Error::Usage(format!(
         "'{arg}' has no sources this command deploys (found: {}); use `rustow apply`",
@@ -358,15 +369,16 @@ fn explicit_link(selector: Selector, paths: &[String]) -> bool {
 fn may_link(ctx: &Context, state: &State, source: &Source) -> bool {
     ctx.config.defaults.mode == DefaultMode::Symlink
         || !matches!(source.mode, Mode::Link | Mode::DecryptLink(_))
-        || state.links.contains(&source.path)
+        || state.is_link(&source.path)
 }
 
 /// `unlink` drops the link registrations at or below each source it removes.
 fn forget_links(state: &mut State, selector: Selector, removals: &[plan::Removal]) {
     if selector == Selector::Link {
+        let removed = |p: &RelPath| removals.iter().any(|r| p.starts_with(&r.source));
         state
-            .links
-            .retain(|l| !removals.iter().any(|r| l.starts_with(&r.source)));
+            .registrations
+            .retain(|p, kind| *kind != Registration::Link || !removed(p));
     }
 }
 

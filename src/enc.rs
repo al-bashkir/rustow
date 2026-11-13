@@ -71,11 +71,9 @@ pub fn encrypt_source(
     let migration = migrate_config(ctx, &rel, &sealed)?;
     retire_plaintext(&rel, &abs, &sealed, &migration)?;
     let mut migrated = migration.new.is_some();
-    for registered in [&mut state.files, &mut state.links] {
-        if registered.remove(&rel) {
-            registered.insert(sealed.out_rel.clone());
-            migrated = true;
-        }
+    if let Some(kind) = state.registrations.remove(&rel) {
+        state.registrations.insert(sealed.out_rel.clone(), kind);
+        migrated = true;
     }
     state.encryption.insert(
         sealed.out_rel.clone(),

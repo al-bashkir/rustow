@@ -98,3 +98,48 @@ fn import_refuses_paths_that_file_add_and_link_refuse() {
         assert_eq!(fx.state_json(), Value::Null, "nothing changes: {regs}");
     }
 }
+
+fn export(fx: &Fixture) -> Value {
+    serde_json::from_str(&fx.ok(&["state", "export"]).stdout).unwrap()
+}
+
+/// A source has one registration, a copy or a link: `file add` replaces a
+/// link registration, and `link` of a registered copy names `file remove`.
+#[test]
+fn a_source_has_one_registration() {
+    let fx = machine();
+    fx.ok(&["link", ".bashrc"]);
+    fx.ok(&["file", "add", ".bashrc"]);
+    assert_eq!(export(&fx), json!({"version": 1, "files": [".bashrc"], "links": []}));
+    fx.ok(&["apply"]);
+    assert!(is_regular(&fx.home_path(".bashrc")));
+    fx.ok(&["file", "remove", ".bashrc"]);
+    fx.ok(&["apply"]);
+    assert!(is_regular(&fx.home_path(".bashrc")), "the copy stays");
+
+    fx.ok(&["file", "add", "a.conf"]);
+    let out = fx.run(&["link", "a.conf"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("`rustow file remove a.conf`"), "{out:?}");
+}
+
+/// `state import` follows the same rule: a path in both lists is a copy,
+/// an imported copy replaces a link registration, and an imported link of
+/// a registered copy exits 2.
+#[test]
+fn import_keeps_one_registration_per_source() {
+    let fx = machine();
+    fx.ok(&["link", ".bashrc"]);
+    let path = fx.base.join("regs.json");
+    let both = json!({"version": 1, "files": [".bashrc", ".vimrc"], "links": [".vimrc"]});
+    write_file(&path, &both.to_string());
+    fx.ok(&["state", "import", path.to_str().unwrap()]);
+    assert_eq!(
+        export(&fx),
+        json!({"version": 1, "files": [".bashrc", ".vimrc"], "links": []})
+    );
+    write_file(&path, &json!({"version": 1, "links": [".vimrc"]}).to_string());
+    let out = fx.run(&["state", "import", path.to_str().unwrap()]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("`rustow file remove .vimrc`"), "{out:?}");
+}

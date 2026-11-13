@@ -67,6 +67,62 @@ pub struct EncRecord {
     pub recipients_id: Hash,
 }
 
+/// How this machine registered a source: `rustow file add` (a copy), or
+/// `rustow link <path>` in copy mode (a link).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Registration {
+    Copy,
+    Link,
+}
+
+/// The registrations as the state file and `state export` keep them.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Lists {
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub files: BTreeSet<RelPath>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub links: BTreeSet<RelPath>,
+}
+
+impl Lists {
+    /// One registration per source; a source in both lists is a copy.
+    pub fn registrations(self) -> BTreeMap<RelPath, Registration> {
+        let links = self.links.into_iter().map(|p| (p, Registration::Link));
+        links
+            .chain(self.files.into_iter().map(|p| (p, Registration::Copy)))
+            .collect()
+    }
+
+    pub fn of(registrations: &BTreeMap<RelPath, Registration>) -> Lists {
+        let mut lists = Lists::default();
+        for (path, kind) in registrations {
+            match kind {
+                Registration::Copy => lists.files.insert(path.clone()),
+                Registration::Link => lists.links.insert(path.clone()),
+            };
+        }
+        lists
+    }
+}
+
+/// Serde for `State::registrations` through `Lists`.
+mod lists {
+    use super::*;
+
+    pub fn serialize<S: serde::Serializer>(
+        r: &BTreeMap<RelPath, Registration>,
+        s: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        Lists::of(r).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<BTreeMap<RelPath, Registration>, D::Error> {
+        Lists::deserialize(d).map(Lists::registrations)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
@@ -78,12 +134,10 @@ pub struct State {
     pub created_dirs: BTreeSet<PathBuf>,
     #[serde(default)]
     pub encryption: BTreeMap<RelPath, EncRecord>,
-    /// Sources that `rustow file add` registered for copy deployment on this machine.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub files: BTreeSet<RelPath>,
-    /// Sources that `rustow link <path>` registered in copy mode.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub links: BTreeSet<RelPath>,
+    /// The registrations of this machine, at most one per source. The file
+    /// keeps them in the lists `files` and `links` (see `Lists`).
+    #[serde(flatten, with = "lists")]
+    pub registrations: BTreeMap<RelPath, Registration>,
     /// The old version and bytes of a file that `load` migrated; `save`
     /// keeps them in `backups/<repo-id>/state-v<N>.json` before it writes.
     #[serde(skip)]
@@ -93,6 +147,16 @@ pub struct State {
 impl State {
     pub fn file(dir: &Path, repo_id: &str) -> PathBuf {
         dir.join(format!("{repo_id}.json"))
+    }
+
+    /// The sources that `rustow file add` registered.
+    pub fn copies(&self) -> BTreeSet<RelPath> {
+        Lists::of(&self.registrations).files
+    }
+
+    /// True when `rustow link <path>` registered `source`.
+    pub fn is_link(&self, source: &RelPath) -> bool {
+        self.registrations.get(source) == Some(&Registration::Link)
     }
 
     /// Loads the state of `repo`; a missing file gives an empty state.
@@ -337,6 +401,26 @@ mod tests {
         std::fs::remove_file(State::file(d.path(), "id")).unwrap();
         future.save(d.path(), "id").unwrap();
         assert!(State::load(d.path(), "id", Path::new("/r")).is_err());
+    }
+
+    #[test]
+    fn a_source_in_both_lists_loads_as_a_copy() {
+        let mut old = serde_json::to_value(sample()).unwrap();
+        old["files"] = serde_json::json!(["b"]);
+        old["links"] = serde_json::json!(["a", "b"]);
+        let s = parse_versioned(&serde_json::to_vec(&old).unwrap(), &MIGRATIONS).unwrap();
+        let rel = |p| RelPath::parse(p).unwrap();
+        let want = BTreeMap::from([(rel("a"), Registration::Link), (rel("b"), Registration::Copy)]);
+        assert_eq!(s.registrations, want);
+        let saved = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            (&saved["files"], &saved["links"]),
+            (&old["files"], &serde_json::json!(["a"]))
+        );
+        assert!(
+            serde_json::to_value(sample()).unwrap().get("files").is_none(),
+            "empty lists stay out"
+        );
     }
 
     /// Two made-up steps: version 1 to 2 adds "/v2", version 2 to 3 adds "/v3".

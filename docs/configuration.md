@@ -79,7 +79,8 @@ With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys
 - `rustow link <path>` links and registers each plain file below the path. A directory can [fold](#folding). A file that you put in the directory later is not registered: run `rustow link <path>` again. (Through a folded directory link, you see the new file at once.)
 - `rustow link` without a path makes no new link. It deploys only the registered links.
 - `rustow unlink <path>` removes the link and its registration. Then `apply` does not link the file again.
-- `rustow file add <path>` makes a linked file a copy. `apply` replaces rustow's link with the copy.
+- `rustow file add <path>` makes a linked file a copy. It replaces the link registration: a file has one registration, a copy or a link. `apply` replaces rustow's link with the copy.
+- `rustow link <path>` of a registered copy exits 2: "'<path>' is registered as a copy; run `rustow file remove <path>` first to link it".
 - `rustow enc <path>` moves the registration to the encrypted name. A registered link then deploys as decrypt+link.
 - A path argument that names only files that are not linked exits 2, for example `rustow apply .vimrc`.
 

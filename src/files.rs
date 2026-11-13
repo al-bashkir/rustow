@@ -14,7 +14,7 @@ use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Listed, Printer};
 use crate::source::{Discovery, classify, discover};
-use crate::state::State;
+use crate::state::{Registration, State};
 
 pub fn add(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: bool) -> Result<i32> {
     let mut state = ctx.load_state()?;
@@ -28,7 +28,7 @@ pub fn add(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: bool
 
 /// Saves the state when its registrations changed, unless `dry_run`, then reports.
 fn finish(ctx: &Context, printer: &Printer, state: &State, changes: &[Change], dry_run: bool) -> Result<i32> {
-    if !dry_run && state.files != ctx.config.added_files {
+    if !dry_run && state.copies() != ctx.config.added_files {
         state.save(&ctx.state_dir, &ctx.repo_id)?;
     }
     printer.changes(None, changes, dry_run);
@@ -72,10 +72,12 @@ fn check_copy(ctx: &Context, discovery: &Discovery, arg: &str) -> Result<RelPath
     Ok(rel)
 }
 
-/// Registers one source in the state.
+/// Registers one source in the state; a copy replaces a link registration.
 fn register(ctx: &Context, discovery: &Discovery, state: &mut State, arg: &str) -> Result<Change> {
     let rel = check_copy(ctx, discovery, arg)?;
-    if ctx.config.files.contains_key(&rel) || !state.files.insert(rel.clone()) {
+    if ctx.config.files.contains_key(&rel)
+        || state.registrations.insert(rel.clone(), Registration::Copy) == Some(Registration::Copy)
+    {
         return Ok(Change::new(rel.as_str(), "ok", Some("already registered".into())));
     }
     Ok(Change::new(rel.as_str(), "register", None))
@@ -99,7 +101,10 @@ pub fn remove(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: b
 /// Removes one source's registration from the state and the configuration text.
 fn unregister(text: &mut String, state: &mut State, arg: &str) -> Result<Change> {
     let rel = RelPath::parse(arg)?;
-    let in_state = state.files.remove(&rel);
+    let in_state = state.registrations.get(&rel) == Some(&Registration::Copy);
+    if in_state {
+        state.registrations.remove(&rel);
+    }
     // "" is a missing `rustow.toml` (an empty one fails to load before this).
     let edited = if text.is_empty() {
         None

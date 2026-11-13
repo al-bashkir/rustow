@@ -13,7 +13,7 @@ use crate::fsops;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Printer};
-use crate::state::{MAX_STATE_SIZE, State};
+use crate::state::{Lists, MAX_STATE_SIZE, Registration, State};
 
 /// Version of the export format; independent of the state version.
 const FORMAT: u32 = 1;
@@ -31,10 +31,11 @@ struct Registrations {
 /// Prints the registrations as JSON, or writes them to `file`.
 pub fn export(ctx: &Context, file: Option<&Path>) -> Result<i32> {
     let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
+    let Lists { files, links } = Lists::of(&state.registrations);
     let regs = Registrations {
         version: FORMAT,
-        files: state.files,
-        links: state.links,
+        files,
+        links,
     };
     let mut text =
         serde_json::to_string_pretty(&regs).map_err(|e| Error::Failed(format!("encode registrations: {e}")))?;
@@ -47,10 +48,13 @@ pub fn export(ctx: &Context, file: Option<&Path>) -> Result<i32> {
 }
 
 /// Adds the registrations in `file` ("-" is stdin) to the state of this
-/// machine. Registrations that are there already stay. Each path must pass
-/// the check of `file add` or of `link <path>`; else nothing changes.
+/// machine. Registrations that are there already stay; an imported copy
+/// replaces a link registration. Each path must pass the check of `file
+/// add` or of `link <path>`; else nothing changes.
 pub fn import(ctx: &mut Context, printer: &Printer, file: &Path, dry_run: bool) -> Result<i32> {
-    let regs = read(file)?;
+    let mut regs = read(file)?;
+    // A path in both lists is a copy, as in the state file.
+    regs.links.retain(|l| !regs.files.contains(l));
     let mut state = ctx.load_state()?;
     check_paths(ctx, &state, &regs)?;
     let changes = add(&mut state, regs);
@@ -64,13 +68,13 @@ pub fn import(ctx: &mut Context, printer: &Printer, file: &Path, dry_run: bool) 
 /// Adds each registration that `state` does not hold yet; one change for each.
 fn add(state: &mut State, regs: Registrations) -> Vec<Change> {
     let mut changes = Vec::new();
-    for (list, into, kind) in [
-        (regs.files, &mut state.files, "copy"),
-        (regs.links, &mut state.links, "link"),
+    for (list, kind, label) in [
+        (regs.files, Registration::Copy, "copy"),
+        (regs.links, Registration::Link, "link"),
     ] {
         for path in list {
-            if into.insert(path.clone()) {
-                changes.push(Change::new(path.as_str(), "import", Some(kind.into())));
+            if state.registrations.insert(path.clone(), kind) != Some(kind) {
+                changes.push(Change::new(path.as_str(), "import", Some(label.into())));
             }
         }
     }

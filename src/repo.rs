@@ -129,7 +129,7 @@ impl Context {
     /// join the configuration, so discovery classifies them as copies.
     pub fn load_state(&mut self) -> Result<State> {
         let state = State::load(&self.state_dir, &self.repo_id, &self.root)?;
-        self.config.added_files = state.files.clone();
+        self.config.added_files = state.copies();
         Ok(state)
     }
 
