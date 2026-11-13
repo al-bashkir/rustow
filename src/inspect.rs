@@ -65,23 +65,11 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
 }
 
 /// What `diff` shows for one item; `None` when the item does not differ.
-/// A destination that the user cannot read takes the decision of the plan:
-/// nothing when it is up to date, else an error of that item only.
 fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
     if let Step::Deploy(d) = &item.step
         && matches!(d.observed, Observed::Unreadable { .. })
     {
-        if d.decision == Decision::UpToDate {
-            return Ok(None);
-        }
-        let why = "cannot read the destination (Permission denied); elevated privileges may be required";
-        return Ok(Some(Shown {
-            item,
-            kind: "error".into(),
-            detail: Some(why.into()),
-            binary: false,
-            text: String::new(),
-        }));
+        return Ok(show_unreadable(item, d));
     }
     let (text, binary) = step_text(item, &printer.path(&item.dest), old)?;
     let (status, detail) = match &item.step {
@@ -103,6 +91,19 @@ fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Resu
         binary,
         text,
     }))
+}
+
+/// A destination that the user cannot read takes the decision of the plan:
+/// nothing when it is up to date, else an error of that item only.
+fn show_unreadable<'a>(item: &'a PlanItem, d: &Deploy) -> Option<Shown<'a>> {
+    let why = "cannot read the destination (Permission denied); elevated privileges may be required";
+    (d.decision != Decision::UpToDate).then(|| Shown {
+        item,
+        kind: "error".into(),
+        detail: Some(why.into()),
+        binary: false,
+        text: String::new(),
+    })
 }
 
 /// Diff text of one item, and whether it is binary. Empty for a failed item.
