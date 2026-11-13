@@ -104,21 +104,22 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 ## Decisions
 
-| Destination                                                                                              | Action                                                                                         |
-| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Missing                                                                                                  | create                                                                                         |
-| Own recorded symlink with old target                                                                     | update                                                                                         |
-| Correct but not recorded                                                                                 | adopt (record it; no write). `status` shows UNMANAGED.                                         |
-| Symlink in other text that reaches the same source (for example an absolute path)                        | update (rewrite it as rustow's link text)                                                      |
-| Foreign file or symlink, not recorded (also a broken symlink)                                            | conflict                                                                                       |
-| Managed copy unchanged, desired content changed                                                          | update                                                                                         |
-| Destination changed since last apply                                                                     | MODIFIED conflict                                                                              |
-| Cache entry behind rustow's link changed since last apply (also after a switch to a copy)                | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>`                |
-| Several sources map to the destination                                                                   | conflict (collision)                                                                           |
-| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target")                                                             |
-| Directory of the destination is not writable                                                             | error, also in `--dry-run` and `status`; `diff` still shows the content                        |
-| File that you cannot read, recorded copy                                                                 | compared with the state; see [system files](system-files.md#destinations-that-you-cannot-read) |
-| File that you cannot read, not recorded                                                                  | conflict ("cannot read the destination; rustow has no record of it")                           |
+| Destination                                                                                              | Action                                                                                                          |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Missing                                                                                                  | create                                                                                                          |
+| Own recorded symlink with old target                                                                     | update                                                                                                          |
+| Correct but not recorded                                                                                 | adopt (record it; no write). `status` shows UNMANAGED.                                                          |
+| Symlink in other text that reaches the same source (for example an absolute path)                        | update (rewrite it as rustow's link text)                                                                       |
+| Foreign file or symlink, not recorded (also a broken symlink)                                            | conflict                                                                                                        |
+| Managed copy unchanged, desired content changed                                                          | update                                                                                                          |
+| Destination changed since last apply                                                                     | MODIFIED conflict                                                                                               |
+| Cache entry behind rustow's link changed since last apply (also after a switch to a copy)                | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>`                                 |
+| Several sources map to the destination                                                                   | conflict (collision)                                                                                            |
+| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target")                                                                              |
+| Directory of the destination is not writable                                                             | error, also in `--dry-run` and `status`; `diff` still shows the content                                         |
+| File that you cannot read, recorded copy                                                                 | compared with the state; see [system files](system-files.md#destinations-that-you-cannot-read)                  |
+| File that you cannot read, not recorded                                                                  | conflict ("cannot read the destination; rustow has no record of it")                                            |
+| Destination in a directory that you cannot search                                                        | compared with the state; see [system files](system-files.md#destinations-in-a-directory-that-you-cannot-search) |
 
 Two sources collide when they have the same destination, for example `x`, `x.age` and `x.tmpl`. On a case-insensitive target filesystem, names that differ only in case collide too. A root target of `/` always counts as case-sensitive (known limit).
 

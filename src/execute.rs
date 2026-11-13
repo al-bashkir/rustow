@@ -351,13 +351,14 @@ pub struct NewFile<'a> {
 /// A temporary name for the change of `d` (`fsops::temp_name`), journaled
 /// in each directory where the change may create it: the destination's
 /// for a new file or a replaced object, and the backup's for a change
-/// that may go to `backup`: a conflict, or an update of a file that the
-/// plan could not read (its content may not be the recorded one).
+/// that may go to `backup`: a conflict, an update of a file that the plan
+/// could not read (its content may not be the recorded one), or a change
+/// of a file that the plan could not see.
 pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
     let file = matches!(d.desired, Desired::File { .. });
     let replaces = matches!(d.decision, Decision::Create | Decision::Conflict(_));
     let here = d.decision == Decision::Update || (file && replaces);
-    let unverified = d.decision == Decision::Update && d.expect.is_some();
+    let unverified = (d.decision == Decision::Update && d.expect.is_some()) || d.observed == Observed::Hidden;
     let away = policy == Policy::Backup && (unverified || matches!(d.decision, Decision::Conflict(_)));
     temp_in(d.path.parent().filter(|_| here), away, backup)
 }
@@ -480,8 +481,8 @@ fn apply_dest(
     me: u32,
 ) -> Result<Option<String>> {
     match d.decision {
-        Decision::Create => put(dir, name, d, new, false).map(|()| None),
-        Decision::Update => update(dir, name, d, new, away, me),
+        Decision::Create if d.observed != Observed::Hidden => put(dir, name, d, new, false).map(|()| None),
+        Decision::Create | Decision::Update => update(dir, name, d, new, away, me),
         Decision::Conflict(_) => {
             recheck(dir, name, &d.path, &d.observed, None)?;
             replace(dir, name, d, new, away, me)
@@ -491,9 +492,11 @@ fn apply_dest(
     }
 }
 
-/// Replaces rustow's own unchanged object at the destination. Content of
-/// a file that the plan could not read that is not the recorded one is a
-/// conflict, which `--force` and `--backup` resolve as a planned one.
+/// Replaces rustow's own unchanged object at the destination, or creates a
+/// destination that the plan could not see. Content of a file that the
+/// plan could not read or see that is not the recorded one, or a file
+/// there without a record, is a conflict, which `--force` and `--backup`
+/// resolve as a planned one.
 fn update(
     dir: &Dir,
     name: &OsStr,
@@ -506,7 +509,7 @@ fn update(
         Err(Error::Conflict(_)) if matches!(away.0, Policy::Overwrite | Policy::Backup) => {
             replace(dir, name, d, new, away, me)
         }
-        checked => checked.and_then(|()| put(dir, name, d, new, true)).map(|()| None),
+        checked => checked.and_then(|_| put(dir, name, d, new, true)).map(|()| None),
     }
 }
 
@@ -575,13 +578,17 @@ fn backup_path(run: &Run, item: &PlanItem, cache: bool) -> PathBuf {
     run.backup_dir.join(scope).join(item.source.dest.as_path())
 }
 
-/// Fails when `name` (at `path`) changed since it was planned. A file that
-/// the plan could not read (`Observed::Unreadable`) must have the planned
-/// metadata, and the content `expect` when the state recorded one: other
-/// content is a conflict (`Error::Conflict`), and a run that cannot read
-/// it either (not root) fails.
-fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed, expect: Option<&Hash>) -> Result<()> {
+/// What `name` (at `path`) is now; fails when it changed since it was
+/// planned. A file that the plan could not read (`Observed::Unreadable`)
+/// must have the planned metadata, and the content `expect` when the state
+/// recorded one: other content is a conflict (`Error::Conflict`), and a run
+/// that cannot read it either (not root) fails. For a destination that the
+/// plan could not see, see `found_hidden`.
+fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed, expect: Option<&Hash>) -> Result<Observed> {
     let now = dir.inspect(name)?;
+    if *planned == Observed::Hidden {
+        return found_hidden(path, now, expect);
+    }
     let unchanged = match (planned, &now) {
         (
             Observed::Unreadable { mode, uid, gid },
@@ -604,19 +611,47 @@ fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed, expect: Opt
         (Some(want), Observed::File { hash, .. }) if hash != *want => {
             Err(Error::Conflict(Conflict::Modified.to_string()))
         }
-        (Some(_), Observed::Unreadable { .. }) => Err(Error::Io {
-            context: format!("cannot read {}", path.display()),
-            source: nix::errno::Errno::EACCES.into(),
-        }),
-        _ => Ok(()),
+        (Some(_), Observed::Unreadable { .. }) => Err(cannot_read(path)),
+        (_, now) => Ok(now),
+    }
+}
+
+/// What a destination that the plan could not see (`Observed::Hidden`)
+/// is now, when the change may go on: nothing, or rustow's copy with the
+/// recorded content `expect`. Another file or symlink is a conflict
+/// (`Error::Conflict`); a directory or a special file fails, as does a run
+/// that cannot see it either (not root).
+fn found_hidden(path: &Path, now: Observed, expect: Option<&Hash>) -> Result<Observed> {
+    let conflict = match (&now, expect) {
+        (Observed::Missing, _) => return Ok(now),
+        (Observed::File { hash, .. }, Some(want)) if hash == want => return Ok(now),
+        (Observed::File { .. } | Observed::Symlink(_), None) => Conflict::Unmanaged,
+        (Observed::File { .. } | Observed::Symlink(_), Some(_)) => Conflict::Modified,
+        (Observed::Dir | Observed::Other, _) => {
+            return Err(Error::Failed(format!(
+                "{}: something other than a file is there",
+                path.display()
+            )));
+        }
+        (Observed::Hidden | Observed::Unreadable { .. }, _) => return Err(cannot_read(path)),
+    };
+    Err(Error::Conflict(conflict.to_string()))
+}
+
+fn cannot_read(path: &Path) -> Error {
+    Error::Io {
+        context: format!("cannot read {}", path.display()),
+        source: nix::errno::Errno::EACCES.into(),
     }
 }
 
 /// Confirms that the destination now is what was planned.
 fn verify(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
     let ok = match (&d.desired, dir.inspect(name)?) {
-        // Nothing was written to a file that the user cannot read: the plan compared it with the state.
-        (_, now @ Observed::Unreadable { .. }) => d.decision == Decision::UpToDate && now == d.observed,
+        // Nothing was written to a file that the user cannot read or see: the plan compared it with the state.
+        (_, now @ (Observed::Unreadable { .. } | Observed::Hidden)) => {
+            d.decision == Decision::UpToDate && now == d.observed
+        }
         (Desired::Symlink(want), Observed::Symlink(have)) => *want == have,
         (
             Desired::File { hash, meta },
@@ -746,8 +781,10 @@ pub fn remove_dest(
 ) -> Result<()> {
     let (parent, name) = fsops::split(path)?;
     let dir = fsops::open_planned(parent, dir_id, me)?;
-    recheck(&dir, name, path, observed, expect)?;
-    dir.remove(name)?;
+    // A file that the plan could not see may be gone already.
+    if recheck(&dir, name, path, observed, expect)? != Observed::Missing {
+        dir.remove(name)?;
+    }
     let above = path.ancestors().skip(1).take_while(|d| created.contains(*d));
     removed.extend(fsops::remove_empty(above, me));
     Ok(())

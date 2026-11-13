@@ -37,8 +37,9 @@ pub enum Recorded<'a> {
     None,
     /// rustow created a symlink with this text.
     Link(&'a Path),
-    /// rustow wrote a file with this content.
-    Copy(&'a Hash),
+    /// rustow wrote a file with this content, and this metadata when the
+    /// state has it.
+    Copy(&'a Hash, Option<&'a FileMeta>),
 }
 
 /// Why a destination cannot simply change. `Display` gives the message.
@@ -116,6 +117,7 @@ pub fn decide(desired: &Desired, observed: &Observed, recorded: Recorded) -> Dec
         (_, Observed::Dir) => Decision::Conflict(Conflict::Directory),
         (_, Observed::Other) => Decision::Conflict(Conflict::Special),
         (_, Observed::Unreadable { mode, uid, gid }) => decide_unreadable(desired, (*mode, *uid, *gid), recorded),
+        (_, Observed::Hidden) => decide_hidden(desired, recorded),
         (Desired::Symlink(want), _) => decide_symlink(want, observed, recorded),
         (Desired::File { hash, meta }, _) => decide_file(hash, meta, observed, recorded),
     }
@@ -126,7 +128,7 @@ fn decide_symlink(want: &Path, observed: &Observed, recorded: Recorded) -> Decis
     match observed {
         Observed::Symlink(actual) => symlink_over_link(want, actual, recorded),
         Observed::File { hash, .. } => match recorded {
-            Recorded::Copy(ours) if ours == hash => Decision::Conflict(Conflict::FileToSymlink),
+            Recorded::Copy(ours, _) if ours == hash => Decision::Conflict(Conflict::FileToSymlink),
             _ => in_the_way(recorded),
         },
         // `decide` handles the other kinds before it gets here.
@@ -148,7 +150,7 @@ fn symlink_over_link(want: &Path, actual: &Path, recorded: Recorded) -> Decision
 fn in_the_way(recorded: Recorded) -> Decision {
     Decision::Conflict(match recorded {
         Recorded::None => Conflict::Unmanaged,
-        Recorded::Link(_) | Recorded::Copy(_) => Conflict::Modified,
+        Recorded::Link(_) | Recorded::Copy(..) => Conflict::Modified,
     })
 }
 
@@ -174,10 +176,25 @@ fn decide_file(want: &Hash, meta: &FileMeta, observed: &Observed, recorded: Reco
 fn decide_unreadable(desired: &Desired, (mode, uid, gid): (u32, u32, u32), recorded: Recorded) -> Decision {
     match (desired, recorded) {
         (_, Recorded::None) => Decision::Conflict(Conflict::Unreadable),
-        (Desired::File { hash, meta }, Recorded::Copy(ours)) if ours == hash => {
+        (Desired::File { hash, meta }, Recorded::Copy(ours, _)) if ours == hash => {
             file_same_content(hash, meta.matches(mode, uid, gid), recorded)
         }
-        (Desired::File { .. }, Recorded::Copy(_)) => Decision::Update,
+        (Desired::File { .. }, Recorded::Copy(..)) => Decision::Update,
+        _ => Decision::Conflict(Conflict::Modified),
+    }
+}
+
+/// Rules for a destination in a directory that the user cannot search:
+/// only the state tells what is there. Without a record, rustow creates
+/// it; with one, it holds rustow's last copy with the recorded metadata.
+/// The change checks either before it writes (`Deploy::expect`).
+fn decide_hidden(desired: &Desired, recorded: Recorded) -> Decision {
+    match (desired, recorded) {
+        (_, Recorded::None) => Decision::Create,
+        (Desired::File { hash, meta }, Recorded::Copy(ours, had)) if ours == hash && had == Some(meta) => {
+            Decision::UpToDate
+        }
+        (Desired::File { .. }, Recorded::Copy(..)) => Decision::Update,
         _ => Decision::Conflict(Conflict::Modified),
     }
 }
@@ -186,14 +203,14 @@ fn decide_unreadable(desired: &Desired, (mode, uid, gid): (u32, u32, u32), recor
 fn file_same_content(want: &Hash, meta_ok: bool, recorded: Recorded) -> Decision {
     match (meta_ok, recorded) {
         (false, _) => Decision::FixMetadata,
-        (true, Recorded::Copy(ours)) if ours == want => Decision::UpToDate,
+        (true, Recorded::Copy(ours, _)) if ours == want => Decision::UpToDate,
         (true, _) => Decision::Adopt,
     }
 }
 
 fn file_other_content(hash: &Hash, recorded: Recorded) -> Decision {
     match recorded {
-        Recorded::Copy(ours) if ours == hash => Decision::Update,
+        Recorded::Copy(ours, _) if ours == hash => Decision::Update,
         _ => in_the_way(recorded),
     }
 }
@@ -205,8 +222,10 @@ pub fn recorded(record: Option<&Record>) -> Recorded<'_> {
             link_target: Some(t), ..
         }) => Recorded::Link(t),
         Some(Record {
-            applied_hash: Some(h), ..
-        }) => Recorded::Copy(h),
+            applied_hash: Some(h),
+            meta,
+            ..
+        }) => Recorded::Copy(h, meta.as_ref()),
         _ => Recorded::None,
     }
 }
@@ -281,8 +300,9 @@ pub struct Deploy {
     pub desired: Desired,
     pub observed: Observed,
     pub decision: Decision,
-    /// For a destination that the plan could not read
-    /// (`Observed::Unreadable`): the content hash that the state recorded.
+    /// For a destination that the plan could not read or see
+    /// (`Observed::Unreadable`, `Observed::Hidden`): the content hash that
+    /// the state recorded.
     /// The change reads the file first (the sudo helper as root), and other
     /// content is a conflict.
     pub expect: Option<Hash>,
@@ -809,7 +829,7 @@ fn removal_needs_sudo(
         Verdict::Remove { observed, .. } if scope == Scope::Root => observed,
         _ => return false,
     };
-    if matches!(observed, Observed::Unreadable { .. }) {
+    if matches!(observed, Observed::Unreadable { .. } | Observed::Hidden) {
         return true;
     }
     for dir in path.ancestors().skip(1) {
@@ -960,7 +980,7 @@ fn deploy_step(
         decision,
         unwritable(&path, &missing_dirs, decision),
         file_owner,
-        matches!(observed, Observed::Unreadable { .. }),
+        matches!(observed, Observed::Unreadable { .. } | Observed::Hidden),
     );
     // A copy writes its cache entry only while the recorded link uses it:
     // an edit made through that link is then a conflict, not lost.
@@ -1000,7 +1020,7 @@ const COMPARED: &str = "not readable by you; compared with the state";
 /// not read (`Deploy::expect`); `None` for any other destination.
 fn expected(observed: &Observed, record: Option<&Record>) -> Option<Hash> {
     match (observed, recorded(record)) {
-        (Observed::Unreadable { .. }, Recorded::Copy(hash)) => Some(hash.clone()),
+        (Observed::Unreadable { .. } | Observed::Hidden, Recorded::Copy(hash, _)) => Some(hash.clone()),
         _ => None,
     }
 }
@@ -1028,7 +1048,7 @@ fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>)
     };
     let previous = record
         .and_then(|r| r.applied_hash.as_ref())
-        .map_or(Recorded::None, Recorded::Copy);
+        .map_or(Recorded::None, |h| Recorded::Copy(h, None));
     let decision = decide(&desired, &observed, previous);
     Ok(CacheWrite {
         path,
@@ -1128,6 +1148,7 @@ fn want_file_copy(source: &Source, source_abs: PathBuf, meta: &Metadata) -> std:
     let (hash, len) = fsops::hash_file(&source_abs).map_err(|e| e.to_string())?;
     let record = Record {
         applied_hash: Some(hash.clone()),
+        meta: Some(meta),
         ..base_record(source, hash.clone())
     };
     let desired = Desired::File { hash, meta };
@@ -1362,8 +1383,10 @@ fn removal_verdict(found: Option<(DirId, Observed)>, record: &Record) -> Verdict
     match (&observed, recorded(Some(record))) {
         (Observed::Missing, _) => Verdict::Forget,
         (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => remove(observed, None),
-        (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => remove(observed, None),
-        (Observed::Unreadable { .. }, Recorded::Copy(ours)) => remove(observed, Some(ours.clone())),
+        (Observed::File { hash, .. }, Recorded::Copy(ours, _)) if hash == ours => remove(observed, None),
+        (Observed::Unreadable { .. } | Observed::Hidden, Recorded::Copy(ours, _)) => {
+            remove(observed, Some(ours.clone()))
+        }
         // The user replaced rustow's folded link: nothing there is rustow's any more.
         _ if record.folded_dir => Verdict::Forget,
         _ => Verdict::Keep("destination changed since rustow deployed it; left in place".into()),
@@ -1481,7 +1504,7 @@ mod tests {
     fn missing_is_create_for_both_kinds() {
         assert_eq!(decide(&want_link("a"), &Observed::Missing, Recorded::None), Create);
         assert_eq!(
-            decide(&want_file("a"), &Observed::Missing, Recorded::Copy(&h("old"))),
+            decide(&want_file("a"), &Observed::Missing, Recorded::Copy(&h("old"), None)),
             Create
         );
     }
@@ -1494,7 +1517,7 @@ mod tests {
                 Conflict(super::Conflict::Directory)
             );
             assert_eq!(
-                decide(&d, &Observed::Other, Recorded::Copy(&h("a"))),
+                decide(&d, &Observed::Other, Recorded::Copy(&h("a"), None)),
                 Conflict(super::Conflict::Special)
             );
         }
@@ -1526,11 +1549,11 @@ mod tests {
     #[test]
     fn file_to_symlink_is_conflict_even_if_unmodified() {
         assert_eq!(
-            decide(&want_link("dot/x"), &file("a"), Recorded::Copy(&h("a"))),
+            decide(&want_link("dot/x"), &file("a"), Recorded::Copy(&h("a"), None)),
             Conflict(super::Conflict::FileToSymlink)
         );
         assert_eq!(
-            decide(&want_link("dot/x"), &file("b"), Recorded::Copy(&h("a"))),
+            decide(&want_link("dot/x"), &file("b"), Recorded::Copy(&h("a"), None)),
             Conflict(super::Conflict::Modified)
         );
         assert_eq!(
@@ -1555,21 +1578,24 @@ mod tests {
 
     #[test]
     fn copy_cases() {
-        assert_eq!(decide(&want_file("a"), &file("a"), Recorded::Copy(&h("a"))), UpToDate);
+        assert_eq!(
+            decide(&want_file("a"), &file("a"), Recorded::Copy(&h("a"), None)),
+            UpToDate
+        );
         // Unrecorded but identical: adopt.
         assert_eq!(decide(&want_file("a"), &file("a"), Recorded::None), Adopt);
         // Source changed, destination untouched: outdated, safe update.
         assert_eq!(
-            decide(&want_file("new"), &file("old"), Recorded::Copy(&h("old"))),
+            decide(&want_file("new"), &file("old"), Recorded::Copy(&h("old"), None)),
             Update
         );
         // Destination changed (source same or changed): modified.
         assert_eq!(
-            decide(&want_file("a"), &file("edited"), Recorded::Copy(&h("a"))),
+            decide(&want_file("a"), &file("edited"), Recorded::Copy(&h("a"), None)),
             Conflict(super::Conflict::Modified)
         );
         assert_eq!(
-            decide(&want_file("new"), &file("edited"), Recorded::Copy(&h("a"))),
+            decide(&want_file("new"), &file("edited"), Recorded::Copy(&h("a"), None)),
             Conflict(super::Conflict::Modified)
         );
         assert_eq!(
@@ -1619,7 +1645,7 @@ mod tests {
                 gid: None,
             },
         };
-        assert_eq!(decide(&want, &file("a"), Recorded::Copy(&h("a"))), FixMetadata);
+        assert_eq!(decide(&want, &file("a"), Recorded::Copy(&h("a"), None)), FixMetadata);
         assert_eq!(decide(&want, &file("a"), Recorded::None), FixMetadata);
         let ok = Observed::File {
             hash: h("a"),
@@ -1627,7 +1653,25 @@ mod tests {
             uid: 1,
             gid: 1,
         };
-        assert_eq!(decide(&want, &ok, Recorded::Copy(&h("a"))), UpToDate);
+        assert_eq!(decide(&want, &ok, Recorded::Copy(&h("a"), None)), UpToDate);
+    }
+
+    /// Only the state tells what is in a directory that the user cannot
+    /// search: the recorded content and metadata.
+    #[test]
+    fn a_hidden_destination_is_compared_with_the_record() {
+        let meta = FileMeta {
+            mode: Some(0o440),
+            ..FileMeta::default()
+        };
+        let want = Desired::File { hash: h("a"), meta };
+        let (a, b, t) = (h("a"), h("b"), PathBuf::from("t"));
+        let hidden = |r| decide(&want, &Observed::Hidden, r);
+        assert_eq!(hidden(Recorded::None), Create);
+        assert_eq!(hidden(Recorded::Copy(&a, Some(&meta))), UpToDate);
+        assert_eq!(hidden(Recorded::Copy(&a, None)), Update, "metadata not recorded");
+        assert_eq!(hidden(Recorded::Copy(&b, Some(&meta))), Update);
+        assert_eq!(hidden(Recorded::Link(&t)), Conflict(super::Conflict::Modified));
     }
 
     #[test]

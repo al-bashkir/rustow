@@ -571,6 +571,76 @@ mod tests {
         assert!(serve_all(&[gone])[0].result.is_ok() && !f.exists());
     }
 
+    /// The plan could not see the destination (its directory is not
+    /// searchable for the user); the helper (root) can. A create finds
+    /// nothing there, an update finds the recorded content: anything else
+    /// is a conflict unless the policy replaces it, and a directory fails.
+    /// A removal of a file that is gone already succeeds.
+    #[test]
+    fn the_helper_checks_a_hidden_destination_against_the_state() {
+        use crate::plan::{Conflict, Decision};
+        let (_t, d) = tmp();
+        let f = d.join("f");
+        let job = |decision, expect: Option<&[u8]>| {
+            let file = Desired::File {
+                hash: Hash::of(b"new"),
+                meta: FileMeta::default(),
+            };
+            let mut deploy = crate::execute::tests::create(&f, file, Some(b"new"));
+            (deploy.observed, deploy.decision) = (Observed::Hidden, decision);
+            deploy.expect = expect.map(Hash::of);
+            deploy
+        };
+        let result = |deploy: &Deploy, policy| {
+            let write = Job::Write {
+                deploy,
+                policy,
+                backup: d.join("bk"),
+                temp: format!("{TEMP_PREFIX}test"),
+            };
+            let done = serve_all(&[write]).remove(0);
+            (done.result.map(drop), done.conflict)
+        };
+        let unmanaged = Conflict::Unmanaged.to_string();
+        let modified = Conflict::Modified.to_string();
+
+        assert_eq!(result(&job(Decision::Create, None), Policy::Skip), (Ok(()), false));
+        assert_eq!(fs::read(&f).unwrap(), b"new");
+        fs::write(&f, "theirs").unwrap();
+        assert_eq!(
+            result(&job(Decision::Create, None), Policy::Skip),
+            (Err(unmanaged), true)
+        );
+        assert_eq!(fs::read(&f).unwrap(), b"theirs", "left as it is");
+        assert_eq!(result(&job(Decision::Create, None), Policy::Overwrite), (Ok(()), false));
+        assert_eq!(fs::read(&f).unwrap(), b"new");
+
+        fs::write(&f, "old").unwrap();
+        let other = job(Decision::Update, Some(b"other"));
+        assert_eq!(result(&other, Policy::Skip), (Err(modified), true));
+        assert_eq!(
+            result(&job(Decision::Update, Some(b"old")), Policy::Skip),
+            (Ok(()), false)
+        );
+        assert_eq!(fs::read(&f).unwrap(), b"new");
+
+        fs::remove_file(&f).unwrap();
+        fs::create_dir(&f).unwrap();
+        let (why, conflict) = result(&job(Decision::Create, None), Policy::Overwrite);
+        assert!(!conflict && why.unwrap_err().contains("something other than a file is there"));
+        assert!(f.is_dir(), "never replaced");
+        fs::remove_dir(&f).unwrap();
+
+        let mut gone = remove(&d.join("bk"));
+        if let Job::Remove {
+            path, observed, expect, ..
+        } = &mut gone
+        {
+            (*path, *observed, *expect) = (f.clone(), Observed::Hidden, Some(Hash::of(b"new")));
+        }
+        assert!(serve_all(&[gone])[0].result.is_ok(), "gone already");
+    }
+
     /// The results of `jobs`, served as one input.
     fn serve_all(jobs: &[Job<&Deploy>]) -> Vec<Done> {
         let mut input = Vec::new();

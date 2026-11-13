@@ -67,7 +67,7 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
 /// What `diff` shows for one item; `None` when the item does not differ.
 fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
     if let Step::Deploy(d) = &item.step
-        && matches!(d.observed, Observed::Unreadable { .. })
+        && matches!(d.observed, Observed::Unreadable { .. } | Observed::Hidden)
     {
         return Ok(show_unreadable(item, d));
     }
@@ -225,6 +225,7 @@ fn what(observed: &Observed) -> String {
         Observed::Symlink(t) => format!("links to {}", shown(&t.display().to_string())),
         Observed::File { .. } => "regular file".into(),
         Observed::Unreadable { .. } => "regular file that you cannot read".into(),
+        Observed::Hidden => "in a directory that you cannot search".into(),
         Observed::Dir => "directory".into(),
         Observed::Other => "special file".into(),
     }

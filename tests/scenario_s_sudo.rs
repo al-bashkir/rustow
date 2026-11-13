@@ -72,7 +72,137 @@ impl Sudo {
 impl Drop for Sudo {
     fn drop(&mut self) {
         set_mode(&self.etc, 0o755);
+        let _ = fs::set_permissions(self.etc.join("hidden"), fs::Permissions::from_mode(0o755));
     }
+}
+
+/// A fake sudo that also lets the helper search `etc/hidden`, as root can.
+const SEARCHES: &str = "#!/bin/sh\n\
+    echo \"$*\" >> \"$FAKE_SUDO_LOG\"\n\
+    [ \"$1\" = \"--\" ] && shift\n\
+    chmod 755 \"$FAKE_SUDO_UNLOCK\" \"$FAKE_SUDO_UNLOCK/hidden\"\n\
+    \"$@\"\n\
+    code=$?\n\
+    chmod 000 \"$FAKE_SUDO_UNLOCK/hidden\"\n\
+    chmod 555 \"$FAKE_SUDO_UNLOCK\"\n\
+    exit $code\n";
+
+/// `etc/hidden`, a directory that the user cannot search (mode 0000), and
+/// a `[[files]]` entry for `etc/hidden/x.conf` with `mode`.
+fn hidden(s: &Sudo, mode: &str) -> PathBuf {
+    let config = read(&s.fx.repo.join("rustow.toml"));
+    s.fx.write(
+        "rustow.toml",
+        &format!("{config}[[files]]\nsource = \"rustowroot/etc/hidden/x.conf\"\nmode = \"{mode}\"\n"),
+    );
+    s.fx.write("rustowroot/etc/hidden/x.conf", "x\n");
+    let dir = s.etc.join("hidden");
+    set_mode(&s.etc, 0o755);
+    fs::create_dir(&dir).unwrap();
+    set_mode(&dir, 0o000);
+    set_mode(&s.etc, 0o555);
+    dir.join("x.conf")
+}
+
+/// Runs `f` while the user can search `etc/hidden`.
+fn uncovered<T>(s: &Sudo, f: impl FnOnce() -> T) -> T {
+    set_mode(&s.etc, 0o755);
+    set_mode(&s.etc.join("hidden"), 0o755);
+    let out = f();
+    set_mode(&s.etc.join("hidden"), 0o000);
+    set_mode(&s.etc, 0o555);
+    out
+}
+
+/// The status line of `rel` in `out`.
+fn line_of<'a>(out: &'a Out, rel: &str) -> &'a str {
+    out.stdout.lines().find(|l| l.contains(rel)).unwrap_or_default()
+}
+
+/// A system file in a directory that the user cannot search (as
+/// `/etc/sudoers.d`, mode 0750, owner root): rustow cannot see it, so it
+/// compares it with the state. Without a record it creates it through
+/// sudo; with one, it is clean while the desired content and metadata
+/// are the recorded ones, and an update through sudo when they change.
+#[test]
+fn a_system_file_below_a_directory_you_cannot_search_is_compared_with_the_state() {
+    let s = Sudo::new(SEARCHES);
+    let x = hidden(&s, "0640");
+    let dry = s.run(&["-n", "apply"]);
+    assert_eq!(dry.code, 0, "{dry:?}");
+    let line = line_of(&dry, "hidden/x.conf");
+    assert!(line.contains("create") && line.contains("via sudo"), "{dry:?}");
+    let status = s.run(&["status"]);
+    assert_eq!(status.code, 1, "{status:?}");
+    assert!(line_of(&status, "hidden/x.conf").contains("MISSING"), "{status:?}");
+    assert_eq!(s.calls(), 0, "a dry run and status never call sudo");
+
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(s.calls(), 1, "{out:?}");
+    assert_eq!(uncovered(&s, || (read(&x), mode(&x))), ("x\n".into(), 0o640));
+
+    let again = s.run(&["apply"]);
+    assert_eq!(again.code, 0, "{again:?}");
+    assert_eq!(s.calls(), 1, "nothing to change, no sudo");
+    let status = s.run(&["status", "-v"]);
+    assert_eq!(status.code, 0, "{status:?}");
+    let line = line_of(&status, "hidden/x.conf");
+    assert!(
+        line.contains("COPIED") && line.contains("not readable by you; compared with the state"),
+        "{status:?}"
+    );
+    let diff = s.run(&["diff"]);
+    assert_eq!((diff.code, diff.stdout.as_str()), (0, ""), "{diff:?}");
+
+    // Only the mode changes: the state records the metadata too.
+    let config = read(&s.fx.repo.join("rustow.toml"));
+    s.fx.write("rustow.toml", &config.replace("0640", "0600"));
+    let dry = s.run(&["-n", "apply"]);
+    let line = line_of(&dry, "hidden/x.conf");
+    assert!(line.contains("update") && line.contains("via sudo"), "{dry:?}");
+    let diff = s.run(&["diff"]);
+    assert_eq!(diff.code, 4, "{diff:?}");
+    assert!(diff.stderr.contains("cannot read the destination"), "{diff:?}");
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(s.calls(), 2, "{out:?}");
+    assert_eq!(uncovered(&s, || mode(&x)), 0o600);
+
+    let gone = s.run(&["undeploy", "rustowroot/etc/hidden"]);
+    assert_eq!(gone.code, 0, "{gone:?}");
+    assert!(line_of(&gone, "hidden/x.conf").contains("via sudo"), "{gone:?}");
+    assert!(!uncovered(&s, || x.exists()), "{gone:?}");
+}
+
+/// The helper looks, as root, at what the plan could not see. A file that
+/// rustow did not write (no record), or another content than the recorded
+/// one, is a conflict, and the file stays; `--force` replaces it.
+#[test]
+fn the_helper_finds_a_conflict_below_a_directory_you_cannot_search() {
+    let s = Sudo::new(SEARCHES);
+    let x = hidden(&s, "0644");
+    uncovered(&s, || fs::write(&x, "theirs\n").unwrap());
+    let out = s.run(&["apply", "rustowroot/etc/hidden"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(
+        line_of(&out, "hidden/x.conf").contains("existing destination is not managed by rustow"),
+        "{out:?}"
+    );
+    assert_eq!(uncovered(&s, || read(&x)), "theirs\n");
+    let forced = s.run(&["apply", "--force", "rustowroot/etc/hidden"]);
+    assert_eq!(forced.code, 0, "{forced:?}");
+    assert_eq!(uncovered(&s, || read(&x)), "x\n");
+
+    uncovered(&s, || fs::write(&x, "edited\n").unwrap());
+    s.fx.write("rustowroot/etc/hidden/x.conf", "y\n");
+    let out = s.run(&["apply", "rustowroot/etc/hidden"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(
+        line_of(&out, "hidden/x.conf").contains("destination was modified since rustow last applied it"),
+        "{out:?}"
+    );
+    assert_eq!(uncovered(&s, || read(&x)), "edited\n");
 }
 
 #[test]

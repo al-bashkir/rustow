@@ -34,6 +34,16 @@ A system file can be unreadable for you, for example a `[[files]]` entry with `m
 - `undeploy` removes such a file through the helper. The helper removes it only when its content is the recorded one. One item that fails never stops the other removals.
 - `diff` cannot show the content. For such an item that would change, it prints "rustow: <dest>: cannot read the destination (Permission denied); elevated privileges may be required" on stderr and goes on with the other items. The exit code is 4.
 
+### Destinations in a directory that you cannot search
+
+A system file can be in a directory that you cannot search, for example `/etc/sudoers.d` (mode 0750, owner root). rustow can open that directory, but it cannot see what is in it. It compares the file with your state:
+
+- When the state has no record of the file, the item is a create through sudo. The helper looks as root before it writes. When something is there already, the item is a conflict: "existing destination is not managed by rustow", and the file stays. `--force` and `--backup` resolve it, as for any foreign file. A directory or a special file there fails the item.
+- The state records the content and the metadata (`mode`, `owner`, `group`) that rustow wrote last. When the desired content and metadata are the recorded ones, the item is clean. `status` shows it as ok. With `-v`, the detail is "not readable by you; compared with the state". `apply` does not run sudo for it. `diff` shows nothing for it.
+- When the desired content or metadata changed, the item is an update through sudo. The helper checks the content as root, as for a file that you cannot read: other content is a MODIFIED conflict. rustow cannot see the owner, the group and the mode of the old file, so it does not keep them. The update sets the ones that `rustow.toml` gives. Without them, the file gets the owner root and the mode of a new file.
+- `undeploy` and `diff` work as for a file that you cannot read.
+- Only the last directory may be one that you cannot search. A system file deeper in it, or in a new directory below it, is a conflict: "a parent directory is blocked: <dir>: Permission denied".
+
 Do not run rustow itself with `sudo`. Then HOME and the state directory are root's, so rustow would link your home files into `/root`. When rustow runs as root and `$SUDO_USER` names another user, every command except `completions` stops with exit 2: "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of alice; run rustow as alice: it asks for sudo when a system file needs it (pass --target to deploy into root's home on purpose)". With an explicit `--target`, rustow runs. A real root login has no `$SUDO_USER`, so it is not affected.
 
 ## Copies only

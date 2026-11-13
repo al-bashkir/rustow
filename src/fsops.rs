@@ -59,6 +59,10 @@ pub enum Observed {
         uid: u32,
         gid: u32,
     },
+    /// An entry of a directory that the current user cannot search:
+    /// nothing is known about it. The plan compares it with the state; the
+    /// sudo helper looks at it as root.
+    Hidden,
     Dir,
     /// FIFO, socket or device.
     Other,
