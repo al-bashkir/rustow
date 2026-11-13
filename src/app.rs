@@ -490,9 +490,9 @@ fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-/// The first SIGINT/SIGTERM/SIGHUP asks the executor to stop between
-/// items; a second one terminates at once.
-fn interrupt_flag() -> Result<Arc<AtomicBool>> {
+/// The first SIGINT/SIGTERM/SIGHUP asks the executor (or `enc edit`) to
+/// stop; a second one terminates at once.
+pub(crate) fn interrupt_flag() -> Result<Arc<AtomicBool>> {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [SIGINT, SIGTERM, SIGHUP] {

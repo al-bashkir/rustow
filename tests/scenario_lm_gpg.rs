@@ -112,6 +112,22 @@ fn enc_fails_when_its_new_ciphertext_does_not_decrypt() {
     assert!(!fx.repo.join("p.gpg").exists());
 }
 
+/// A signal that arrives while rustow encrypts the edit cancels it too:
+/// the ciphertext is not replaced.
+#[test]
+fn signal_during_the_encryption_of_an_edit_cancels_it() {
+    let Some((fx, home)) = setup("") else { return };
+    let ct = fx.gpg_encrypt("s.gpg", "v1\n", &home);
+    let before = fs::read(&ct).unwrap();
+    let path = gpg_wrapper(&fx, "*\" --encrypt \"*) kill -TERM $PPID;;");
+    let editor = fx.editor("ed", "printf 'v2\\n' > \"$1\"");
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", &editor), ("PATH", &path)]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("interrupted; the edit is not saved"), "{out:?}");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert!(fx.workspaces().is_empty());
+}
+
 /// A PATH whose first `gpg` runs the shell `case` branch `arm` on its
 /// arguments, then the real gpg.
 fn gpg_wrapper(fx: &Fixture, arm: &str) -> String {

@@ -377,6 +377,47 @@ fn signal_during_edit_is_handled_and_cleaned_up() {
     assert!(fx.workspaces().is_empty());
 }
 
+/// A signal sent to rustow alone while the editor runs cancels the edit,
+/// also when the editor then exits with success: nothing is encrypted and
+/// the workspace goes.
+#[test]
+fn signal_to_rustow_during_edit_cancels_it() {
+    let (fx, key) = keyed();
+    let ct = fx.age_encrypt("s.age", "keep\n", &[&key]);
+    let before = fs::read(&ct).unwrap();
+    for sig in ["TERM", "INT", "HUP"] {
+        let editor = fx.editor("sig", &format!("kill -{sig} $PPID\nsleep 0.2\nprintf 'v2\\n' > \"$1\""));
+        let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+        assert_eq!(out.code, 4, "{sig}: {out:?}");
+        assert!(
+            out.stderr
+                .contains("interrupted; the edit is not saved and s.age is unchanged"),
+            "{sig}: {out:?}"
+        );
+        assert_eq!(fs::read(&ct).unwrap(), before, "{sig}");
+        assert!(fx.workspaces().is_empty(), "{sig}");
+    }
+}
+
+/// A second signal exits at once, as in other commands; `cache clean`
+/// then removes the workspace that holds the plaintext.
+#[test]
+fn second_signal_during_edit_exits_at_once() {
+    let (fx, key) = keyed();
+    let ct = fx.age_encrypt("s.age", "keep\n", &[&key]);
+    let before = fs::read(&ct).unwrap();
+    let editor = fx.editor(
+        "sig2",
+        "kill -TERM $PPID\nsleep 0.2\nkill -TERM $PPID\nsleep 0.3\nprintf 'v2\\n' > \"$1\"",
+    );
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 130, "{out:?}");
+    assert_eq!(fs::read(&ct).unwrap(), before);
+    assert_eq!(fx.workspaces().len(), 1, "{out:?}");
+    fx.ok(&["cache", "clean"]);
+    assert!(fx.workspaces().is_empty());
+}
+
 #[test]
 fn edit_of_foreign_ciphertext_with_other_recipient_count_reencrypts() {
     let (fx, key) = keyed();

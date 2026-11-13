@@ -6,7 +6,6 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use zeroize::Zeroizing;
@@ -247,8 +246,10 @@ impl Opened {
 /// re-encrypts with the source's own backend when content or recipients changed.
 pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool, printer: &Printer) -> Result<i32> {
     let src = open_encrypted(ctx, arg)?;
+    // Before plaintext is on disk: a first signal cancels the edit, so the workspace goes.
+    let stop = crate::app::interrupt_flag()?;
     let workspace = Workspace::create(ctx, &src.rel, src.backend, &src.plaintext)?;
-    let edited = edit_in_workspace(&src.rel, &workspace)?;
+    let edited = edit_in_workspace(&src.rel, &workspace, &stop)?;
     if !src.unchanged() {
         return Err(conflict(&src.rel, workspace.keep()));
     }
@@ -259,6 +260,7 @@ pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool,
         return Ok(0);
     }
     let (ciphertext, unverified) = encrypt_edited(ctx, &src, &edited, workspace)?;
+    interrupted(&stop, &src.rel)?;
     write_back(state, &src, &ciphertext, recipients)?;
     let detail = format!(
         "re-encrypted; deployed files change on the next `rustow apply`{}",
@@ -296,8 +298,9 @@ fn open_encrypted(ctx: &Context, arg: &str) -> Result<Opened> {
 }
 
 /// Runs the editor on the workspace file and reads the result.
-fn edit_in_workspace(rel: &RelPath, workspace: &Workspace) -> Result<Zeroizing<Vec<u8>>> {
+fn edit_in_workspace(rel: &RelPath, workspace: &Workspace, stop: &AtomicBool) -> Result<Zeroizing<Vec<u8>>> {
     let status = run_editor(&workspace.file)?;
+    interrupted(stop, rel)?;
     if !status.success() {
         return Err(Error::Failed(format!(
             "editor exited with {status}; {rel} is unchanged"
@@ -425,9 +428,18 @@ impl Workspace {
     }
 }
 
+/// Fails when a signal asked rustow to stop: the edit is not saved.
+fn interrupted(stop: &AtomicBool, rel: &RelPath) -> Result<()> {
+    match stop.load(Ordering::SeqCst) {
+        true => Err(Error::Failed(format!(
+            "interrupted; the edit is not saved and {rel} is unchanged"
+        ))),
+        false => Ok(()),
+    }
+}
+
 /// Runs `$VISUAL`, else `$EDITOR`, else `vi`, on `file`. The command is
-/// split on whitespace and never passed to a shell. While it runs, the
-/// first SIGINT/SIGTERM/SIGHUP does not kill rustow, so it can clean up.
+/// split on whitespace and never passed to a shell.
 fn run_editor(file: &Path) -> Result<std::process::ExitStatus> {
     let var = |name| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
     let editor = var("VISUAL").or_else(|| var("EDITOR")).unwrap_or_else(|| "vi".into());
@@ -435,22 +447,9 @@ fn run_editor(file: &Path) -> Result<std::process::ExitStatus> {
     let program = words.next().unwrap_or("vi");
     let path = crate::fsops::find_program(program)
         .ok_or_else(|| Error::Failed(format!("cannot run editor '{program}': not found in PATH")))?;
-    let stop = Arc::new(AtomicBool::new(false));
-    for sig in [
-        signal_hook::consts::SIGINT,
-        signal_hook::consts::SIGTERM,
-        signal_hook::consts::SIGHUP,
-    ] {
-        signal_hook::flag::register(sig, Arc::clone(&stop))
-            .map_err(|e| Error::Failed(format!("signal handler: {e}")))?;
-    }
-    let status = Command::new(path)
+    Command::new(path)
         .args(words)
         .arg(file)
         .status()
-        .map_err(|e| Error::Failed(format!("cannot run editor '{program}': {e}")))?;
-    if stop.load(Ordering::SeqCst) && !status.success() {
-        return Err(Error::Failed("interrupted; the encrypted source is unchanged".into()));
-    }
-    Ok(status)
+        .map_err(|e| Error::Failed(format!("cannot run editor '{program}': {e}")))
 }

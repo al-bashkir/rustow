@@ -119,6 +119,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - rustow decrypts into `<cache>/edit/edit-XXXX/` (mode 0700) as a 0600 file with the logical name.
 - The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell. A program name without a `/` is looked up in the absolute directories of `PATH` only.
 - If the editor fails, the ciphertext stays unchanged and rustow removes the workspace.
+- SIGINT, SIGTERM or SIGHUP cancels the edit. rustow waits until the editor exits. Then it does not encrypt your edit, removes the workspace and exits with 4: "interrupted; the edit is not saved". A signal that arrives while rustow encrypts the edit also cancels it. A second signal exits at once. Then the workspace stays until `rustow cache clean`.
 - After the edit, rustow verifies the new ciphertext as `enc` does. When no key here can check it, rustow writes it and prints "not verified" with the reason. For example, after you set the recipients to another person's key only, the next `enc edit` on this machine cannot decrypt the file.
 - If the encryption or the verification fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.
