@@ -52,12 +52,17 @@ pub fn export(ctx: &Context, file: Option<&Path>) -> Result<i32> {
 pub fn import(ctx: &mut Context, printer: &Printer, file: &Path, dry_run: bool) -> Result<i32> {
     let regs = read(file)?;
     let mut state = ctx.load_state()?;
-    let strings = |list: &BTreeSet<RelPath>| list.iter().map(ToString::to_string).collect::<Vec<_>>();
-    crate::files::check_copies(ctx, &strings(&regs.files))?;
-    let discovery = ctx.discover()?;
-    for link in strings(&regs.links) {
-        crate::app::check_link(ctx, &discovery, &state, &link)?;
+    check_paths(ctx, &state, &regs)?;
+    let changes = add(&mut state, regs);
+    if !dry_run && !changes.is_empty() {
+        state.save(&ctx.state_dir, &ctx.repo_id)?;
     }
+    printer.changes(None, &changes, dry_run);
+    Ok(0)
+}
+
+/// Adds each registration that `state` does not hold yet; one change for each.
+fn add(state: &mut State, regs: Registrations) -> Vec<Change> {
     let mut changes = Vec::new();
     for (list, into, kind) in [
         (regs.files, &mut state.files, "copy"),
@@ -69,11 +74,18 @@ pub fn import(ctx: &mut Context, printer: &Printer, file: &Path, dry_run: bool) 
             }
         }
     }
-    if !dry_run && !changes.is_empty() {
-        state.save(&ctx.state_dir, &ctx.repo_id)?;
-    }
-    printer.changes(None, &changes, dry_run);
-    Ok(0)
+    changes
+}
+
+/// Checks each `files` path as `file add` does and each `links` path as
+/// `link <path>` does.
+fn check_paths(ctx: &Context, state: &State, regs: &Registrations) -> Result<()> {
+    let files: Vec<String> = regs.files.iter().map(ToString::to_string).collect();
+    crate::files::check_copies(ctx, &files)?;
+    let discovery = ctx.discover()?;
+    regs.links
+        .iter()
+        .try_for_each(|link| crate::app::check_link(ctx, &discovery, state, link.as_str()))
 }
 
 /// Reads and checks an export. Each path is checked as a repository path.

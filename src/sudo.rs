@@ -48,13 +48,7 @@ pub struct Done {
 
 /// Runs the helper through sudo and returns one result per job.
 pub fn call(jobs: &[Job<&Deploy>]) -> Result<Vec<Done>> {
-    let name = std::env::var_os("RUSTOW_SUDO").unwrap_or_else(|| "sudo".into());
-    let shown = PathBuf::from(&name).display().to_string();
-    let program = crate::fsops::find_program(&name).ok_or_else(|| {
-        Error::Failed(format!(
-            "{shown}: not found in PATH; system files that you cannot write need it"
-        ))
-    })?;
+    let (shown, program) = sudo_program()?;
     let exe = std::env::current_exe().map_err(|e| Error::Failed(format!("find the rustow binary: {e}")))?;
     let input = Zeroizing::new(serde_json::to_vec(jobs).map_err(|e| Error::Failed(format!("encode sudo jobs: {e}")))?);
     let mut child = Command::new(&program)
@@ -79,16 +73,32 @@ pub fn call(jobs: &[Job<&Deploy>]) -> Result<Vec<Done>> {
     if let Some(Err(e)) = sent {
         return Err(Error::Failed(format!("send the jobs to {shown}: {e}")));
     }
-    let done: Vec<Done> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| Error::Failed(format!("read the result of {shown}: {e}")))?;
-    if done.len() != jobs.len() {
+    results(&shown, &output.stdout, jobs.len())
+}
+
+/// The helper's output: one result for each of `jobs` jobs.
+fn results(shown: &str, stdout: &[u8], jobs: usize) -> Result<Vec<Done>> {
+    let done: Vec<Done> =
+        serde_json::from_slice(stdout).map_err(|e| Error::Failed(format!("read the result of {shown}: {e}")))?;
+    if done.len() != jobs {
         return Err(Error::Failed(format!(
-            "{shown} returned {} results for {} files",
-            done.len(),
-            jobs.len()
+            "{shown} returned {} results for {jobs} files",
+            done.len()
         )));
     }
     Ok(done)
+}
+
+/// `RUSTOW_SUDO`, else `sudo`: its name for messages, and the path to start.
+fn sudo_program() -> Result<(String, PathBuf)> {
+    let name = std::env::var_os("RUSTOW_SUDO").unwrap_or_else(|| "sudo".into());
+    let shown = PathBuf::from(&name).display().to_string();
+    match crate::fsops::find_program(&name) {
+        Some(path) => Ok((shown, path)),
+        None => Err(Error::Failed(format!(
+            "{shown}: not found in PATH; system files that you cannot write need it"
+        ))),
+    }
 }
 
 /// The helper side: reads the jobs on stdin, writes each one, prints the results.
