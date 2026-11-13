@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::config::CONFIG_FILE;
 use crate::diff;
 use crate::error::{IoContext, Result};
-use crate::execute::{Action, ItemReport};
+use crate::execute::{Action, ItemReport, deploy_conflict};
 use crate::fsops::{self, FileMeta, Observed};
 use crate::hash::Hash;
 use crate::paths::RelPath;
@@ -424,7 +424,10 @@ fn classify_deploy(d: &Deploy, mode: &Mode, old: Option<&Record>) -> (&'static s
         (Decision::Conflict(Conflict::Modified), _) | (_, Some(Decision::Conflict(Conflict::Modified))) => {
             ("MODIFIED", None)
         }
-        (Decision::Conflict(c), _) | (_, Some(Decision::Conflict(c))) => ("CONFLICT", Some(c.to_string())),
+        // The detail of `apply`, for example "(broken symlink to gone)".
+        (Decision::Conflict(_), _) | (_, Some(Decision::Conflict(_))) => {
+            ("CONFLICT", deploy_conflict(d).map(|(_, detail)| detail))
+        }
         (Decision::Create, _) => ("MISSING", None),
         (Decision::Update | Decision::FixMetadata, _) | (_, Some(Decision::Create | Decision::Update)) => {
             ("OUTDATED", None)

@@ -420,6 +420,16 @@ fn only_a_dangling_foreign_symlink_is_called_broken() {
     assert!(line("~/.zshrc").contains("broken symlink to gone"), "{out:?}");
     assert!(line("~/.bashrc").contains("not managed by rustow"), "{out:?}");
     assert!(!line("~/.bashrc").contains("broken"), "{out:?}");
+    let status = fx.run(&["status"]);
+    let row = status
+        .stdout
+        .lines()
+        .find(|l| l.contains("~/.zshrc"))
+        .unwrap_or_default();
+    assert!(
+        row.starts_with(" CONFLICT") && row.ends_with("(broken symlink to gone)"),
+        "status gives the detail of apply: {status:?}"
+    );
 }
 
 /// Only a decision that writes needs a writable directory: a link that is

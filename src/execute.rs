@@ -141,8 +141,9 @@ fn conflict_of(decision: Decision) -> Option<Conflict> {
     }
 }
 
-/// The conflict of a deploy step (destination first, then cache) with its detail text.
-fn deploy_conflict(d: &Deploy) -> Option<(Conflict, String)> {
+/// The conflict of a deploy step (destination first, then cache) with its
+/// detail text, for `apply` and `status`.
+pub fn deploy_conflict(d: &Deploy) -> Option<(Conflict, String)> {
     let dest = conflict_of(d.decision);
     let conflict = dest.or_else(|| d.cache.as_ref().and_then(|c| conflict_of(c.decision)))?;
     let what = if dest.is_some() { "" } else { "cache entry: " };
