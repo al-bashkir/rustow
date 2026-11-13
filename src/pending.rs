@@ -8,6 +8,7 @@
 //! rustow looks at an entry only through its directory, walked with the
 //! trust rule (`fsops::Dir`). rustow never runs sudo only to clean up.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
@@ -42,6 +43,7 @@ pub fn settled(name: &str) {
 }
 
 /// What a journaled temporary file is now.
+#[derive(Clone)]
 enum Leftover {
     Gone,
     /// The user may remove it: its directory is writable.
@@ -81,19 +83,35 @@ impl Drop for Pending {
     fn drop(&mut self) {
         fsops::journal_to(None);
         let settled = std::mem::take(&mut *SETTLED.lock().unwrap_or_else(PoisonError::into_inner));
-        let gone = |temp: &PathBuf| {
-            temp.file_name()
-                .is_some_and(|n| settled.iter().any(|s| n == OsStr::new(s)))
+        finish(&self.path, &settled.into_iter().collect());
+    }
+}
+
+/// Keeps in the journal at `path` only the entries that this run did not
+/// settle and whose files are still there. A run journals the files of
+/// one directory one after another, so they share one walk to it.
+fn finish(path: &Path, settled: &HashSet<String>) {
+    let Ok(entries) = entries(path) else { return };
+    let me = geteuid().as_raw();
+    let mut walked: Option<(PathBuf, std::result::Result<Dir, Leftover>)> = None;
+    let mut kept = Vec::new();
+    for temp in entries {
+        let Ok((parent, name)) = fsops::split(&temp) else {
+            continue;
         };
-        if let Ok(entries) = entries(&self.path) {
-            let me = geteuid().as_raw();
-            let kept: Vec<PathBuf> = entries
-                .into_iter()
-                .filter(|temp| !gone(temp) && !matches!(leftover(temp, me), Leftover::Gone))
-                .collect();
-            let _ = rewrite(&self.path, &kept);
+        if name.to_str().is_some_and(|n| settled.contains(n)) {
+            continue;
+        }
+        if walked.as_ref().is_none_or(|(dir, _)| dir != parent) {
+            walked = Some((parent.to_path_buf(), walk(parent, me)));
+        }
+        if let Some((_, dir)) = &walked
+            && !matches!(found(dir, name), Leftover::Gone)
+        {
+            kept.push(temp);
         }
     }
+    let _ = rewrite(path, &kept);
 }
 
 /// One line for each temporary file that the journal at `path` lists and
@@ -163,14 +181,27 @@ fn remove(temp: &Path) -> Result<()> {
 
 /// What `temp` is now, seen through its directory walked for `me`.
 fn leftover(temp: &Path, me: u32) -> Leftover {
-    let Ok((parent, name)) = fsops::split(temp) else {
-        return Leftover::Gone;
-    };
-    let dir = match Dir::open(parent, me) {
-        Ok(Walked::Ready(dir)) => dir,
-        Ok(Walked::Missing { .. }) => return Leftover::Gone,
-        Ok(Walked::Blocked { path, reason }) => return Leftover::Unchecked(format!("{}: {reason}", path.display())),
-        Err(e) => return Leftover::Unchecked(e.to_string()),
+    match fsops::split(temp) {
+        Ok((parent, name)) => found(&walk(parent, me), name),
+        Err(_) => Leftover::Gone,
+    }
+}
+
+/// The directory `parent`, walked for `me`; else what each file in it is.
+fn walk(parent: &Path, me: u32) -> std::result::Result<Dir, Leftover> {
+    match Dir::open(parent, me) {
+        Ok(Walked::Ready(dir)) => Ok(dir),
+        Ok(Walked::Missing { .. }) => Err(Leftover::Gone),
+        Ok(Walked::Blocked { path, reason }) => Err(Leftover::Unchecked(format!("{}: {reason}", path.display()))),
+        Err(e) => Err(Leftover::Unchecked(e.to_string())),
+    }
+}
+
+/// What the file `name` is now, in `dir` (from `walk`).
+fn found(dir: &std::result::Result<Dir, Leftover>, name: &OsStr) -> Leftover {
+    let dir = match dir {
+        Ok(dir) => dir,
+        Err(found) => return found.clone(),
     };
     match (dir.may_have(name), dir.writable()) {
         (false, _) => Leftover::Gone,
@@ -346,6 +377,31 @@ mod tests {
         assert!(!recover(temp, me, &mut notices), "removed through a trusted walk");
         assert!(!d.join("real/.rustow-tmp-1").exists(), "{notices:?}");
         assert!(matches!(leftover(temp, me), Leftover::Gone));
+    }
+
+    /// The end of a run keeps, in journal order, the entries that the run
+    /// did not settle and whose files are still there; an empty journal goes.
+    #[test]
+    fn the_end_of_a_run_keeps_the_files_still_there() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().canonicalize().unwrap();
+        for dir in ["a", "b"] {
+            fs::create_dir(d.join(dir)).unwrap();
+        }
+        let temps = ["a/1", "a/2", "b/3", "a/4", "a/5", "gone/6"].map(|p| d.join(p.replace('/', "/.rustow-tmp-")));
+        for i in [0, 2, 3, 4] {
+            fs::write(&temps[i], "x").unwrap();
+        }
+        let journal = d.join("x.pending");
+        let lines: String = temps.iter().map(|p| format!("{}\n", serde_json::json!(p))).collect();
+        fs::write(&journal, lines).unwrap();
+        finish(&journal, &HashSet::from([".rustow-tmp-5".to_owned()]));
+        assert_eq!(entries(&journal).unwrap(), [0, 2, 3].map(|i| temps[i].clone()));
+        for i in [0, 2, 3] {
+            fs::remove_file(&temps[i]).unwrap();
+        }
+        finish(&journal, &HashSet::new());
+        assert!(!journal.exists());
     }
 
     #[test]
