@@ -399,6 +399,31 @@ fn signal_to_rustow_during_edit_cancels_it() {
     }
 }
 
+/// `enc edit` holds the repository lock while the editor is open: another
+/// command, for example a timer that runs `apply`, stops until it exits.
+#[test]
+fn edit_holds_the_lock_while_the_editor_is_open() {
+    let (fx, key) = keyed();
+    fx.age_encrypt("s.age", "v1\n", &[&key]);
+    let log = fx.base.join("apply.log").display().to_string();
+    let editor = fx.editor(
+        "ed",
+        &format!(
+            "'{}' --root-target '{}' apply > '{log}' 2>&1\necho \"exit $?\" >> '{log}'",
+            env!("CARGO_BIN_EXE_rustow"),
+            fx.root.display()
+        ),
+    );
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    let log = read(std::path::Path::new(&log));
+    assert!(
+        log.contains("another rustow process is using this repository") && log.ends_with("exit 4\n"),
+        "{log}"
+    );
+    assert!(!fx.home_path("s").exists());
+}
+
 /// A second signal exits at once, as in other commands; `cache clean`
 /// then removes the workspace that holds the plaintext.
 #[test]
