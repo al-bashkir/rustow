@@ -32,6 +32,10 @@ pub enum Policy {
 /// The detail of each item that a first signal kept from running (an `Action::Fail`).
 pub const INTERRUPTED: &str = "interrupted before this item; nothing changed";
 
+/// The detail of `Verdict::Forget`: the destination is missing, or what is
+/// there is not rustow's any more (a replaced fold link, a source).
+const FORGOTTEN: &str = "gone or replaced; record forgotten, anything there left in place";
+
 /// Outcome of one item, as reported to the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -745,7 +749,7 @@ fn remove_item(
         Verdict::Fail(why) => (Action::Fail, Some(why.clone()), None),
         Verdict::Forget => {
             drop_record(state, &r.dest, cache_dir);
-            (Action::Forget, Some("already gone".into()), None)
+            (Action::Forget, Some(FORGOTTEN.into()), None)
         }
         Verdict::Remove {
             observed,
@@ -853,7 +857,7 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
             let (action, detail) = match &r.verdict {
                 Verdict::Keep(why) => (Action::Conflict, Some(why.clone())),
                 Verdict::Fail(why) => (Action::Fail, Some(why.clone())),
-                Verdict::Forget => (Action::Forget, Some("already gone".into())),
+                Verdict::Forget => (Action::Forget, Some(FORGOTTEN.into())),
                 Verdict::Remove { .. } => (Action::Remove, r.sudo.then(|| "via sudo".to_owned())),
             };
             ItemReport {

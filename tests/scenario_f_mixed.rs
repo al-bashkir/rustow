@@ -371,6 +371,23 @@ fn unlink_forgets_a_fold_record_whose_link_the_user_replaced() {
     assert_eq!(again.code, 2, "record is gone: {again:?}");
 }
 
+/// The user replaced the folded link with an absolute link to the same
+/// directory: the link is still there, so the report must not say "gone".
+#[test]
+fn unlink_says_that_it_leaves_a_replaced_fold_link_in_place() {
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    let link = fx.home_path(".config/nvim");
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(fx.repo.join(".config/nvim"), &link).unwrap();
+    let want = "(link): gone or replaced; record forgotten, anything there left in place\n";
+    let dry = fx.ok(&["unlink", "-n", ".config/nvim"]);
+    assert!(dry.stdout.contains(want), "{dry:?}");
+    let out = fx.ok(&["unlink", ".config/nvim"]);
+    assert!(out.stdout.contains(want), "{out:?}");
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink(), "left in place");
+}
+
 /// The folded link is still in place, but its parent now resolves through
 /// an unsafe symlink: the unfold is a conflict and nothing changes there.
 #[test]
