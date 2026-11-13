@@ -164,6 +164,38 @@ fn each_helper_result_counts_as_it_arrives() {
     assert!(failed.contains("fake-sudo failed (exit status: 1)"), "{out:?}");
 }
 
+/// rustow reads a copy source again when it writes it. Here the source of
+/// the second system file changes while sudo asks for the password (same
+/// length, other bytes): that item fails and nothing is written for it.
+#[test]
+fn a_source_changed_before_the_helper_writes_it_fails() {
+    let s = Sudo::new(&FAKE.replacen('\n', "\nprintf 'Z\\n' > \"$FAKE_SOURCE\"\n", 1));
+    let config = read(&s.fx.repo.join("rustow.toml"));
+    s.fx.write(
+        "rustow.toml",
+        &format!("{config}[[files]]\nsource = \"rustowroot/etc/z.conf\"\n"),
+    );
+    let source = s.fx.write("rustowroot/etc/z.conf", "z\n");
+    let env = [
+        ("RUSTOW_SUDO", s.script.to_str().unwrap()),
+        ("FAKE_SUDO_LOG", s.log.to_str().unwrap()),
+        ("FAKE_SUDO_UNLOCK", s.etc.to_str().unwrap()),
+        ("FAKE_SOURCE", source.to_str().unwrap()),
+    ];
+    let out = s.fx.run_env(&["apply"], &env);
+    assert_eq!(out.code, 4, "{out:?}");
+    let failed = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/z.conf"))
+        .unwrap_or_default();
+    assert!(failed.contains("content changed while rustow was running"), "{out:?}");
+    assert!(!s.fx.root_path("etc/z.conf").exists());
+    assert_eq!(read(&s.fx.root_path("etc/app.conf")), "a\n");
+    let temps: Vec<_> = fs::read_dir(&s.etc).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(temps.len(), 2, "app.conf and t.conf, no temporary file: {temps:?}");
+}
+
 #[test]
 fn home_files_never_use_sudo() {
     let s = Sudo::new(FAKE);

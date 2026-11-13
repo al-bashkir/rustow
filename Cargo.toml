@@ -38,3 +38,7 @@ nix = { version = "0.31.3", features = ["resource", "term"] }
 [profile.release]
 lto = "thin"
 
+# Tests hash a 1.5 GiB file with a debug build: 27 s with unoptimized SHA-256, 0.4 s optimized.
+[profile.dev.package.sha2]
+opt-level = 3
+

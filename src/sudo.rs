@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::execute::{self, Policy};
 use crate::fsops::{DirId, Observed};
+use crate::hash::Hash;
 use crate::plan::{Deploy, with_privilege_hint};
 
 /// The hidden command that the helper runs.
@@ -142,7 +143,18 @@ fn lock_step(
 ) {
     let user = nix::unistd::geteuid().as_raw();
     for job in jobs {
-        if stop.load(Ordering::SeqCst) || send(&mut to, user, job).is_err() {
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
+        // A source that changed since the plan fails its job here; it is not sent.
+        let (mut content, len) = match content_of(job) {
+            Ok(opened) => opened,
+            Err(e) => {
+                done.push(Done::failed(with_privilege_hint(e)));
+                continue;
+            }
+        };
+        if send(&mut to, Header { user, len, job }, &mut content).is_err() {
             return;
         }
         match receive(from) {
@@ -152,21 +164,24 @@ fn lock_step(
     }
 }
 
-/// Writes the frame of `job`: its header line, then its content.
-fn send(to: &mut impl Write, user: u32, job: &Job<&Deploy>) -> io::Result<()> {
-    let content = match job {
-        Job::Write { deploy, .. } => deploy.content.as_deref().map_or(&[][..], Vec::as_slice),
-        Job::Remove { .. } => &[],
-    };
-    let header = Header {
-        user,
-        len: content.len() as u64,
-        job,
-    };
+/// The content of a job and its length: for a write, what
+/// `Deploy::open_content` reads; nothing for a removal.
+fn content_of<'a>(job: &Job<&'a Deploy>) -> Result<(Box<dyn Read + 'a>, u64)> {
+    match job {
+        Job::Write { deploy, .. } => deploy.open_content(),
+        Job::Remove { .. } => Ok((Box::new(io::empty()), 0)),
+    }
+}
+
+/// Writes the frame of a job: its header line, then `header.len` bytes of
+/// `content`. Content that ends early is filled with zero bytes, so the
+/// helper stays in step; its hash check then fails the job.
+fn send(to: &mut impl Write, header: Header<&Job<&Deploy>>, content: &mut dyn Read) -> io::Result<()> {
     let mut line = Zeroizing::new(serde_json::to_vec(&header)?);
     line.push(b'\n');
     to.write_all(&line)?;
-    to.write_all(content)?;
+    let mut filled = content.chain(io::repeat(0)).take(header.len);
+    Hash::copy(&mut filled, header.len, to)?;
     to.flush()
 }
 
@@ -244,19 +259,16 @@ fn read_header(input: &mut impl Read) -> Result<Option<Header<Job<Deploy>>>> {
 }
 
 /// Runs one job with the executor's own code, walking with the trust rule
-/// of the header's user; a relative path is refused.
-fn run(header: Header<Job<Deploy>>, body: &mut impl Read) -> Done {
+/// of the header's user; a relative path is refused. A write streams its
+/// content from `body`.
+fn run(header: Header<Job<Deploy>>, body: &mut dyn Read) -> Done {
     let user = header.user;
     let mut done = Done::failed("the sudo helper takes absolute paths only".into());
     let result = match header.job {
-        Job::Write {
-            mut deploy,
-            policy,
-            backup,
-        } if deploy.path.is_absolute() && backup.is_absolute() => content(body, header.len).and_then(|bytes| {
-            deploy.content = Some(bytes);
-            execute::write_dest(&deploy, policy, &backup, user, &mut done.created_dirs)
-        }),
+        Job::Write { deploy, policy, backup } if deploy.path.is_absolute() && backup.is_absolute() => {
+            let content = (body, header.len);
+            execute::write_dest(&deploy, content, policy, &backup, user, &mut done.created_dirs)
+        }
         Job::Remove {
             path,
             dir_id,
@@ -269,17 +281,6 @@ fn run(header: Header<Job<Deploy>>, body: &mut impl Read) -> Done {
     };
     done.result = result.map_err(with_privilege_hint);
     done
-}
-
-/// All `len` content bytes of a frame; an error when the input ends first.
-fn content(body: &mut impl Read, len: u64) -> Result<Zeroizing<Vec<u8>>> {
-    let mut bytes = Zeroizing::new(Vec::new());
-    body.read_to_end(&mut bytes)
-        .map_err(|e| Error::Failed(format!("read the sudo jobs: {e}")))?;
-    if bytes.len() as u64 != len {
-        return Err(Error::Failed("the input ends inside a job".into()));
-    }
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -321,6 +322,13 @@ mod tests {
         (t, p)
     }
 
+    /// Appends the frame of `job` to `input`, as rustow sends it.
+    fn frame(input: &mut Vec<u8>, job: &Job<&Deploy>) {
+        let (mut content, len) = content_of(job).unwrap();
+        let header = Header { user: me(), len, job };
+        send(input, header, &mut content).unwrap();
+    }
+
     /// A job that removes the file `path`, as planned now.
     fn remove(path: &Path) -> Job<&'static Deploy> {
         let parent = nix::sys::stat::stat(path.parent().unwrap()).unwrap();
@@ -342,7 +350,7 @@ mod tests {
         let mut input = Vec::new();
         for name in ["a", "b", "c"] {
             fs::write(d.join(name), name).unwrap();
-            send(&mut input, me(), &remove(&d.join(name))).unwrap();
+            frame(&mut input, &remove(&d.join(name)));
         }
         let mut output = Breaks {
             lines: 1,
@@ -370,7 +378,7 @@ mod tests {
             backup: d.join("bk"),
         };
         let mut input = Vec::new();
-        send(&mut input, me(), &job).unwrap();
+        frame(&mut input, &job);
         input.truncate(input.len() - 4);
         let mut output = Vec::new();
         serve_on(&mut input.as_slice(), &mut output).unwrap();
@@ -395,9 +403,9 @@ mod tests {
             policy: Policy::Abort,
             backup: "relative".into(),
         };
-        send(&mut input, me(), &job).unwrap();
+        frame(&mut input, &job);
         fs::write(d.join("a"), "a").unwrap();
-        send(&mut input, me(), &remove(&d.join("a"))).unwrap();
+        frame(&mut input, &remove(&d.join("a")));
         let mut output = Vec::new();
         serve_on(&mut input.as_slice(), &mut output).unwrap();
         let lines: Vec<Done> = output

@@ -4,11 +4,12 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
-use crate::fsops::{self, Dir, DirId, Observed};
+use crate::fsops::{self, Dir, DirId, FileMeta, Observed};
 use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
@@ -303,8 +304,10 @@ fn sudo_report(report: &mut ItemReport, result: std::result::Result<Option<Strin
 /// The cache entry first, so that a link to it never dangles; then the destination.
 fn apply(d: &Deploy, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
     let cached = apply_cache(d, item, run)?;
+    let (mut from, len) = d.open_content()?;
     let mut created = Vec::new();
-    let written = write_dest(d, run.policy, &backup_path(run, item, false), me(), &mut created);
+    let backup = backup_path(run, item, false);
+    let written = write_dest(d, (&mut from, len), run.policy, &backup, me(), &mut created);
     state.created_dirs.extend(created);
     let extra = written?;
     state.entries.insert(item.dest.clone(), d.record.clone());
@@ -321,17 +324,20 @@ fn me() -> u32 {
 /// directories in it, then makes the planned change and checks it, all
 /// through the open directory. When the item fails, it removes the empty
 /// directories it created, deepest first. `created` gets the created
-/// directories that remain. The sudo helper runs it as root, with `me` the
-/// user who made the plan.
+/// directories that remain. `content` is the reader and length of the new
+/// file (`Deploy::open_content`); the write checks it against the planned
+/// hash. The sudo helper runs it as root, with `me` the user who made the
+/// plan and the content from its input.
 pub fn write_dest(
     d: &Deploy,
+    content: (&mut dyn Read, u64),
     policy: Policy,
     backup: &Path,
     me: u32,
     created: &mut Vec<PathBuf>,
 ) -> Result<Option<String>> {
     let mut made = Vec::new();
-    let done = write_in(d, policy, backup, me, &mut made);
+    let done = write_in(d, content, policy, backup, me, &mut made);
     if done.is_err() {
         let gone = fsops::remove_empty(made.iter().rev().map(PathBuf::as_path), me);
         made.truncate(made.len() - gone.len());
@@ -341,14 +347,21 @@ pub fn write_dest(
 }
 
 /// `write_dest` without the cleanup; `made` gets each directory it creates.
-fn write_in(d: &Deploy, policy: Policy, backup: &Path, me: u32, made: &mut Vec<PathBuf>) -> Result<Option<String>> {
+fn write_in(
+    d: &Deploy,
+    content: (&mut dyn Read, u64),
+    policy: Policy,
+    backup: &Path,
+    me: u32,
+    made: &mut Vec<PathBuf>,
+) -> Result<Option<String>> {
     let (parent, name) = fsops::split(&d.path)?;
     let (base, missing) = match &d.missing_dirs {
         Some((existing, missing)) => (existing.as_path(), missing.as_slice()),
         None => (parent, &[][..]),
     };
     let dir = make_dirs(fsops::open_planned(base, d.dir_id, me)?, missing, d.dir_mode, me, made)?;
-    let detail = apply_dest(&dir, name, d, policy, backup)?;
+    let detail = apply_dest(&dir, name, d, content, policy, backup)?;
     verify(&dir, name, d)?;
     Ok(detail)
 }
@@ -379,44 +392,67 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
         detail = Some(backup(&dir, name, &backup_path(run, item, true))?);
     }
-    dir.write(name, &cache.bytes, 0o600, (None, None), true)?;
+    let meta = FileMeta {
+        mode: Some(0o600),
+        ..FileMeta::default()
+    };
+    let want = (&cache.hash, cache.content.size());
+    dir.write(name, &mut cache.content.open()?, want, meta, true)?;
     Ok(detail)
 }
 
 /// Performs the planned decision on `name` in `dir` (the caller already
 /// checked that the policy allows it); returns the backup note, if any.
-fn apply_dest(dir: &Dir, name: &OsStr, d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
+fn apply_dest(
+    dir: &Dir,
+    name: &OsStr,
+    d: &Deploy,
+    content: (&mut dyn Read, u64),
+    policy: Policy,
+    backup: &Path,
+) -> Result<Option<String>> {
     match d.decision {
-        Decision::Create => put(dir, name, d, false).map(|()| None),
-        Decision::Update => update(dir, name, d).map(|()| None),
-        Decision::Conflict(_) => replace_conflicting(dir, name, d, policy, backup),
+        Decision::Create => put(dir, name, d, content, false).map(|()| None),
+        Decision::Update => update(dir, name, d, content).map(|()| None),
+        Decision::Conflict(_) => replace_conflicting(dir, name, d, content, policy, backup),
         Decision::FixMetadata => fix_metadata(dir, name, d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
 }
 
 /// Replaces rustow's own unchanged object at the destination.
-fn update(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
+fn update(dir: &Dir, name: &OsStr, d: &Deploy, content: (&mut dyn Read, u64)) -> Result<()> {
     recheck(dir, name, &d.path, &d.observed)?;
-    put(dir, name, d, true)
+    put(dir, name, d, content, true)
 }
 
 /// Moves away (backup) or removes the conflicting object, then creates.
-fn replace_conflicting(dir: &Dir, name: &OsStr, d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
+fn replace_conflicting(
+    dir: &Dir,
+    name: &OsStr,
+    d: &Deploy,
+    content: (&mut dyn Read, u64),
+    policy: Policy,
+    backup: &Path,
+) -> Result<Option<String>> {
     recheck(dir, name, &d.path, &d.observed)?;
     let detail = clear_conflict(dir, name, policy, backup)?;
-    put(dir, name, d, false)?;
+    put(dir, name, d, content, false)?;
     Ok(detail)
 }
 
 /// Writes the desired symlink or file. `replace` replaces rustow's own
 /// object there; otherwise anything that appeared since planning fails it.
-fn put(dir: &Dir, name: &OsStr, d: &Deploy, replace: bool) -> Result<()> {
+fn put(dir: &Dir, name: &OsStr, d: &Deploy, (from, len): (&mut dyn Read, u64), replace: bool) -> Result<()> {
     match &d.desired {
         Desired::Symlink(text) => dir.symlink(name, text, replace),
-        Desired::File { meta, .. } => {
-            let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
-            dir.write(name, bytes, meta.mode.unwrap_or(d.file_mode), d.file_owner, replace)
+        Desired::File { hash, meta } => {
+            let meta = FileMeta {
+                mode: meta.mode.or(Some(d.file_mode)),
+                uid: d.file_owner.0,
+                gid: d.file_owner.1,
+            };
+            dir.write(name, from, (hash, len), meta, replace)
         }
     }
 }
@@ -678,7 +714,7 @@ pub(crate) mod tests {
             desired,
             observed: Observed::Missing,
             decision: Decision::Create,
-            content: content.map(|c| zeroize::Zeroizing::new(c.to_vec())),
+            content: content.map(|c| crate::plan::Content::Generated(zeroize::Zeroizing::new(c.to_vec()))),
             file_mode: 0o644,
             file_owner: (None, None),
             cache: None,
@@ -752,10 +788,13 @@ pub(crate) mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
         let me = nix::unistd::geteuid().as_raw();
-        let below = |want: &[u8], owner| {
+        let below = |uid, owner| {
             let file = Desired::File {
-                hash: Hash::of(want),
-                meta: FileMeta::default(),
+                hash: Hash::of(b"new"),
+                meta: FileMeta {
+                    uid,
+                    ..FileMeta::default()
+                },
             };
             let mut d = create(&base.join("x"), file, Some(b"new"));
             d.path = base.join("a/b/x");
@@ -763,16 +802,51 @@ pub(crate) mod tests {
             d.file_owner = owner;
             d
         };
+        let write = |d: &Deploy, created: &mut Vec<PathBuf>| {
+            let (mut from, len) = d.open_content().unwrap();
+            write_dest(d, (&mut from, len), Policy::Abort, base, me, created)
+        };
+        // The owner is not set, so the check after the write fails; the file stays.
         let mut created = Vec::new();
-        let e = write_dest(&below(b"other", (None, None)), Policy::Abort, base, me, &mut created).unwrap_err();
+        let e = write(&below(Some(me + 1), (None, None)), &mut created).unwrap_err();
         assert!(e.to_string().contains("does not match the planned result"), "{e}");
         assert_eq!(created, [base.join("a"), base.join("a/b")], "a/b/x stays");
         if me != 0 {
             fs::remove_dir_all(base.join("a")).unwrap();
             created.clear();
-            let root_owned = below(b"new", (Some(0), None));
-            assert!(write_dest(&root_owned, Policy::Abort, base, me, &mut created).is_err());
+            assert!(write(&below(Some(0), (Some(0), None)), &mut created).is_err());
             assert!(created.is_empty() && !base.join("a").exists());
         }
+    }
+
+    /// Content with another hash than planned never replaces the file, and
+    /// leaves no temporary file.
+    #[test]
+    fn content_that_changed_since_planning_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = Desired::File {
+            hash: Hash::of(b"planned"),
+            meta: FileMeta::default(),
+        };
+        let mut d = create(&dir.path().join("a"), file, Some(b"changed"));
+        let me = nix::unistd::geteuid().as_raw();
+        let (mut from, len) = d.open_content().unwrap();
+        let e = write_dest(&d, (&mut from, len), Policy::Abort, dir.path(), me, &mut Vec::new()).unwrap_err();
+        assert!(
+            e.to_string()
+                .ends_with("a: content changed while rustow was running; left unchanged"),
+            "{e}"
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        drop(from);
+        let source = dir.path().join("source");
+        fs::write(&source, b"planned").unwrap();
+        d.content = Some(crate::plan::Content::Source { path: source, len: 6 });
+        let e = d.open_content().err().unwrap();
+        assert!(
+            e.to_string()
+                .contains("source: content changed while rustow was running"),
+            "{e}"
+        );
     }
 }

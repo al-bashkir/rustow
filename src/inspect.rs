@@ -3,22 +3,27 @@
 //! content).
 
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
 use crate::config::CONFIG_FILE;
 use crate::diff;
-use crate::error::Result;
+use crate::error::{IoContext, Result};
 use crate::execute::{Action, ItemReport};
 use crate::fsops::{self, FileMeta, Observed};
+use crate::hash::Hash;
 use crate::paths::RelPath;
-use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
+use crate::plan::{Conflict, Content, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::{self, Printer, shown};
 use crate::source::{Discovery, Mode, Selector, SkipKind, Skipped, check_collisions, shown_label};
 use crate::state::{Record, State};
 use crate::template;
+
+/// The largest file that `diff` shows; a larger one gets a line with the sizes.
+const DIFF_MAX: u64 = 1 << 20;
 
 /// One differing item, as `diff` shows it.
 struct Shown<'a> {
@@ -135,22 +140,22 @@ fn describe(label: &str, d: &Deploy) -> Result<(String, bool)> {
                 ));
             }
             if let Some(cache) = &d.cache {
-                let current = current_bytes(&cache.path, &cache.observed)?;
-                binary |= diff::is_binary(current.as_deref(), Some(&cache.bytes));
-                out.push_str(&diff::render(label, current.as_deref(), Some(&cache.bytes)));
+                let (text, bin) =
+                    content_diff(label, &cache.path, &cache.observed, (&cache.hash, Some(&cache.content)))?;
+                binary |= bin;
+                out.push_str(&text);
             }
         }
-        Desired::File { meta, .. } => {
+        Desired::File { meta, hash } => {
             if !matches!(d.observed, Observed::File { .. } | Observed::Missing) {
                 out.push_str(&format!(
                     "{label}: {}; would become a regular file\n",
                     what(&d.observed)
                 ));
             }
-            let current = current_bytes(&d.path, &d.observed)?;
-            let desired = d.content.as_deref().map(Vec::as_slice);
-            binary |= diff::is_binary(current.as_deref(), desired);
-            out.push_str(&diff::render(label, current.as_deref(), desired));
+            let (text, bin) = content_diff(label, &d.path, &d.observed, (hash, d.content.as_ref()))?;
+            binary |= bin;
+            out.push_str(&text);
             if let Observed::File { mode, uid, gid, .. } = d.observed
                 && !meta.matches(mode, uid, gid)
             {
@@ -165,11 +170,32 @@ fn describe(label: &str, d: &Deploy) -> Result<(String, bool)> {
     Ok((out, binary))
 }
 
-fn current_bytes(path: &Path, observed: &Observed) -> Result<Option<Vec<u8>>> {
-    match observed {
-        Observed::File { .. } => fsops::read_file(path).map(Some),
-        _ => Ok(None),
+/// The diff of the current file at `path` (seen as `observed`) against the
+/// wanted content, and whether it is binary. It reads content only when
+/// the hashes differ, and only up to `DIFF_MAX` bytes on each side.
+fn content_diff(
+    label: &str,
+    path: &Path,
+    observed: &Observed,
+    (hash, want): (&Hash, Option<&Content>),
+) -> Result<(String, bool)> {
+    let current = match observed {
+        Observed::File { hash: have, .. } if have == hash => return Ok((String::new(), false)),
+        Observed::File { .. } => Some(fs::symlink_metadata(path).ctx(|| format!("inspect {}", path.display()))?),
+        _ => None,
+    };
+    let sizes = (
+        current.as_ref().map_or(0, fs::Metadata::len),
+        want.map_or(0, Content::size),
+    );
+    if sizes.0.max(sizes.1) > DIFF_MAX {
+        let text = format!("{label}: differ ({} → {} bytes); too large to show\n", sizes.0, sizes.1);
+        return Ok((text, false));
     }
+    let current = current.map(|_| fsops::read_file(path)).transpose()?;
+    let desired = want.map(Content::read).transpose()?;
+    let (current, desired) = (current.as_deref(), desired.as_deref());
+    Ok((diff::render(label, current, desired), diff::is_binary(current, desired)))
 }
 
 fn what(observed: &Observed) -> String {

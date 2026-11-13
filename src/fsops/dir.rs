@@ -5,7 +5,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File, Permissions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
@@ -260,14 +260,13 @@ impl Dir {
         sys(readlinkat(&self.fd, name)).ctx(|| format!("read symlink {}", self.entry(name).display()))
     }
 
-    /// Hash and metadata of the regular file `name`.
+    /// Hash (streamed) and metadata of the regular file `name`.
     fn observe_file(&self, name: &OsStr) -> Result<Observed> {
         let (mut file, meta) = self.open_regular(name)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
+        let hash = Hash::copy(&mut file, meta.len(), &mut io::sink())
             .ctx(|| format!("read {}", self.entry(name).display()))?;
         Ok(Observed::File {
-            hash: Hash::of(&bytes),
+            hash,
             mode: meta.mode() & 0o7777,
             uid: meta.uid(),
             gid: meta.gid(),
@@ -289,16 +288,20 @@ impl Dir {
         Ok((file, meta))
     }
 
-    /// Writes `bytes` to `name` through a new temporary file in this
-    /// directory: private (0600) from creation, then owner, `mode` and
-    /// fsync, then renamed to `name`. `replace` replaces a file or symlink
-    /// at `name` (never a directory); otherwise anything there fails it.
+    /// Writes `want.1` bytes from `from` to `name` through a new temporary
+    /// file in this directory: private (0600) from creation, streamed
+    /// (`Hash::copy`), then owner and mode of `meta`, and fsync, then
+    /// renamed to `name`. Content with another hash than `want.0` fails
+    /// with "content changed while rustow was running", and short content
+    /// fails too: the temporary file goes, `name` stays as it was.
+    /// `replace` replaces a file or symlink at `name` (never a directory);
+    /// otherwise anything there fails it.
     pub fn write(
         &self,
         name: &OsStr,
-        bytes: &[u8],
-        mode: u32,
-        owner: (Option<u32>, Option<u32>),
+        from: &mut dyn Read,
+        want: (&Hash, u64),
+        meta: FileMeta,
         replace: bool,
     ) -> Result<()> {
         let dest = self.entry(name);
@@ -306,7 +309,7 @@ impl Dir {
         let flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
         let fd = sys(openat(&self.fd, temp.as_str(), flags, Mode::from_bits_truncate(0o600)))
             .ctx(|| format!("write {}", dest.display()))?;
-        let done = fill(File::from(fd), &dest, bytes, mode, owner).and_then(|()| {
+        let done = fill(File::from(fd), &dest, from, want, meta).and_then(|()| {
             self.publish(OsStr::new(&temp), name, replace)
                 .ctx(|| format!("replace {}", dest.display()))
         });
@@ -496,10 +499,17 @@ fn missing(dir: Dir, rest: &[&OsStr]) -> Walked {
     Walked::Missing { dir, missing }
 }
 
-/// Writes the content, sets owner and mode, and syncs the temporary file of `dest`.
-fn fill(mut file: File, dest: &Path, bytes: &[u8], mode: u32, owner: (Option<u32>, Option<u32>)) -> Result<()> {
-    file.write_all(bytes).ctx(|| format!("write {}", dest.display()))?;
-    chown_chmod(&file, dest, owner, Some(mode))?;
+/// Streams the content, checks its hash, sets owner and mode, and syncs
+/// the temporary file of `dest`.
+fn fill(mut file: File, dest: &Path, from: &mut dyn Read, (hash, len): (&Hash, u64), meta: FileMeta) -> Result<()> {
+    let written = Hash::copy(from, len, &mut file).ctx(|| format!("write {}", dest.display()))?;
+    if written != *hash {
+        return Err(Error::Failed(format!(
+            "{}: content changed while rustow was running; left unchanged",
+            dest.display()
+        )));
+    }
+    chown_chmod(&file, dest, (meta.uid, meta.gid), meta.mode)?;
     file.sync_all().ctx(|| format!("write {}", dest.display()))
 }
 

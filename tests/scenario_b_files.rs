@@ -424,6 +424,26 @@ fn check_reports_unknown_owner_in_files_entry() {
     assert!(!fx.home_path(SRC).exists());
 }
 
+/// `diff` shows content only up to 1 MiB on each side; a larger file gets
+/// a summary line with both sizes.
+#[test]
+fn diff_summarizes_a_large_text_file() {
+    let fx = Fixture::new();
+    let line = "a line of text that is long enough\n";
+    let big = line.repeat((2 << 20) / line.len() + 1);
+    fx.write(".big", &big);
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \".big\"\n");
+    let out = fx.run(&["diff"]);
+    assert_eq!(out.code, 1, "{:?}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!("~/.big: differ (0 → {} bytes); too large to show\n", big.len())
+    );
+    fx.ok(&["apply"]);
+    let same = fx.run(&["diff"]);
+    assert_eq!((same.code, same.stdout.as_str()), (0, ""), "equal content is not read");
+}
+
 /// A deployed copy whose source is removed is orphaned, as a link or a
 /// template is: the registration still names it, but it is not a source.
 #[test]

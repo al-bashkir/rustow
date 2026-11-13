@@ -84,7 +84,7 @@ fn open_nonblocking(path: &Path, flags: OFlag) -> Result<(File, fs::Metadata)> {
 }
 
 /// Opens a regular file for reading; fails on a symlink or special file.
-fn open_regular(path: &Path) -> Result<(File, fs::Metadata)> {
+pub fn open_regular(path: &Path) -> Result<(File, fs::Metadata)> {
     let (file, meta) = open_nonblocking(path, OFlag::O_NOFOLLOW)?;
     if !meta.is_file() {
         return Err(Error::Failed(format!("{} is not a regular file", path.display())));
@@ -126,12 +126,26 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Hash and length of a regular file, without following a symlink at
+/// `path`. The file is streamed (`Hash::copy`), so its size does not count.
+pub fn hash_file(path: &Path) -> Result<(Hash, u64)> {
+    let (mut file, meta) = open_regular(path)?;
+    let hash = Hash::copy(&mut file, meta.len(), &mut io::sink()).ctx(|| format!("read {}", path.display()))?;
+    Ok((hash, meta.len()))
+}
+
 /// Replaces `dest` with `bytes` (`Dir::write`) in the directory of `dest`,
 /// walked for the current user. A symlink at `dest` is replaced, not followed.
 pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let dest = std::path::absolute(dest).ctx(|| format!("write {}", dest.display()))?;
     let (parent, name) = split(&dest)?;
-    open_ready(parent, geteuid().as_raw())?.write(name, bytes, mode, (uid, gid), true)
+    let meta = FileMeta {
+        mode: Some(mode),
+        uid,
+        gid,
+    };
+    let want = (&Hash::of(bytes), bytes.len() as u64);
+    open_ready(parent, geteuid().as_raw())?.write(name, &mut &bytes[..], want, meta, true)
 }
 
 /// Moves the file or symlink `name` of `dir` to `backup`, whose parent is
@@ -493,14 +507,24 @@ mod tests {
         OsStr::new(s)
     }
 
+    /// `Dir::write` of `bytes` with `mode`.
+    fn put(dir: &Dir, name: &str, bytes: &[u8], mode: u32, replace: bool) -> Result<()> {
+        let meta = FileMeta {
+            mode: Some(mode),
+            ..FileMeta::default()
+        };
+        let want = (&Hash::of(bytes), bytes.len() as u64);
+        dir.write(OsStr::new(name), &mut &bytes[..], want, meta, replace)
+    }
+
     #[test]
     fn new_file_and_link_never_replace_anything() {
         let (_t, d) = tmp();
         let dir = open(&d);
-        dir.write(name("f"), b"one", 0o640, (None, None), false).unwrap();
+        put(&dir, "f", b"one", 0o640, false).unwrap();
         assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
         assert_eq!(mode_of(&d.join("f")), 0o640);
-        let e = dir.write(name("f"), b"two", 0o644, (None, None), false).unwrap_err();
+        let e = put(&dir, "f", b"two", 0o644, false).unwrap_err();
         assert!(
             e.to_string().starts_with(&format!("replace {}", d.join("f").display())),
             "{e}"
@@ -608,7 +632,7 @@ mod tests {
         let dir = private_tree(&d.join("c"), &d.join("c/x/y")).unwrap();
         assert_eq!(dir.path, d.join("c/x/y"));
         assert_eq!(mode_of(&d.join("c/x/y")), 0o700);
-        dir.write(OsStr::new("f"), b"in", 0o600, (None, None), true).unwrap();
+        put(&dir, "f", b"in", 0o600, true).unwrap();
         assert_eq!(fs::read(d.join("c/x/y/f")).unwrap(), b"in");
         std::os::unix::fs::symlink(d.join("elsewhere"), d.join("c/l")).unwrap();
         assert!(private_tree(&d.join("c"), &d.join("c/l/y")).is_err());

@@ -144,6 +144,8 @@ MODIFIED means that the destination, or the cache entry behind rustow's link, ch
 
 `diff` uses the same plan as `apply`. It prints unified diffs for copies and cache entries. For symlinks and metadata it prints descriptive lines, for example `~/.x: metadata mode 0600 uid 1000 gid 1000 -> mode 0640`. It summarizes binary files. It can print secrets. Exit 0, 1 or 4.
 
+`diff` reads the content of a file only when its hash differs from the wanted one. It shows content up to 1 MiB. When the current file or the wanted content is larger, it prints one line with both sizes instead, for example "~/.big: differ (0 → 2097152 bytes); too large to show". A missing file counts as 0 bytes.
+
 When the source and the destination both changed, `diff` prints "<dest>: conflict: source and destination both changed since rustow last applied it" before the content diff. When rustow cannot render or decrypt an item, it prints "rustow: <source>: cannot compute desired content: <message>" to stderr, and the exit code is 4.
 
 `diff --json` and `file diff --json` print `{"items": [...], "warnings": [...]}`, with one object for each item that differs: `dest`, `source`, `mode`, `kind`, `detail`, `binary` and `diff`. `kind` is the status word in lower case (`missing`, `outdated`, `modified`, `conflict`, …), or `metadata` when only the metadata differs. A render or decrypt error has the kind `error`, with the message in `detail`. The `diff` field holds the content, so it can hold secrets. The exit codes are the same: 0, 1 or 4.

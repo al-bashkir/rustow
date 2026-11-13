@@ -46,6 +46,7 @@ A registration whose file no longer exists gives a warning, for example "warning
 - An update keeps the mode, owner and group of the destination (template metadata can set them explicitly).
 - A copy from an encrypted source gets 0600.
 - rustow writes a temporary file in the same directory (mode 0600), sets owner and mode, calls `fsync`, then renames it. It never follows a symlink at the destination.
+- The plan keeps only the hash and the length of the source. rustow reads the source again when it writes the copy, a little at a time, so a large file needs little memory. When the source changed after the plan, the item fails with "content changed while rustow was running; left unchanged", and the destination stays as it was. Run the command again.
 - If you change a copy by hand, rustow reports MODIFIED and a conflict. It does not overwrite your change unless you use `--backup` or `--force`.
 - To replace a regular file with a symlink (copy to link), you must use `--backup` or `--force`. To replace rustow's own symlink with a file is automatic.
 - An exception: you edited a cache entry through rustow's link, then you switch the source to a copy (`file add x.age`, or a `[[template_rules]]` entry). Then `apply` reports a conflict: "cache entry: destination was modified since rustow last applied it". `--backup` saves your edit under `<state_dir>/backups/<repo-id>/<time>/cache/<dest>`. `--force` discards it.

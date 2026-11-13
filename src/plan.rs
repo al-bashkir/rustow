@@ -1,8 +1,10 @@
 //! Deployment planning. `decide` is the pure rule table that says what
 //! may happen at one path; the planner feeds it real filesystem state.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -188,11 +190,57 @@ pub fn recorded(record: Option<&Record>) -> Recorded<'_> {
     }
 }
 
+/// Where the content of a planned regular file comes from.
+#[derive(Debug)]
+pub enum Content {
+    /// The repository file `path` of `len` bytes. The plan keeps only its
+    /// hash; the file is read again when it is written.
+    Source { path: PathBuf, len: u64 },
+    /// Rendered or decrypted bytes.
+    // shortcut: generated content stays in memory from the plan to the
+    // write, so memory grows with the total generated content of a run;
+    // render or decrypt again at write time when that becomes too much.
+    Generated(Zeroizing<Vec<u8>>),
+}
+
+impl Content {
+    pub fn size(&self) -> u64 {
+        match self {
+            Content::Source { len, .. } => *len,
+            Content::Generated(bytes) => bytes.len() as u64,
+        }
+    }
+
+    /// A reader of the content. A source that has another length now
+    /// fails with "content changed while rustow was running".
+    pub fn open(&self) -> Result<Box<dyn Read + '_>> {
+        match self {
+            Content::Generated(bytes) => Ok(Box::new(bytes.as_slice())),
+            Content::Source { path, len } => match fsops::open_regular(path)? {
+                (file, meta) if meta.len() == *len => Ok(Box::new(file)),
+                _ => Err(Error::Failed(format!(
+                    "{}: content changed while rustow was running; left unchanged",
+                    path.display()
+                ))),
+            },
+        }
+    }
+
+    /// All of the content in memory, for `diff`.
+    pub fn read(&self) -> Result<Cow<'_, [u8]>> {
+        match self {
+            Content::Generated(bytes) => Ok(Cow::Borrowed(bytes)),
+            Content::Source { path, .. } => fsops::read_file(path).map(Cow::Owned),
+        }
+    }
+}
+
 /// A planned cache write behind a cache-backed destination.
 #[derive(Debug)]
 pub struct CacheWrite {
     pub path: PathBuf,
-    pub bytes: Zeroizing<Vec<u8>>,
+    pub hash: Hash,
+    pub content: Content,
     pub observed: Observed,
     pub decision: Decision,
 }
@@ -215,7 +263,7 @@ pub struct Deploy {
     /// Content for a regular-file destination. The sudo helper gets it
     /// after the JSON of the job, as raw bytes.
     #[serde(skip)]
-    pub content: Option<Zeroizing<Vec<u8>>>,
+    pub content: Option<Content>,
     /// Mode for a regular-file destination when `desired` sets none.
     pub file_mode: u32,
     /// Owner and group for a regular-file destination (see `kept_owner`).
@@ -231,6 +279,19 @@ pub struct Deploy {
     /// A system file that the user cannot write (or must give to another
     /// owner): the executor writes it through the sudo helper (`needs_sudo`).
     pub sudo: bool,
+}
+
+impl Deploy {
+    /// A reader of the content that the planned change writes (a new or
+    /// replaced regular file), and its length; empty for any other change.
+    pub fn open_content(&self) -> Result<(Box<dyn Read + '_>, u64)> {
+        match (self.decision, &self.content) {
+            (Decision::Create | Decision::Update | Decision::Conflict(_), Some(content)) => {
+                Ok((content.open()?, content.size()))
+            }
+            _ => Ok((Box::new(std::io::empty()), 0)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -268,7 +329,7 @@ pub struct Plan {
 /// What the desired destination looks like for one source.
 struct Want {
     desired: Desired,
-    content: Option<Zeroizing<Vec<u8>>>,
+    content: Option<Content>,
     file_mode: u32,
     cache: Option<(PathBuf, Zeroizing<Vec<u8>>)>,
     record: Record,
@@ -855,8 +916,9 @@ pub fn dir_mode(source: &Source) -> u32 {
 /// simply be refreshed.
 fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>, links: bool) -> Result<CacheWrite> {
     let observed = fsops::inspect(&path)?;
+    let hash = Hash::of(&bytes);
     let desired = Desired::File {
-        hash: Hash::of(&bytes),
+        hash: hash.clone(),
         meta: FileMeta::default(),
     };
     let linked = record.is_some_and(|r| r.link_target.is_some() && r.cache_path.as_ref() == Some(&path));
@@ -869,7 +931,8 @@ fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>,
     let decision = decide(&desired, &observed, previous);
     Ok(CacheWrite {
         path,
-        bytes,
+        hash,
+        content: Content::Generated(bytes),
         observed,
         decision,
     })
@@ -883,36 +946,43 @@ fn broken_link_detail(path: &Path, observed: &Observed, decision: Decision) -> O
     (dangling && matches!(decision, Decision::Conflict(_))).then(|| format!("broken symlink to {}", text.display()))
 }
 
-/// Desired state of one source's destination at `path`.
+/// Desired state of one source's destination at `path`. A link or a plain
+/// copy only hashes its source (streamed); a decrypted or rendered source
+/// is read whole.
 fn want(ctx: &Context, source: &Source, path: &Path) -> std::result::Result<Want, String> {
     let source_abs = ctx.root.join(source.path.as_path());
-    // A folded directory has no content of its own.
-    let bytes = match source_abs.is_dir() {
-        true => Vec::new(),
-        false => fsops::read_file(&source_abs).map_err(|e| e.to_string())?,
-    };
-    let record = base_record(source, &bytes);
+    let failed = |e: Error| e.to_string();
     match &source.mode {
-        Mode::Link => Ok(want_link(path, &source_abs, record)),
-        Mode::FileCopy(meta) => want_file_copy(&source_abs, bytes, meta, record),
+        Mode::Link => {
+            // A folded directory has no content of its own.
+            let hash = match source_abs.is_dir() {
+                true => Hash::of(b""),
+                false => fsops::hash_file(&source_abs).map_err(failed)?.0,
+            };
+            Ok(want_link(path, &source_abs, base_record(source, hash)))
+        }
+        Mode::FileCopy(meta) => want_file_copy(source, source_abs, meta),
         Mode::DecryptLink(backend) | Mode::DecryptCopy(backend, _) => {
+            let bytes = fsops::read_file(&source_abs).map_err(failed)?;
             let plaintext = crypto::decrypt(*backend, &source.path, &bytes, ctx)?;
-            transformed(ctx, source, path, plaintext, record)
+            transformed(ctx, source, path, plaintext, base_record(source, Hash::of(&bytes)))
         }
         Mode::TemplateLink(backend) | Mode::TemplateCopy(backend, _) => {
+            let bytes = fsops::read_file(&source_abs).map_err(failed)?;
+            let record = base_record(source, Hash::of(&bytes));
             want_template(ctx, source, path, *backend, bytes, record)
         }
     }
 }
 
 /// The record of a source before any mode-specific field is filled in.
-fn base_record(source: &Source, bytes: &[u8]) -> Record {
+fn base_record(source: &Source, source_hash: Hash) -> Record {
     Record {
         source: source.path.clone(),
         scope: source.scope,
         mode: source.mode.label().to_owned(),
         backend: source.mode.backend(),
-        source_hash: Hash::of(bytes),
+        source_hash,
         applied_hash: None,
         render_id: None,
         link_target: None,
@@ -938,25 +1008,20 @@ fn want_link(path: &Path, source_abs: &Path, record: Record) -> Want {
     }
 }
 
-/// A plain copy of the repository source. Without an explicit mode, it
-/// gets the mode of the source.
-fn want_file_copy(
-    source_abs: &Path,
-    bytes: Vec<u8>,
-    meta: &Metadata,
-    record: Record,
-) -> std::result::Result<Want, String> {
+/// A plain copy of the repository source, by reference: the plan keeps its
+/// hash and length. Without an explicit mode, it gets the mode of the source.
+fn want_file_copy(source: &Source, source_abs: PathBuf, meta: &Metadata) -> std::result::Result<Want, String> {
     let meta = resolve_meta(meta)?;
-    let mode = fs::symlink_metadata(source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
-    let hash = Hash::of(&bytes);
+    let mode = fs::symlink_metadata(&source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
+    let (hash, len) = fsops::hash_file(&source_abs).map_err(|e| e.to_string())?;
     let record = Record {
         applied_hash: Some(hash.clone()),
-        ..record
+        ..base_record(source, hash.clone())
     };
     let desired = Desired::File { hash, meta };
     Ok(Want {
         desired,
-        content: Some(Zeroizing::new(bytes)),
+        content: Some(Content::Source { path: source_abs, len }),
         file_mode: mode,
         cache: None,
         record,
@@ -1017,7 +1082,7 @@ fn transformed(
         let cache = Some((cache_path, content.clone()));
         Ok(Want {
             desired: Desired::File { hash, meta },
-            content: Some(content),
+            content: Some(Content::Generated(content)),
             file_mode,
             cache,
             record,

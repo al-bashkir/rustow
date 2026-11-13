@@ -59,6 +59,20 @@ fn state_file(fx: &Fixture) -> PathBuf {
         .unwrap()
 }
 
+/// rustow hashes a copy source in small pieces: a source larger than the
+/// memory that rustow may use still plans.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_copy_source_larger_than_memory_plans() {
+    let fx = Fixture::new();
+    let big = fs::File::create(fx.repo.join(".big")).unwrap();
+    big.set_len(3 << 29).unwrap(); // 1.5 GiB, sparse; rustow gets 1 GiB
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \".big\"\n");
+    let out = fx.run_within(60, &["status"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("MISSING ~/.big"), "{out:?}");
+}
+
 #[test]
 fn a_fifo_as_state_file_is_refused() {
     let fx = Fixture::new();
