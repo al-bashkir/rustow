@@ -67,6 +67,10 @@ Path arguments are repository-relative. They are never relative to the current d
 | 2    | Usage or configuration error. A problem with one source is a warning, not exit 2.                                                                                                  |
 | 3    | Conflicts. The default policy deployed the other items. Under `--on-conflict abort` nothing changed.                                                                               |
 | 4    | Runtime or partial failure. This includes render failure, decrypt failure, a destination directory that you cannot write, a state file that rustow cannot write, and interruption. |
+| 130  | A second SIGINT, SIGTERM or SIGHUP while rustow changes files. rustow exits at once.                                                                                               |
+| 141  | The reader of the output closed the pipe, for example `rustow status \| head`.                                                                                                     |
+
+rustow catches SIGINT, SIGTERM and SIGHUP only while it changes files: in `apply`, `link`, `file apply`, `template apply`, `unlink` and `undeploy` after the plan, and in `enc edit`. The first signal stops the run between items (exit 4). A second signal exits at once with 130. At any other time, for example while rustow plans or in a command that only reads, a signal ends rustow with the default action of the signal. The shell then shows 128 plus the number of the signal: 130 for SIGINT, 129 for SIGHUP and 143 for SIGTERM.
 
 ## Skipped sources
 

@@ -15,7 +15,9 @@ use crate::execute::Policy;
     long_about = "Flat-repository dotfiles manager. The repository root mirrors your home \
                   directory; rustowroot/ mirrors /. Without a command, rustow runs `apply`.\n\n\
                   Exit codes: 0 success, 1 differences found, 2 usage or configuration error, \
-                  3 conflicts, 4 runtime or partial failure."
+                  3 conflicts, 4 runtime or partial failure (also a first SIGINT, SIGTERM or SIGHUP \
+                  while files change), 130 a second such signal, 141 a closed output pipe. A signal \
+                  at another time ends rustow with that signal (the shell shows 128 + its number)."
 )]
 pub struct Cli {
     #[command(flatten)]
