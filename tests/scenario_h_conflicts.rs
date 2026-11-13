@@ -125,6 +125,35 @@ fn unlink_removes_only_ours() {
 }
 
 #[test]
+fn removal_honors_abort_and_refuses_backup_and_force() {
+    let fx = two();
+    fx.ok(&["apply"]);
+    fs::remove_file(fx.home_path(".zshrc")).unwrap();
+    fx.write_home(".zshrc", "user replaced it\n");
+    for cmd in [&["undeploy", "-y"][..], &["unlink"]] {
+        let out = fx.run(&[cmd, &["--on-conflict", "abort"]].concat());
+        assert_eq!(out.code, 3, "{cmd:?}\n{out:?}");
+        assert!(out.stdout.contains("conflicts found, nothing written"), "{out:?}");
+        assert!(is_symlink(&fx.home_path(".bashrc")), "abort removes nothing");
+        for flag in [
+            &["--backup"][..],
+            &["--force"],
+            &["--on-conflict", "overwrite"],
+            &["--on-conflict", "backup"],
+        ] {
+            let out = fx.run(&[cmd, flag].concat());
+            assert_eq!(out.code, 2, "{cmd:?} {flag:?}\n{out:?}");
+            assert!(out.stderr.contains(&flag.join(" ")), "{out:?}");
+            assert!(is_symlink(&fx.home_path(".bashrc")), "a refused flag removes nothing");
+        }
+    }
+    assert_eq!(read(&fx.home_path(".zshrc")), "user replaced it\n");
+    let skip = fx.run(&["undeploy", "-y", "--on-conflict", "skip"]);
+    assert_eq!(skip.code, 3, "{skip:?}");
+    assert!(!is_symlink(&fx.home_path(".bashrc")), "skip removes the rest");
+}
+
+#[test]
 fn unlink_removes_created_empty_dirs_only() {
     let fx = Fixture::new();
     fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");

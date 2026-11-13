@@ -453,23 +453,60 @@ fn undeploy(
     selector: Selector,
     ask: bool,
 ) -> Result<i32> {
+    let abort = removal_policy(g, selector)? == Policy::Abort;
     let ctx = open(g, env, printer)?;
     let held = lock(&ctx, printer, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let removals = plan::plan_removal(&ctx, paths, selector, &state)?;
     let predicted = execute::predict_removal(&removals);
-    if g.dry_run {
-        printer.items(&predicted, RunKind::DryRun);
-        return Ok(execute::exit_code(&predicted));
-    }
-    if !confirm_removal(ask, printer, &predicted)? {
-        eprintln!("cancelled, nothing removed");
-        return Ok(0);
+    if let Some(code) = removes_nothing(g.dry_run, (abort, ask), printer, &predicted)? {
+        return Ok(code);
     }
     let stop = interrupt_flag()?;
     forget_links(&mut state, selector, &removals);
     let items = execute::remove(removals, &stop, &mut state, &ctx.cache_dir);
     finish(&ctx, &state, held.as_ref(), printer, &items)
+}
+
+/// The policy of `undeploy` and `unlink`: they never remove a changed
+/// destination, so only `skip` and `abort` apply.
+fn removal_policy(g: &Global, selector: Selector) -> Result<Policy> {
+    let flag = match (g.policy(), g.backup, g.force) {
+        (p @ (Policy::Skip | Policy::Abort), ..) => return Ok(p),
+        (_, true, _) => "--backup",
+        (_, _, true) => "--force",
+        (Policy::Backup, ..) => "--on-conflict backup",
+        _ => "--on-conflict overwrite",
+    };
+    let cmd = if selector == Selector::Link {
+        "unlink"
+    } else {
+        "undeploy"
+    };
+    Err(Error::Usage(format!(
+        "`rustow {cmd}` does not take {flag}: it never removes a destination that changed; \
+         move or remove such a file yourself"
+    )))
+}
+
+/// The exit code of an `undeploy` or `unlink` that removes nothing: a dry
+/// run, a conflict or an error under `abort`, or no "yes" to the question.
+fn removes_nothing(
+    dry_run: bool,
+    (abort, ask): (bool, bool),
+    printer: &Printer,
+    predicted: &[ItemReport],
+) -> Result<Option<i32>> {
+    let blocked = abort && execute::exit_code(predicted) != 0;
+    if dry_run || blocked {
+        printer.items(predicted, if dry_run { RunKind::DryRun } else { RunKind::Blocked });
+        return Ok(Some(execute::exit_code(predicted)));
+    }
+    if !confirm_removal(ask, printer, predicted)? {
+        eprintln!("cancelled, nothing removed");
+        return Ok(Some(0));
+    }
+    Ok(None)
 }
 
 /// With `ask`, shows on stderr what would go and asks on the terminal.
