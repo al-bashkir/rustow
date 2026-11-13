@@ -125,6 +125,10 @@ pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Res
         fsops::ensure_private_dir(&backups)?;
         let kept = backups.join("state-adopted.json");
         fs::rename(&file, &kept).ctx(|| format!("move {} to {}", file.display(), kept.display()))?;
+        // The old lock goes too, unless a run still holds it.
+        if let Ok(lock) = crate::state::lock(&ctx.state_dir, &old_id) {
+            fs::remove_file(&lock.path).ctx(|| format!("remove {}", lock.path.display()))?;
+        }
     }
     let detail = format!("{} records", state.entries.len());
     printer.changes(

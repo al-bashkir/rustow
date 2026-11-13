@@ -86,6 +86,9 @@ fn state_adopt_takes_over_a_moved_repository() {
     assert_eq!(mode(&adopted), 0o600);
     let json: serde_json::Value = serde_json::from_str(&read(&adopted)).unwrap();
     assert_eq!(json["repo"], json!(old_root));
+    let old_id = kept[0].file_name().unwrap().to_str().unwrap().to_owned();
+    let old_lock = fx.state.join("rustow").join(format!("{old_id}.lock"));
+    assert!(!old_lock.exists(), "the lock of the old repository goes too");
 }
 
 #[test]
@@ -112,4 +115,25 @@ fn state_adopt_refuses_what_it_cannot_take_over() {
     let out = fx.run(&["state", "adopt", old_root]);
     assert_eq!(out.code, 4, "{out:?}");
     assert!(out.stderr.contains("move it away"), "{out:?}");
+}
+
+/// `adopt` removes the lock file of the old path only when no run holds it.
+#[test]
+fn state_adopt_keeps_an_old_lock_that_a_run_holds() {
+    let mut fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let lock = fs::read_dir(fx.state.join("rustow"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "lock"))
+        .unwrap();
+    let held = fs::File::open(&lock).unwrap();
+    held.try_lock().unwrap();
+    let old = fx.repo.clone();
+    let new = fx.home.join("dotfiles2");
+    fs::rename(&old, &new).unwrap();
+    (fx.repo, fx.cwd) = (new.clone(), new);
+    fx.ok(&["state", "adopt", old.to_str().unwrap()]);
+    assert!(lock.exists(), "a held lock stays");
 }
