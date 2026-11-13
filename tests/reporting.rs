@@ -83,6 +83,25 @@ fn init_json_lists_changes() {
     assert_eq!(v["dry_run"], false);
 }
 
+/// Without `homedir`, the GPG home comes from `$GNUPGHOME`: a relative one
+/// is refused by that name.
+#[test]
+fn doctor_names_a_relative_gnupghome() {
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[encryption.gpg]\nrecipients = [\"70724AA6092233B04A3002C3F3E77E27DD87359D\"]\n",
+    );
+    let out = fx.run_env(&["doctor"], &[("GNUPGHOME", "rel/gnupg")]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("fail  gpg home: GNUPGHOME must be an absolute path"),
+        "{out:?}"
+    );
+    assert!(!out.stdout.contains("encryption.gpg.homedir"), "{out:?}");
+}
+
 #[test]
 fn doctor_flags_unusable_gpg_home_and_json() {
     let fx = Fixture::new();

@@ -55,7 +55,7 @@ homedir = "~/.gnupg"
 ```
 
 - Recipients are full fingerprints (40 or 64 hex digits). rustow refuses names, emails and short ids.
-- `homedir` is the config value, else `$GNUPGHOME`, else `~/.gnupg`. You must own it. Others must not write to it. It must be outside the repository and the cache.
+- `homedir` is the config value, else `$GNUPGHOME`, else `~/.gnupg`. The config value is absolute or starts with `~/`; `$GNUPGHOME` must be absolute ("GNUPGHOME must be an absolute path"). You must own it. Others must not write to it. It must be outside the repository and the cache.
 - Each fingerprint must match one valid primary key with encryption capability in the local keyring. gpg picks the encryption subkey. A subkey fingerprint is refused: "<fpr> is a subkey fingerprint; configure the primary key fingerprint <primary>".
 - rustow never fetches keys. It runs `gpg` with `--no-options`, so `gpg.conf` has no effect.
 - rustow does not change trust. The key validity must be marginal, full or ultimate. rustow checks this before it encrypts or opens the editor. An untrusted key gives "not trusted" (exit 4).

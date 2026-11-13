@@ -91,14 +91,19 @@ fn age_identities(ctx: &Context) -> std::result::Result<&[Box<dyn ::age::Identit
 
 /// GPG home: `encryption.gpg.homedir`, else `$GNUPGHOME`, else `~/.gnupg`.
 pub fn gpg_homedir(ctx: &Context) -> std::result::Result<PathBuf, String> {
-    let home = match (&ctx.config.encryption.gpg.homedir, std::env::var_os("GNUPGHOME")) {
-        (Some(dir), _) => expand_tilde(dir, &ctx.home),
-        (None, Some(env)) if !env.is_empty() => PathBuf::from(env),
-        _ => ctx.home.join(".gnupg"),
+    // The error names where the relative path came from.
+    let (home, relative) = match (&ctx.config.encryption.gpg.homedir, std::env::var_os("GNUPGHOME")) {
+        (Some(dir), _) => (
+            expand_tilde(dir, &ctx.home),
+            "encryption.gpg.homedir must be absolute or start with ~/",
+        ),
+        (None, Some(env)) if !env.is_empty() => (PathBuf::from(env), "GNUPGHOME must be an absolute path"),
+        // `ctx.home` is canonical.
+        _ => return Ok(ctx.home.join(".gnupg")),
     };
     match home.is_absolute() {
         true => Ok(home),
-        false => Err("encryption.gpg.homedir must be absolute or start with ~/".into()),
+        false => Err(relative.into()),
     }
 }
 
