@@ -36,7 +36,8 @@ impl Hash {
     pub fn copy(from: &mut dyn Read, len: u64, to: &mut dyn Write) -> io::Result<Hash> {
         let mut hasher = Sha256::new();
         hasher.update(len.to_le_bytes());
-        let mut buf = Zeroizing::new(vec![0; CHUNK]);
+        // Most files are small: zeroing 64 KiB for each would cost more than the hash.
+        let mut buf = Zeroizing::new(vec![0; len.min(CHUNK as u64) as usize]);
         let mut left = len;
         while left > 0 {
             let chunk = &mut buf[..left.min(CHUNK as u64) as usize];
