@@ -30,6 +30,20 @@ fn a_fifo_as_configuration_or_ignore_file_is_refused() {
     }
 }
 
+/// A symlink that does not resolve is not a missing file: the defaults
+/// (no rules) would deploy into the wrong target, or deploy ignored files.
+#[test]
+fn a_dangling_symlink_as_configuration_or_ignore_file_is_refused() {
+    for name in ["rustow.toml", ".rustowignore"] {
+        let fx = Fixture::new();
+        fx.write(".bashrc", "b\n");
+        std::os::unix::fs::symlink("../hosts/laptop.toml", fx.repo.join(name)).unwrap();
+        refused(&fx, &["check"], name, "is a symlink that does not resolve");
+        refused(&fx, &["apply"], name, "is a symlink that does not resolve");
+        assert!(!fx.home_path(".bashrc").exists(), "{name}");
+    }
+}
+
 #[test]
 fn a_device_or_directory_as_configuration_or_ignore_file_is_refused() {
     for name in ["rustow.toml", ".rustowignore"] {
