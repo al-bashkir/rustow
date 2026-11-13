@@ -355,17 +355,23 @@ fn write_in(d: &Deploy, policy: Policy, backup: &Path, me: u32, made: &mut Vec<P
         Some((existing, missing)) => (existing.as_path(), missing.as_slice()),
         None => (parent, &[][..]),
     };
-    let mut dir = fsops::open_planned(base, d.dir_id, me)?;
+    let dir = make_dirs(fsops::open_planned(base, d.dir_id, me)?, missing, d.dir_mode, me, made)?;
+    let detail = apply_dest(&dir, name, d, policy, backup)?;
+    verify(&dir, name, d)?;
+    Ok(detail)
+}
+
+/// The directory `missing` names below `dir`, each made with `mode` when
+/// it is not there (pushed to `made`).
+fn make_dirs(mut dir: Dir, missing: &[String], mode: u32, me: u32, made: &mut Vec<PathBuf>) -> Result<Dir> {
     for part in missing {
-        let (next, created) = dir.mkdir(OsStr::new(part), d.dir_mode, me)?;
+        let (next, created) = dir.mkdir(OsStr::new(part), mode, me)?;
         if created {
             made.push(next.path.clone());
         }
         dir = next;
     }
-    let detail = apply_dest(&dir, name, d, policy, backup)?;
-    verify(&dir, name, d)?;
-    Ok(detail)
+    Ok(dir)
 }
 
 /// Writes the cache entry when it changes; returns the backup note, if any.

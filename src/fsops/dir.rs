@@ -169,31 +169,47 @@ impl Dir {
 
     /// Follows the symlink `name` (at `path`) if the trust rule allows it.
     fn follow(&self, name: &OsStr, path: PathBuf, me: u32, budget: &mut u32) -> Result<Next> {
-        let link = match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
-            Ok(st) if kind(&st) == SFlag::S_IFLNK => st,
-            Ok(_) => return Ok(Next::Blocked(path, "not a directory".into())),
-            Err(e) => return Ok(Next::Blocked(path, e.desc().into())),
+        let link = match self.followable(name, &path, me, budget) {
+            Ok(link) => link,
+            Err(why) => return Ok(Next::Blocked(path, why)),
         };
-        // A symlink's own mode bits mean nothing: only its owner counts.
-        if let Err(why) = trusted(&path, &link, 0, me) {
-            return Ok(Next::Blocked(path, format!("symlink is not safe: {why}")));
+        match self.reach(name, &path, me, budget)? {
+            Ok(target) => self.settle(name, path, &link, target, me),
+            Err(blocked) => Ok(blocked),
         }
-        if *budget == 0 {
-            return Ok(Next::Blocked(path, Errno::ELOOP.desc().into()));
-        }
-        *budget -= 1;
-        let target = match self.reach(name, &path, me, budget)? {
-            Ok(dir) => dir,
-            Err(blocked) => return Ok(blocked),
-        };
+    }
+
+    /// `target`, the directory that the symlink `link` at `name` reaches,
+    /// when `check_dir` accepts it and `name` is still that symlink.
+    fn settle(&self, name: &OsStr, path: PathBuf, link: &FileStat, target: Dir, me: u32) -> Result<Next> {
         let st = sys(fstat(&target.fd)).ctx(|| format!("inspect {}", target.path.display()))?;
         if let Err(why) = trusted(&target.path, &st, st.st_mode as u32 & 0o7777, me) {
             return Ok(Next::Blocked(path, format!("symlink target is not safe: {why}")));
         }
         match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
-            Ok(again) if id_of(&again) == id_of(&link) => Ok(Next::Into(target)),
+            Ok(again) if id_of(&again) == id_of(link) => Ok(Next::Into(target)),
             _ => Ok(Next::Blocked(path, "changed while rustow was running".into())),
         }
+    }
+
+    /// The symlink `name` (at `path`), when a walk may follow it: `check_dir`
+    /// accepts its owner, and the walk has not followed 40 symlinks yet.
+    fn followable(
+        &self,
+        name: &OsStr,
+        path: &Path,
+        me: u32,
+        budget: &mut u32,
+    ) -> std::result::Result<FileStat, String> {
+        let link = match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Ok(st) if kind(&st) == SFlag::S_IFLNK => st,
+            Ok(_) => return Err("not a directory".into()),
+            Err(e) => return Err(e.desc().into()),
+        };
+        // A symlink's own mode bits mean nothing: only its owner counts.
+        trusted(path, &link, 0, me).map_err(|why| format!("symlink is not safe: {why}"))?;
+        *budget = budget.checked_sub(1).ok_or(Errno::ELOOP.desc())?;
+        Ok(link)
     }
 
     /// The directory that the text of the symlink `name` (at `path`) names,
@@ -218,20 +234,30 @@ impl Dir {
 
     /// What is at `name` now, without following a symlink there.
     pub fn inspect(&self, name: &OsStr) -> Result<Observed> {
-        let path = self.entry(name);
-        let st = match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
-            Err(Errno::ENOENT) => return Ok(Observed::Missing),
-            other => sys(other).ctx(|| format!("inspect {}", path.display()))?,
+        let Some(st) = self.stat(name)? else {
+            return Ok(Observed::Missing);
         };
         Ok(match kind(&st) {
-            SFlag::S_IFLNK => {
-                let text = sys(readlinkat(&self.fd, name)).ctx(|| format!("read symlink {}", path.display()))?;
-                Observed::Symlink(text.into())
-            }
+            SFlag::S_IFLNK => Observed::Symlink(self.link_text(name)?.into()),
             SFlag::S_IFDIR => Observed::Dir,
             SFlag::S_IFREG => self.observe_file(name)?,
             _ => Observed::Other,
         })
+    }
+
+    /// `fstatat` of `name` without following a symlink; `None` when it is missing.
+    fn stat(&self, name: &OsStr) -> Result<Option<FileStat>> {
+        match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Err(Errno::ENOENT) => Ok(None),
+            other => sys(other)
+                .map(Some)
+                .ctx(|| format!("inspect {}", self.entry(name).display())),
+        }
+    }
+
+    /// The text of the symlink `name`.
+    fn link_text(&self, name: &OsStr) -> Result<std::ffi::OsString> {
+        sys(readlinkat(&self.fd, name)).ctx(|| format!("read symlink {}", self.entry(name).display()))
     }
 
     /// Hash and metadata of the regular file `name`.
@@ -344,25 +370,36 @@ impl Dir {
     /// item created.
     pub fn mkdir(&self, name: &OsStr, mode: u32, me: u32) -> Result<(Dir, bool)> {
         let path = self.entry(name);
-        let what = || format!("create directory {}", path.display());
         if Path::new(name).components().ne([Component::Normal(name)]) {
             return Err(Error::Failed(format!("{}: not a directory name", path.display())));
         }
         let bits = Mode::from_bits_truncate(mode as nix::libc::mode_t);
-        match mkdirat(&self.fd, name, bits) {
-            Ok(()) => {
-                let dir = sys(self.child(name, OFlag::O_RDONLY)).ctx(what)?;
-                sys(fchmod(&dir.fd, bits)).ctx(what)?;
-                Ok((dir, true))
-            }
-            Err(Errno::EEXIST) => {
-                let dir = sys(self.child(name, SEARCH)).ctx(what)?;
-                let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
-                trusted(&path, &st, st.st_mode as u32 & 0o7777, me).map_err(Error::Failed)?;
-                Ok((dir, false))
-            }
-            Err(e) => Err(io::Error::from(e)).ctx(what),
+        if !self.create(name, bits)? {
+            return self.trusted_child(name, me).map(|dir| (dir, false));
         }
+        let what = || format!("create directory {}", path.display());
+        let dir = sys(self.child(name, OFlag::O_RDONLY)).ctx(what)?;
+        sys(fchmod(&dir.fd, bits)).ctx(what)?;
+        Ok((dir, true))
+    }
+
+    /// `mkdirat`; false when `name` exists already.
+    fn create(&self, name: &OsStr, bits: Mode) -> Result<bool> {
+        match mkdirat(&self.fd, name, bits) {
+            Ok(()) => Ok(true),
+            Err(Errno::EEXIST) => Ok(false),
+            Err(e) => Err(io::Error::from(e)).ctx(|| format!("create directory {}", self.entry(name).display())),
+        }
+    }
+
+    /// The existing directory `name`, never a symlink, when `check_dir`
+    /// accepts it for `me`.
+    fn trusted_child(&self, name: &OsStr, me: u32) -> Result<Dir> {
+        let path = self.entry(name);
+        let dir = sys(self.child(name, SEARCH)).ctx(|| format!("create directory {}", path.display()))?;
+        let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
+        trusted(&path, &st, st.st_mode as u32 & 0o7777, me).map_err(Error::Failed)?;
+        Ok(dir)
     }
 
     /// The private directory `name`: created with mode 0700, or an existing
@@ -370,18 +407,9 @@ impl Dir {
     /// one is exactly 0700 under a setgid parent too.
     pub(super) fn private(&self, name: &OsStr, me: u32) -> Result<Dir> {
         let path = self.entry(name);
-        match mkdirat(&self.fd, name, Mode::from_bits_truncate(0o700)) {
-            Ok(()) | Err(Errno::EEXIST) => {}
-            Err(e) => return Err(io::Error::from(e)).ctx(|| format!("create {}", path.display())),
-        }
-        let dir = match self.child(name, OFlag::O_RDONLY) {
-            Ok(dir) => dir,
-            Err(Errno::ELOOP | Errno::ENOTDIR) => {
-                let why = format!("{} is not a directory (symlinks are not followed)", path.display());
-                return Err(Error::Failed(why));
-            }
-            Err(e) => return Err(io::Error::from(e)).ctx(|| format!("open {}", path.display())),
-        };
+        self.create(name, Mode::from_bits_truncate(0o700))?;
+        let dir = sys(self.child(name, OFlag::O_RDONLY))
+            .ctx(|| format!("open {} (symlinks are not followed)", path.display()))?;
         let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
         if st.st_uid != me {
             return Err(Error::Failed(format!(
@@ -444,30 +472,28 @@ impl Dir {
 
 /// The walk of `Dir::walk`, with the symlink budget shared by nested walks.
 fn walk_in(mut cur: Dir, rel: &Path, me: u32, budget: &mut u32) -> Result<Walked> {
-    let parts: Vec<Component> = rel.components().collect();
-    for (i, part) in parts.iter().enumerate() {
-        let name = match part {
-            Component::RootDir => {
-                cur = Dir::root()?;
-                continue;
-            }
-            Component::CurDir | Component::Prefix(_) => continue,
-            Component::ParentDir => OsStr::new(".."),
-            Component::Normal(name) => name,
-        };
-        cur = match cur.step(name, me, budget)? {
-            Next::Into(next) => next,
-            Next::Missing => {
-                let missing = parts[i..]
-                    .iter()
-                    .map(|p| p.as_os_str().to_string_lossy().into_owned())
-                    .collect();
-                return Ok(Walked::Missing { dir: cur, missing });
-            }
+    if rel.has_root() {
+        cur = Dir::root()?;
+    }
+    // Names and `..`: a root or a `.` can only come first.
+    let parts: Vec<&OsStr> = rel
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_) | Component::ParentDir))
+        .map(|c| c.as_os_str())
+        .collect();
+    for (i, name) in parts.iter().enumerate() {
+        match cur.step(name, me, budget)? {
+            Next::Into(next) => cur = next,
+            Next::Missing => return Ok(missing(cur, &parts[i..])),
             Next::Blocked(path, reason) => return Ok(Walked::Blocked { path, reason }),
-        };
+        }
     }
     Ok(Walked::Ready(cur))
+}
+
+fn missing(dir: Dir, rest: &[&OsStr]) -> Walked {
+    let missing = rest.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    Walked::Missing { dir, missing }
 }
 
 /// Writes the content, sets owner and mode, and syncs the temporary file of `dest`.

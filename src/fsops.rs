@@ -629,6 +629,10 @@ mod tests {
         assert!(ensure_private_dir(&d.join("link")).is_err());
         fs::write(d.join("file"), b"").unwrap();
         assert!(ensure_private_dir(&d.join("file")).is_err());
+        if !geteuid().is_root() {
+            let e = ensure_private_dir(Path::new("/usr")).unwrap_err().to_string();
+            assert!(e.contains("/usr is owned by uid 0, not by the current user"), "{e}");
+        }
     }
 
     fn dir_id(p: &Path) -> DirId {
