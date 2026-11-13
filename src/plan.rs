@@ -466,7 +466,7 @@ fn plan_source(
     let dest = ctx.dest_path(source);
     let step = match collided.get(&(source.scope, &source.dest)) {
         Some(detail) => blocked(Conflict::Collision, detail.clone()),
-        None => plan_one(ctx, source, &dest, state.entries.get(&dest), folding.unfolding(source))?,
+        None => plan_one(ctx, source, &dest, state, folding.unfolding(source))?,
     };
     Ok(PlanItem {
         source: source.clone(),
@@ -484,7 +484,7 @@ fn plan_fold(ctx: &Context, dir: &RelPath, state: &State) -> Result<PlanItem> {
         mode: Mode::Link,
     };
     let dest = ctx.dest_path(&source);
-    let mut step = plan_one(ctx, &source, &dest, state.entries.get(&dest), None)?;
+    let mut step = plan_one(ctx, &source, &dest, state, None)?;
     if let Step::Deploy(d) = &mut step {
         d.record.folded_dir = true;
         d.detail = Some("folded directory".into());
@@ -597,15 +597,12 @@ fn plan_unfold(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath, state:
         strays.is_empty(),
     ) {
         (_, false) => {
-            let list: Vec<&str> = strays.iter().take(3).map(RelPath::as_str).collect();
             let detail = format!(
-                "files that are not sources would disappear from view: {}",
-                list.join(", ")
+                "{} is not a source and would disappear from view; move it out of the repository, \
+                 or make it a source (remove its ignore rule)",
+                strays[0]
             );
-            Step::Blocked {
-                conflict: Conflict::FoldedStrays,
-                detail,
-            }
+            blocked(Conflict::FoldedStrays, detail)
         }
         (ParentState::Ready { dir: parent, id }, true) => unfold_step(parent.join(dir.file_name()), id, link)?,
         _ => Step::Blocked {
@@ -663,7 +660,12 @@ fn blocked(conflict: Conflict, detail: String) -> Step {
 }
 
 /// Finds the real destination path and the directories to create for it.
-fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&RelPath>) -> Result<Located> {
+fn locate_dest(
+    ctx: &Context,
+    (source, state): (&Source, &State),
+    dest: &Path,
+    unfolding: Option<&RelPath>,
+) -> Result<Located> {
     let (path, id, missing_dirs) = match locate(ctx, source, unfolding)? {
         ParentState::Ready { dir, id } => (dir.join(source.dest.file_name()), id, None),
         ParentState::Blocked { path, reason } => {
@@ -682,10 +684,35 @@ fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&R
         }
     };
     if path.starts_with(&ctx.root) || path.starts_with(&ctx.cache_dir) {
-        let detail = format!("{} resolves inside the repository or its cache", path.display());
+        let detail = repo_symlink(ctx, source, state)
+            .unwrap_or_else(|| format!("{} resolves inside the repository or its cache", path.display()));
         return Ok(Located::Early(blocked(Conflict::ParentBlocked, detail)));
     }
     Ok(Located::At(path, id, missing_dirs))
+}
+
+/// What to do when a directory above `source`'s destination is a symlink
+/// into the repository that the state does not record (a GNU Stow fold,
+/// say); `None` for any other case.
+fn repo_symlink(ctx: &Context, source: &Source, state: &State) -> Option<String> {
+    let target = ctx.target_root(source.scope);
+    let dir = fold::ancestors(&source.dest).into_iter().rev().find(|d| {
+        let abs = target.join(d.as_path());
+        fs::symlink_metadata(&abs).is_ok_and(|m| m.is_symlink())
+            && fs::canonicalize(&abs).is_ok_and(|real| real.starts_with(&ctx.root))
+    })?;
+    if state.entries.contains_key(&target.join(dir.as_path())) {
+        return None;
+    }
+    let never = if source.scope == Scope::Home && fold::never_folds(&dir) {
+        " and never folds"
+    } else {
+        ""
+    };
+    Some(format!(
+        "{} is a symlink into the repository that rustow does not manage{never}; replace it with a real directory",
+        target.join(dir.as_path()).display()
+    ))
 }
 
 /// A symlink must point only at a file that nobody but root or the
@@ -883,14 +910,9 @@ fn file_mode_for(observed: &Observed, want: &Want) -> u32 {
     }
 }
 
-fn plan_one(
-    ctx: &Context,
-    source: &Source,
-    dest: &Path,
-    record: Option<&Record>,
-    unfolding: Option<&RelPath>,
-) -> Result<Step> {
-    let (path, dir_id, missing_dirs) = match locate_dest(ctx, source, dest, unfolding)? {
+fn plan_one(ctx: &Context, source: &Source, dest: &Path, state: &State, unfolding: Option<&RelPath>) -> Result<Step> {
+    let record = state.entries.get(dest);
+    let (path, dir_id, missing_dirs) = match locate_dest(ctx, (source, state), dest, unfolding)? {
         Located::At(path, dir_id, missing_dirs) => (path, dir_id, missing_dirs),
         Located::Early(step) => return Ok(step),
     };

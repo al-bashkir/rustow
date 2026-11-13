@@ -158,7 +158,9 @@ fn unfold_conflict_when_unrelated_files_would_disappear() {
     fs::write(fx.home_path(".config/nvim/app.log"), "log").unwrap();
     let out = fx.run(&["apply"]);
     assert_eq!(out.code, 3, "{out:?}");
-    assert!(out.stdout.contains("app.log"), "{out:?}");
+    let detail = "cannot unfold the folded directory: .config/nvim/app.log is not a source and would disappear \
+                  from view; move it out of the repository, or make it a source (remove its ignore rule)";
+    assert!(out.stdout.contains(detail), "{out:?}");
     assert!(is_symlink(&fx.home_path(".config/nvim")), "nothing changes");
     assert_eq!(read(&fx.repo.join(".config/nvim/app.log")), "log");
 }
@@ -177,10 +179,15 @@ fn destination_resolving_into_repository_is_blocked() {
     let fx = Fixture::new();
     fx.write(".config/nvim/init.lua", "precious\n");
     std::os::unix::fs::symlink(fx.repo.join(".config"), fx.home_path(".config")).unwrap();
+    let detail = format!(
+        "{} is a symlink into the repository that rustow does not manage and never folds; \
+         replace it with a real directory",
+        fx.home_path(".config").display()
+    );
     for args in [&["apply"][..], &["apply", "--force"][..]] {
         let out = fx.run(args);
         assert_eq!(out.code, 3, "{out:?}");
-        assert!(out.stdout.contains("inside the repository"), "{out:?}");
+        assert!(out.stdout.contains(&detail), "{out:?}");
     }
     assert!(is_regular(&fx.repo.join(".config/nvim/init.lua")));
     assert_eq!(read(&fx.repo.join(".config/nvim/init.lua")), "precious\n");

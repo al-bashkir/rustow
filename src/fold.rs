@@ -85,7 +85,7 @@ pub fn fold_allowed(rules: &BTreeMap<RelPath, bool>, default: bool, path: &RelPa
 /// A direct child of home, or of `~/.local` (`share`, `state`, `bin`, ...):
 /// on a new machine these are often missing, and a fold would let
 /// programs write keys, tokens and history into the repository.
-fn never_folds(dir: &RelPath) -> bool {
+pub fn never_folds(dir: &RelPath) -> bool {
     let mut parts = dir.components();
     matches!(
         (parts.next(), parts.next(), parts.next()),
@@ -206,7 +206,7 @@ fn recorded_folds<'a>(ctx: &Context, state: &'a State) -> BTreeMap<RelPath, &'a 
 }
 
 /// The directories above `path`, the nearest first.
-fn ancestors(path: &RelPath) -> Vec<RelPath> {
+pub fn ancestors(path: &RelPath) -> Vec<RelPath> {
     let mut out = Vec::new();
     let mut cur = path.parent();
     while let Some(p) = cur {
@@ -268,7 +268,11 @@ fn holds_only(ctx: &Context, dir: &RelPath, allowed: &BTreeSet<&RelPath>) -> Res
 fn entries_below(ctx: &Context, dir: &RelPath) -> Result<Vec<(RelPath, bool)>> {
     let top = ctx.root.join(dir.as_path());
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(&top).min_depth(1).follow_links(false) {
+    for entry in walkdir::WalkDir::new(&top)
+        .min_depth(1)
+        .follow_links(false)
+        .sort_by_file_name()
+    {
         let (path, is_dir) = match &entry {
             Ok(e) => (e.path(), e.file_type().is_dir()),
             Err(e) => (e.path().unwrap_or(&top), false),
