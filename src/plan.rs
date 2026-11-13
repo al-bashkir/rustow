@@ -240,9 +240,11 @@ pub enum Step {
     },
     /// Desired content could not be computed (render or decrypt failed).
     Failed(String),
-    /// Replace rustow's folded directory symlink at `path` by a real directory.
+    /// Replace rustow's folded directory symlink at `path` by a real
+    /// directory; `dir_id` is its parent directory at planning.
     Unfold {
         path: PathBuf,
+        dir_id: DirId,
         observed: Observed,
     },
 }
@@ -514,7 +516,7 @@ fn plan_unfold(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath, state:
                 detail,
             }
         }
-        (ParentState::Ready { dir: parent, .. }, true) => unfold_step(parent.join(dir.file_name()), link)?,
+        (ParentState::Ready { dir: parent, id }, true) => unfold_step(parent.join(dir.file_name()), id, link)?,
         _ => Step::Blocked {
             conflict: Conflict::ParentBlocked,
             detail: dest.display().to_string(),
@@ -525,10 +527,10 @@ fn plan_unfold(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath, state:
 
 /// Unfolds `path` only when it is still the link rustow recorded. `fold`
 /// checked this already; a mismatch means the link changed during planning.
-fn unfold_step(path: PathBuf, link: Option<PathBuf>) -> Result<Step> {
+fn unfold_step(path: PathBuf, dir_id: DirId, link: Option<PathBuf>) -> Result<Step> {
     Ok(match fsops::inspect(&path)? {
         observed @ Observed::Symlink(_) if Some(&observed) == link.map(Observed::Symlink).as_ref() => {
-            Step::Unfold { path, observed }
+            Step::Unfold { path, dir_id, observed }
         }
         _ => Step::Blocked {
             conflict: Conflict::Unmanaged,
@@ -672,7 +674,7 @@ fn removal_needs_sudo(
     path: &Path,
     created: &std::collections::BTreeSet<PathBuf>,
 ) -> bool {
-    if scope != Scope::Root || !matches!(verdict, Verdict::Remove(_)) {
+    if scope != Scope::Root || !matches!(verdict, Verdict::Remove { .. }) {
         return false;
     }
     for dir in path.ancestors().skip(1) {
@@ -1077,8 +1079,9 @@ pub struct Removal {
 
 #[derive(Debug)]
 pub enum Verdict {
-    /// Remove the object, which must still look like this.
-    Remove(Observed),
+    /// Remove the object, which must still look like `observed`, from its
+    /// directory `dir_id` (as at planning).
+    Remove { observed: Observed, dir_id: DirId },
     /// Already gone: only forget the record.
     Forget,
     /// Changed since rustow created it: left in place.
@@ -1099,8 +1102,8 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
         if !wanted || !selector.includes_label(&record.mode) {
             continue;
         }
-        let (path, observed) = observe_recorded(ctx, record, dest, rel)?;
-        let verdict = removal_verdict(observed, record);
+        let (path, found) = observe_recorded(ctx, record, dest, rel)?;
+        let verdict = removal_verdict(found, record);
         let sudo = removal_needs_sudo(record.scope, &verdict, &path, &state.created_dirs);
         out.push(Removal {
             source: record.source.clone(),
@@ -1136,28 +1139,38 @@ fn parse_prefixes(ctx: &Context, args: &[String]) -> Result<Vec<RelPath>> {
     Ok(prefixes)
 }
 
-/// Pure: whether a recorded destination may be removed, given what is there now.
-fn removal_verdict(observed: Observed, record: &Record) -> Verdict {
+/// Pure: whether a recorded destination may be removed, given its
+/// directory and what is there now (`None`: no usable directory).
+fn removal_verdict(found: Option<(DirId, Observed)>, record: &Record) -> Verdict {
+    let Some((dir_id, observed)) = found else {
+        return Verdict::Forget;
+    };
     match (&observed, recorded(Some(record))) {
         (Observed::Missing, _) => Verdict::Forget,
-        (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => Verdict::Remove(observed),
-        (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => Verdict::Remove(observed),
+        (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => Verdict::Remove { observed, dir_id },
+        (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => Verdict::Remove { observed, dir_id },
         // The user replaced rustow's folded link: nothing there is rustow's any more.
         _ if record.folded_dir => Verdict::Forget,
         _ => Verdict::Keep("destination changed since rustow deployed it; left in place".into()),
     }
 }
 
-/// Real path of a recorded destination and what is there now.
-fn observe_recorded(ctx: &Context, record: &Record, dest: &Path, rel: &Path) -> Result<(PathBuf, Observed)> {
+/// Real path of a recorded destination, the identity of its directory and
+/// what is there now; only the path when its directory is not usable.
+fn observe_recorded(
+    ctx: &Context,
+    record: &Record,
+    dest: &Path,
+    rel: &Path,
+) -> Result<(PathBuf, Option<(DirId, Observed)>)> {
     let rel = RelPath::parse(&rel.to_string_lossy())?;
     match fsops::parent_state(ctx.target_root(record.scope), &rel, geteuid().as_raw())? {
-        ParentState::Ready { dir: parent, .. } => {
+        ParentState::Ready { dir: parent, id } => {
             let path = parent.join(rel.file_name());
             let observed = fsops::inspect(&path)?;
-            Ok((path, observed))
+            Ok((path, Some((id, observed))))
         }
-        _ => Ok((dest.to_path_buf(), Observed::Missing)),
+        _ => Ok((dest.to_path_buf(), None)),
     }
 }
 

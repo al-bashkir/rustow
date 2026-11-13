@@ -180,6 +180,47 @@ fn a_lock_file_removed_during_the_run_is_reported() {
     assert!(!again.stderr.contains("warning"), "no sudo, no removal: {again:?}");
 }
 
+/// While sudo asks for the password, `etc` is moved away and `how` puts
+/// something new in its place. Returns the fixture, the run and `<base>/other`.
+fn swap_before_the_helper(how: &str) -> (Sudo, Out, PathBuf) {
+    let script = format!(
+        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nmv \"$FAKE_SUDO_UNLOCK\" \"$FAKE_SUDO_UNLOCK.real\"\n{how}\nexec \"$@\"\n"
+    );
+    let s = Sudo::new(&script);
+    let other = s.fx.base.join("other");
+    fs::create_dir(&other).unwrap();
+    let out = s.run(&["apply"]);
+    (s, out, other)
+}
+
+/// The helper walks the planned directory again and refuses another one
+/// in its place: it writes nothing there.
+#[test]
+fn the_helper_refuses_a_directory_swapped_after_the_plan() {
+    let (s, out, _) = swap_before_the_helper("mkdir \"$FAKE_SUDO_UNLOCK\"");
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("etc changed while rustow was running"), "{out:?}");
+    assert_eq!(fs::read_dir(&s.etc).unwrap().count(), 0, "nothing in the new etc");
+    assert_eq!(fs::read_dir(s.etc.with_extension("real")).unwrap().count(), 0);
+}
+
+/// A symlink to a directory the user owns passes the trust rule, but it
+/// is not the planned directory either.
+#[test]
+fn the_helper_refuses_a_symlink_swapped_in_after_the_plan() {
+    let link = "ln -s \"$(dirname \"$FAKE_SUDO_UNLOCK\")/../other\" \"$FAKE_SUDO_UNLOCK\"";
+    let (s, out, other) = swap_before_the_helper(link);
+    assert!(is_symlink(&s.etc), "{out:?}");
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("etc changed while rustow was running"), "{out:?}");
+    assert_eq!(
+        fs::read_dir(&other).unwrap().count(),
+        0,
+        "nothing in {}",
+        other.display()
+    );
+}
+
 /// A sudo program named without a `/` is looked up only in absolute PATH
 /// entries: an empty entry would run `./fake-sudo` from the current directory.
 #[test]

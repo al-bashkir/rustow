@@ -9,7 +9,7 @@ rustow has one planner and one executor. Every command that changes files builds
 3. `config` loads `rustow.toml`. `ignore` loads `.rustowignore`.
 4. `source` discovers files and classifies each into a `Mode`. A file or configuration entry that cannot deploy goes to `Discovery::skipped`, with the reason. It also finds collisions and applies the selector.
 5. `plan` decides an action for each destination, with the decision table. It integrates `fold`. It also plans removals.
-6. `execute` predicts and executes the plan, or removes. `fsops` does the file operations. A system file that the user cannot write (`Deploy::sudo`, `Removal::sudo`) waits until the end of the run. Then `sudo::call` sends all of them to one `sudo rustow __sudo-helper`. The helper runs `execute::write_dest` or `execute::remove_dest`, the same code as a normal run, as root.
+6. `execute` predicts and executes the plan, or removes. `fsops` does the file operations. A system file that the user cannot write (`Deploy::sudo`, `Removal::sudo`) waits until the end of the run. Then `sudo::call` sends all of them to one `sudo rustow __sudo-helper`. The helper runs `execute::write_dest` or `execute::remove_dest`, the same code as a normal run, as root, with the trust rule of the user.
 7. `execute` records each successful item in the `State` in memory. `app::finish` saves the state file once, at the end of the run. `report` prints the result.
 
 ## Modules
@@ -65,7 +65,9 @@ A skipped entry has a kind (`source::SkipKind`): `Present` for a path in the rep
 
 ## Directories
 
-`fsops::Dir::walk` resolves a path one component at a time from an open directory (`openat` with `O_NOFOLLOW`; `O_PATH` on Linux, `O_SEARCH` on macOS). A real directory needs no check. A symlink is followed only when `fsops::check_dir` accepts its owner (mode 0) and the directory that it reaches, and when it is still the same symlink after that. `fsops::parent_state` uses the walk for the planner. It returns the real path and the `DirId` (device and inode) of the deepest existing directory. `Deploy::dir_id` keeps it.
+`fsops::Dir::walk` resolves a path one component at a time from an open directory (`openat` with `O_NOFOLLOW`; `O_PATH` on Linux, `O_SEARCH` on macOS). A real directory needs no check. A symlink is followed only when `fsops::check_dir` accepts its owner (mode 0) and the directory that it reaches, and when it is still the same symlink after that. `fsops::parent_state` uses the walk for the planner. It returns the real path and the `DirId` (device and inode) of the deepest existing directory. `Deploy::dir_id`, `Step::Unfold` and `Verdict::Remove` keep it; the plan holds no open directory.
+
+The executor and the sudo helper get the directory with `fsops::open_planned(path, dir_id, me)`: a new walk of the planned path that fails on another `DirId`. Every change then goes through that `Dir`: `mkdir` (`mkdirat`), `write` (a temporary file opened `O_CREAT|O_EXCL|O_NOFOLLOW`, then `fchown`, `fchmod`, `fsync`, `renameat` or a no-replace rename), `symlink`, `set_meta`, `remove` (`unlinkat`) and `move_to` (backups). `me` is the effective user; the helper gets the user's uid from the client, so root applies the user's trust rule. The cache is written through `fsops::private_tree`. The path-based `fsops::write_atomic` (state, `init`, `enc`, `file add`, `state export`) walks the parent for the current user and calls `Dir::write`.
 
 ## Input and output
 

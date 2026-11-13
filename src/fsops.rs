@@ -134,40 +134,30 @@ pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid:
     open_ready(parent, geteuid().as_raw())?.write(name, bytes, mode, (uid, gid), true)
 }
 
-/// Like `write_atomic`, but fails when anything exists at `dest` by the
-/// time the file is published, so a concurrent creation is never replaced.
-pub fn write_new(dest: &Path, bytes: &[u8], mode: u32, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
-    let (parent, name) = split(dest)?;
-    open_ready(parent, geteuid().as_raw())?.write(name, bytes, mode, (uid, gid), false)
-}
-
-/// Creates the symlink `link`; fails when anything already exists there.
-pub fn symlink_new(link: &Path, target: &Path) -> Result<()> {
-    let (parent, name) = split(link)?;
-    open_ready(parent, geteuid().as_raw())?.symlink(name, target, false)
-}
-
-/// Creates or replaces the symlink `link` (never a directory) atomically.
-pub fn symlink_atomic(link: &Path, target: &Path) -> Result<()> {
-    let (parent, name) = split(link)?;
-    open_ready(parent, geteuid().as_raw())?.symlink(name, target, true)
-}
-
-/// Changes owner and mode of an existing regular file, refusing symlinks.
-pub fn set_meta(path: &Path, meta: FileMeta) -> Result<()> {
-    let (parent, name) = split(path)?;
-    open_ready(parent, geteuid().as_raw())?.set_meta(name, meta)
-}
-
-/// Moves `path` (file or symlink) to `backup`, whose parent is created
-/// private; never over an existing backup.
-pub fn backup(path: &Path, backup: &Path) -> Result<()> {
-    let (parent, name) = split(path)?;
+/// Moves the file or symlink `name` of `dir` to `backup`, whose parent is
+/// created private and walked for `me`; never over an existing backup.
+pub fn backup(dir: &Dir, name: &OsStr, backup: &Path, me: u32) -> Result<()> {
     let (to, to_name) = split(backup)?;
-    let me = geteuid().as_raw();
-    let dir = open_ready(parent, me)?;
     ensure_private_dir(to)?;
     dir.move_to(name, &open_ready(to, me)?, to_name)
+}
+
+/// Removes each of `dirs`, deepest first, while it is an empty directory,
+/// and returns the removed ones. Each parent is walked again for `me`, so
+/// no directory stays open per level.
+pub fn remove_empty<'a>(dirs: impl IntoIterator<Item = &'a Path>, me: u32) -> Vec<PathBuf> {
+    let gone = |dir: &Path| -> Result<bool> {
+        let (parent, name) = split(dir)?;
+        Ok(open_ready(parent, me)?.rmdir(name))
+    };
+    let mut removed = Vec::new();
+    for dir in dirs {
+        if !gone(dir).unwrap_or(false) {
+            break;
+        }
+        removed.push(dir.to_path_buf());
+    }
+    removed
 }
 
 /// Creates `dir` and missing parents with mode 0700. The final directory
@@ -246,24 +236,6 @@ pub fn parent_state(scope_root: &Path, dest: &RelPath, me: u32) -> Result<Parent
         },
         Walked::Blocked { path, reason } => ParentState::Blocked { path, reason },
     })
-}
-
-/// Creates `missing` below `existing` with `mode` (subject to umask) and
-/// returns the directories it created.
-pub fn create_dirs(existing: &Path, missing: &[String], mode: u32) -> Result<Vec<PathBuf>> {
-    let mut made = Vec::new();
-    let mut cur = existing.to_path_buf();
-    for part in missing {
-        cur.push(part);
-        match fs::DirBuilder::new().mode(mode).create(&cur) {
-            Ok(()) => made.push(cur.clone()),
-            Err(e)
-                if e.kind() == io::ErrorKind::AlreadyExists && fs::symlink_metadata(&cur).is_ok_and(|m| m.is_dir()) => {
-            }
-            Err(e) => return Err(e).ctx(|| format!("create directory {}", cur.display())),
-        }
-    }
-    Ok(made)
 }
 
 /// UTC time as `YYYYmmddTHHMMSSZ`.
@@ -512,17 +484,31 @@ mod tests {
         assert!(fs::symlink_metadata(d.join("dest")).unwrap().is_file());
     }
 
+    /// `d`, walked for the current user.
+    fn open(d: &Path) -> Dir {
+        open_ready(d, geteuid().as_raw()).unwrap()
+    }
+
+    fn name(s: &str) -> &OsStr {
+        OsStr::new(s)
+    }
+
     #[test]
     fn new_file_and_link_never_replace_anything() {
         let (_t, d) = tmp();
-        write_new(&d.join("f"), b"one", 0o640, None, None).unwrap();
+        let dir = open(&d);
+        dir.write(name("f"), b"one", 0o640, (None, None), false).unwrap();
         assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
         assert_eq!(mode_of(&d.join("f")), 0o640);
-        assert!(write_new(&d.join("f"), b"two", 0o644, None, None).is_err());
+        let e = dir.write(name("f"), b"two", 0o644, (None, None), false).unwrap_err();
+        assert!(
+            e.to_string().starts_with(&format!("replace {}", d.join("f").display())),
+            "{e}"
+        );
         assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
-        symlink_new(&d.join("l"), Path::new("t")).unwrap();
-        assert!(symlink_new(&d.join("l"), Path::new("u")).is_err());
-        assert!(symlink_new(&d.join("f"), Path::new("u")).is_err());
+        dir.symlink(name("l"), Path::new("t"), false).unwrap();
+        assert!(dir.symlink(name("l"), Path::new("u"), false).is_err());
+        assert!(dir.symlink(name("f"), Path::new("u"), false).is_err());
         assert_eq!(fs::read_link(d.join("l")).unwrap(), PathBuf::from("t"));
         assert_eq!(fs::read_dir(&d).unwrap().count(), 2, "no temporary file left");
     }
@@ -536,13 +522,14 @@ mod tests {
     }
 
     #[test]
-    fn symlink_atomic_replaces_symlink_but_not_directory() {
+    fn symlink_replace_replaces_symlink_but_not_directory() {
         let (_t, d) = tmp();
-        symlink_atomic(&d.join("l"), Path::new("a")).unwrap();
-        symlink_atomic(&d.join("l"), Path::new("b")).unwrap();
+        let dir = open(&d);
+        dir.symlink(name("l"), Path::new("a"), true).unwrap();
+        dir.symlink(name("l"), Path::new("b"), true).unwrap();
         assert_eq!(fs::read_link(d.join("l")).unwrap(), PathBuf::from("b"));
         fs::create_dir(d.join("dir")).unwrap();
-        assert!(symlink_atomic(&d.join("dir"), Path::new("b")).is_err());
+        assert!(dir.symlink(name("dir"), Path::new("b"), true).is_err());
         assert!(d.join("dir").is_dir());
         assert_eq!(fs::read_dir(&d).unwrap().count(), 2);
     }
@@ -550,37 +537,27 @@ mod tests {
     #[test]
     fn set_meta_changes_mode_and_refuses_symlink() {
         let (_t, d) = tmp();
+        let dir = open(&d);
+        let mode = |m| FileMeta {
+            mode: Some(m),
+            ..Default::default()
+        };
         fs::write(d.join("f"), b"x").unwrap();
-        set_meta(
-            &d.join("f"),
-            FileMeta {
-                mode: Some(0o600),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        dir.set_meta(name("f"), mode(0o600)).unwrap();
         assert_eq!(mode_of(&d.join("f")), 0o600);
         symlink(d.join("f"), d.join("l")).unwrap();
-        assert!(
-            set_meta(
-                &d.join("l"),
-                FileMeta {
-                    mode: Some(0o644),
-                    ..Default::default()
-                }
-            )
-            .is_err()
-        );
+        assert!(dir.set_meta(name("l"), mode(0o644)).is_err());
         assert_eq!(mode_of(&d.join("f")), 0o600);
     }
 
     #[test]
     fn backup_moves_into_private_dir() {
         let (_t, d) = tmp();
+        let (dir, me) = (open(&d), geteuid().as_raw());
         fs::write(d.join("f"), b"data").unwrap();
         symlink("t", d.join("l")).unwrap();
-        backup(&d.join("f"), &d.join("bk/a/f")).unwrap();
-        backup(&d.join("l"), &d.join("bk/a/l")).unwrap();
+        backup(&dir, name("f"), &d.join("bk/a/f"), me).unwrap();
+        backup(&dir, name("l"), &d.join("bk/a/l"), me).unwrap();
         assert!(!d.join("f").exists());
         assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
         assert_eq!(fs::read_link(d.join("bk/a/l")).unwrap(), PathBuf::from("t"));
@@ -588,7 +565,40 @@ mod tests {
         assert_eq!(mode_of(&d.join("bk/a")), 0o700);
         // Never overwrite an existing backup.
         fs::write(d.join("f"), b"again").unwrap();
-        assert!(backup(&d.join("f"), &d.join("bk/a/f")).is_err());
+        let e = backup(&dir, name("f"), &d.join("bk/a/f"), me).unwrap_err();
+        assert!(e.to_string().ends_with("bk/a/f already exists"), "{e}");
+        assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
+    }
+
+    #[test]
+    fn mkdir_creates_or_accepts_a_trusted_directory_only() {
+        let (_t, d) = tmp();
+        let (dir, me) = (open(&d), geteuid().as_raw());
+        let (made, created) = dir.mkdir(name("a"), 0o755, me).unwrap();
+        assert!(created && made.path == d.join("a") && d.join("a").is_dir());
+        let (again, created) = dir.mkdir(name("a"), 0o755, me).unwrap();
+        assert!(!created && again.id().unwrap() == made.id().unwrap());
+        fs::set_permissions(d.join("a"), fs::Permissions::from_mode(0o777)).unwrap();
+        let open_dir = dir.mkdir(name("a"), 0o755, me).unwrap_err().to_string();
+        assert!(open_dir.contains("writable by others"), "{open_dir}");
+        symlink(d.join("a"), d.join("l")).unwrap();
+        assert!(dir.mkdir(name("l"), 0o755, me).is_err(), "a symlink is no directory");
+        for bad in ["x/y", "..", "."] {
+            let e = dir.mkdir(name(bad), 0o755, me).unwrap_err().to_string();
+            assert!(e.ends_with("not a directory name"), "{bad}: {e}");
+        }
+        assert!(!d.join("x").exists());
+    }
+
+    #[test]
+    fn remove_empty_stops_at_the_first_directory_that_stays() {
+        let (_t, d) = tmp();
+        fs::create_dir_all(d.join("a/b/c")).unwrap();
+        fs::write(d.join("a/keep"), b"").unwrap();
+        let dirs = [d.join("a/b/c"), d.join("a/b"), d.join("a")];
+        let removed = remove_empty(dirs.iter().map(PathBuf::as_path), geteuid().as_raw());
+        assert_eq!(removed, dirs[..2]);
+        assert!(d.join("a/keep").exists() && !d.join("a/b").exists());
     }
 
     #[test]
@@ -696,16 +706,17 @@ mod tests {
     }
 
     #[test]
-    fn create_dirs_reports_created() {
+    fn mkdir_refuses_a_file_in_its_place() {
         let (_t, d) = tmp();
-        let made = create_dirs(&d, &["a".into(), "b".into()], 0o700).unwrap();
-        assert_eq!(made, vec![d.join("a"), d.join("a/b")]);
-        assert_eq!(mode_of(&d.join("a/b")), 0o700);
-        // An existing directory is fine; a file in its place is not.
-        assert_eq!(create_dirs(&d, &["a".into()], 0o700).unwrap(), Vec::<PathBuf>::new());
         fs::write(d.join("f"), "x").unwrap();
-        let e = create_dirs(&d, &["f".into()], 0o700).unwrap_err().to_string();
-        assert!(e.contains("create directory") && e.contains("/f"), "{e}");
+        let e = open(&d)
+            .mkdir(name("f"), 0o700, geteuid().as_raw())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with(&format!("create directory {}", d.join("f").display())),
+            "{e}"
+        );
     }
 
     /// A path whose group has the same id as its owner (a user-private group).
@@ -835,8 +846,9 @@ mod tests {
         fs::write(src.path().join("f"), b"data").unwrap();
         fs::set_permissions(src.path().join("f"), fs::Permissions::from_mode(0o640)).unwrap();
         symlink("t", src.path().join("l")).unwrap();
-        backup(&src.path().join("f"), &dst.path().join("bk/f")).unwrap();
-        backup(&src.path().join("l"), &dst.path().join("bk/l")).unwrap();
+        let (from, me) = (open(src.path()), geteuid().as_raw());
+        backup(&from, name("f"), &dst.path().join("bk/f"), me).unwrap();
+        backup(&from, name("l"), &dst.path().join("bk/l"), me).unwrap();
         assert!(!src.path().join("f").exists() && fs::symlink_metadata(src.path().join("l")).is_err());
         assert_eq!(fs::read(dst.path().join("bk/f")).unwrap(), b"data");
         assert_eq!(mode_of(&dst.path().join("bk/f")), 0o640);

@@ -3,12 +3,12 @@
 //! items untouched. There is no global rollback.
 
 use std::collections::BTreeSet;
-use std::fs;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
-use crate::fsops::{self, Observed};
+use crate::fsops::{self, Dir, DirId, Observed};
 use crate::paths::RelPath;
 use crate::plan::{Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
@@ -235,7 +235,9 @@ fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Optio
         }
         Step::Deploy(d) if d.sudo => (apply_cache(d, item, run), true),
         Step::Deploy(d) => (apply(d, item, run, state), false),
-        Step::Unfold { path, observed } => (unfold(path, observed, &item.dest, state).map(|()| None), false),
+        Step::Unfold { path, dir_id, observed } => {
+            (unfold(path, *dir_id, observed, &item.dest, state).map(|()| None), false)
+        }
         Step::Blocked { .. } | Step::Failed(_) => return (action, detail, false),
     };
     match done {
@@ -312,22 +314,45 @@ fn sudo_report(report: &mut ItemReport, result: std::result::Result<Option<Strin
 fn apply(d: &Deploy, item: &PlanItem, run: &Run, state: &mut State) -> Result<Option<String>> {
     let cached = apply_cache(d, item, run)?;
     let mut created = Vec::new();
-    let written = write_dest(d, run.policy, &backup_path(run, item, false), &mut created);
+    let written = write_dest(d, run.policy, &backup_path(run, item, false), me(), &mut created);
     state.created_dirs.extend(created);
     let extra = written?;
     state.entries.insert(item.dest.clone(), d.record.clone());
     Ok(extra.or(cached))
 }
 
-/// The destination part of a deploy: the missing directories (pushed to
-/// `created` as they appear), the planned change and the check after it.
-/// The sudo helper runs it as root.
-pub fn write_dest(d: &Deploy, policy: Policy, backup: &Path, created: &mut Vec<PathBuf>) -> Result<Option<String>> {
-    if let Some((existing, missing)) = &d.missing_dirs {
-        created.extend(fsops::create_dirs(existing, missing, d.dir_mode)?);
+/// The effective user: whose trust rule the walks of this run apply.
+fn me() -> u32 {
+    nix::unistd::geteuid().as_raw()
+}
+
+/// The destination part of a deploy. It walks the planned directory again
+/// for `me` and refuses another one at that path, creates the missing
+/// directories in it (pushed to `created` as they appear), then makes the
+/// planned change and checks it, all through the open directory. The sudo
+/// helper runs it as root, with `me` the user who made the plan.
+pub fn write_dest(
+    d: &Deploy,
+    policy: Policy,
+    backup: &Path,
+    me: u32,
+    created: &mut Vec<PathBuf>,
+) -> Result<Option<String>> {
+    let (parent, name) = fsops::split(&d.path)?;
+    let (base, missing) = match &d.missing_dirs {
+        Some((existing, missing)) => (existing.as_path(), missing.as_slice()),
+        None => (parent, &[][..]),
+    };
+    let mut dir = fsops::open_planned(base, d.dir_id, me)?;
+    for part in missing {
+        let (next, made) = dir.mkdir(OsStr::new(part), d.dir_mode, me)?;
+        if made {
+            created.push(next.path.clone());
+        }
+        dir = next;
     }
-    let detail = apply_dest(d, policy, backup)?;
-    verify(d)?;
+    let detail = apply_dest(&dir, name, d, policy, backup)?;
+    verify(&dir, name, d)?;
     Ok(detail)
 }
 
@@ -337,78 +362,74 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     if matches!(cache.decision, Decision::UpToDate | Decision::Adopt) {
         return Ok(None);
     }
-    fsops::private_tree(run.cache_dir, cache.path.parent().unwrap_or(run.cache_dir))?;
-    recheck(&cache.path, &cache.observed)?;
+    let (parent, name) = fsops::split(&cache.path)?;
+    let dir = fsops::private_tree(run.cache_dir, parent)?;
+    recheck(&dir, name, &cache.path, &cache.observed)?;
     let mut detail = None;
     if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
-        detail = Some(backup(&cache.path, &backup_path(run, item, true))?);
+        detail = Some(backup(&dir, name, &backup_path(run, item, true))?);
     }
-    fsops::write_atomic(&cache.path, &cache.bytes, 0o600, None, None)?;
+    dir.write(name, &cache.bytes, 0o600, (None, None), true)?;
     Ok(detail)
 }
 
-/// Performs the planned destination decision (the caller already checked
-/// that the policy allows it); returns the backup note, if any.
-fn apply_dest(d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
+/// Performs the planned decision on `name` in `dir` (the caller already
+/// checked that the policy allows it); returns the backup note, if any.
+fn apply_dest(dir: &Dir, name: &OsStr, d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
     match d.decision {
-        Decision::Create => create(d).map(|()| None),
-        Decision::Update => update(d).map(|()| None),
-        Decision::Conflict(_) => replace_conflicting(d, policy, backup),
-        Decision::FixMetadata => fix_metadata(d).map(|()| None),
+        Decision::Create => put(dir, name, d, false).map(|()| None),
+        Decision::Update => update(dir, name, d).map(|()| None),
+        Decision::Conflict(_) => replace_conflicting(dir, name, d, policy, backup),
+        Decision::FixMetadata => fix_metadata(dir, name, d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
 }
 
 /// Replaces rustow's own unchanged object at the destination.
-fn update(d: &Deploy) -> Result<()> {
-    recheck(&d.path, &d.observed)?;
-    place(d)
+fn update(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
+    recheck(dir, name, &d.path, &d.observed)?;
+    put(dir, name, d, true)
 }
 
 /// Moves away (backup) or removes the conflicting object, then creates.
-fn replace_conflicting(d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
-    recheck(&d.path, &d.observed)?;
-    let detail = clear_conflict(d, policy, backup)?;
-    create(d)?;
+fn replace_conflicting(dir: &Dir, name: &OsStr, d: &Deploy, policy: Policy, backup: &Path) -> Result<Option<String>> {
+    recheck(dir, name, &d.path, &d.observed)?;
+    let detail = clear_conflict(dir, name, policy, backup)?;
+    put(dir, name, d, false)?;
     Ok(detail)
 }
 
-/// Creates the destination; fails if anything appeared there since planning.
-fn create(d: &Deploy) -> Result<()> {
+/// Writes the desired symlink or file. `replace` replaces rustow's own
+/// object there; otherwise anything that appeared since planning fails it.
+fn put(dir: &Dir, name: &OsStr, d: &Deploy, replace: bool) -> Result<()> {
     match &d.desired {
-        Desired::Symlink(text) => fsops::symlink_new(&d.path, text),
+        Desired::Symlink(text) => dir.symlink(name, text, replace),
         Desired::File { meta, .. } => {
             let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
-            fsops::write_new(
-                &d.path,
-                bytes,
-                meta.mode.unwrap_or(d.file_mode),
-                d.file_owner.0,
-                d.file_owner.1,
-            )
+            dir.write(name, bytes, meta.mode.unwrap_or(d.file_mode), d.file_owner, replace)
         }
     }
 }
 
-fn fix_metadata(d: &Deploy) -> Result<()> {
-    recheck(&d.path, &d.observed)?;
+fn fix_metadata(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
+    recheck(dir, name, &d.path, &d.observed)?;
     if let Desired::File { meta, .. } = &d.desired {
-        fsops::set_meta(&d.path, *meta)?;
+        dir.set_meta(name, *meta)?;
     }
     Ok(())
 }
 
 /// Moves the conflicting destination to the backup dir, or removes it.
-fn clear_conflict(d: &Deploy, policy: Policy, to: &Path) -> Result<Option<String>> {
+fn clear_conflict(dir: &Dir, name: &OsStr, policy: Policy, to: &Path) -> Result<Option<String>> {
     if policy == Policy::Backup {
-        return backup(&d.path, to).map(Some);
+        return backup(dir, name, to).map(Some);
     }
-    fs::remove_file(&d.path).map_err(|e| Error::Failed(format!("remove {}: {e}", d.path.display())))?;
+    dir.remove(name)?;
     Ok(None)
 }
 
-fn backup(path: &Path, to: &Path) -> Result<String> {
-    fsops::backup(path, to)?;
+fn backup(dir: &Dir, name: &OsStr, to: &Path) -> Result<String> {
+    fsops::backup(dir, name, to, me())?;
     Ok(format!("backup saved to {}", to.display()))
 }
 
@@ -417,25 +438,9 @@ fn backup_path(run: &Run, item: &PlanItem, cache: bool) -> PathBuf {
     run.backup_dir.join(scope).join(item.source.dest.as_path())
 }
 
-fn place(d: &Deploy) -> Result<()> {
-    match &d.desired {
-        Desired::Symlink(text) => fsops::symlink_atomic(&d.path, text),
-        Desired::File { meta, .. } => {
-            let bytes = d.content.as_deref().map_or(&[][..], |b| b.as_slice());
-            fsops::write_atomic(
-                &d.path,
-                bytes,
-                meta.mode.unwrap_or(d.file_mode),
-                d.file_owner.0,
-                d.file_owner.1,
-            )
-        }
-    }
-}
-
-/// Fails when `path` changed since it was planned.
-fn recheck(path: &Path, planned: &Observed) -> Result<()> {
-    if fsops::inspect(path)? != *planned {
+/// Fails when `name` (at `path`) changed since it was planned.
+fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed) -> Result<()> {
+    if dir.inspect(name)? != *planned {
         return Err(Error::Failed(format!(
             "{} changed while rustow was running; left unchanged",
             path.display()
@@ -445,8 +450,8 @@ fn recheck(path: &Path, planned: &Observed) -> Result<()> {
 }
 
 /// Confirms that the destination now is what was planned.
-fn verify(d: &Deploy) -> Result<()> {
-    let ok = match (&d.desired, fsops::inspect(&d.path)?) {
+fn verify(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
+    let ok = match (&d.desired, dir.inspect(name)?) {
         (Desired::Symlink(want), Observed::Symlink(have)) => *want == have,
         (
             Desired::File { hash, meta },
@@ -514,7 +519,7 @@ fn remove_item(
             state.entries.remove(&r.dest);
             (Action::Forget, Some("already gone".into()), None)
         }
-        Verdict::Remove(observed) if r.sudo => {
+        Verdict::Remove { observed, dir_id } if r.sudo => {
             let created_dirs = r
                 .path
                 .ancestors()
@@ -524,12 +529,13 @@ fn remove_item(
                 .collect();
             let job = Job::Remove {
                 path: r.path.clone(),
+                dir_id: *dir_id,
                 observed: observed.clone(),
                 created_dirs,
             };
             (Action::Remove, Some("via sudo".into()), Some(job))
         }
-        Verdict::Remove(observed) => match remove_one(&r.path, observed, state) {
+        Verdict::Remove { observed, dir_id } => match remove_one(&r.path, *dir_id, observed, state) {
             Ok(()) => {
                 state.entries.remove(&r.dest);
                 (Action::Remove, None, None)
@@ -539,32 +545,33 @@ fn remove_item(
     }
 }
 
-fn remove_one(path: &Path, observed: &Observed, state: &mut State) -> Result<()> {
+fn remove_one(path: &Path, dir_id: DirId, observed: &Observed, state: &mut State) -> Result<()> {
     let mut removed = Vec::new();
-    let done = remove_dest(path, observed, &state.created_dirs, &mut removed);
+    let done = remove_dest(path, dir_id, observed, &state.created_dirs, me(), &mut removed);
     for dir in &removed {
         state.created_dirs.remove(dir);
     }
     done
 }
 
-/// Removes `path`, which must still look like `observed`, then each empty
-/// directory above it that `created` lists (pushed to `removed`). The sudo
-/// helper runs it as root.
+/// Removes `path`, which must still look like `observed`, through its
+/// planned directory (walked again for `me`; another one fails), then each
+/// empty directory above it that `created` lists (pushed to `removed`).
+/// The sudo helper runs it as root, with `me` the user who made the plan.
 pub fn remove_dest(
     path: &Path,
+    dir_id: DirId,
     observed: &Observed,
     created: &BTreeSet<PathBuf>,
+    me: u32,
     removed: &mut Vec<PathBuf>,
 ) -> Result<()> {
-    recheck(path, observed)?;
-    fs::remove_file(path).map_err(|e| Error::Failed(format!("remove {}: {e}", path.display())))?;
-    for dir in path.ancestors().skip(1) {
-        if !created.contains(dir) || fs::remove_dir(dir).is_err() {
-            break;
-        }
-        removed.push(dir.to_path_buf());
-    }
+    let (parent, name) = fsops::split(path)?;
+    let dir = fsops::open_planned(parent, dir_id, me)?;
+    recheck(&dir, name, path, observed)?;
+    dir.remove(name)?;
+    let above = path.ancestors().skip(1).take_while(|d| created.contains(*d));
+    removed.extend(fsops::remove_empty(above, me));
     Ok(())
 }
 
@@ -576,7 +583,7 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
             let (action, detail) = match &r.verdict {
                 Verdict::Keep(why) => (Action::Conflict, Some(why.clone())),
                 Verdict::Forget => (Action::Forget, Some("already gone".into())),
-                Verdict::Remove(_) => (Action::Remove, r.sudo.then(|| "via sudo".to_owned())),
+                Verdict::Remove { .. } => (Action::Remove, r.sudo.then(|| "via sudo".to_owned())),
             };
             ItemReport {
                 source: r.source.clone(),
@@ -588,11 +595,16 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
         })
         .collect()
 }
-/// Replaces rustow's folded directory symlink by a real directory.
-fn unfold(path: &Path, observed: &Observed, dest: &Path, state: &mut State) -> Result<()> {
-    recheck(path, observed)?;
-    fs::remove_file(path).map_err(|e| Error::Failed(format!("remove folded link {}: {e}", path.display())))?;
-    fs::create_dir(path).map_err(|e| Error::Failed(format!("create directory {}: {e}", path.display())))?;
+
+/// Replaces rustow's folded directory symlink by a real directory, through
+/// its planned parent directory.
+fn unfold(path: &Path, dir_id: DirId, observed: &Observed, dest: &Path, state: &mut State) -> Result<()> {
+    let (parent, name) = fsops::split(path)?;
+    let me = me();
+    let dir = fsops::open_planned(parent, dir_id, me)?;
+    recheck(&dir, name, path, observed)?;
+    dir.remove(name)?;
+    dir.mkdir(name, 0o777, me)?;
     state.created_dirs.insert(path.to_path_buf());
     state.entries.remove(dest);
     Ok(())
@@ -607,6 +619,7 @@ mod tests {
     use crate::plan::Deploy;
     use crate::source::{Mode, Source};
     use crate::state::Record;
+    use std::fs;
 
     fn record() -> Record {
         Record {
@@ -632,9 +645,13 @@ mod tests {
             dest: RelPath::parse("a").unwrap(),
             mode: Mode::Link,
         };
+        let parent = nix::sys::stat::stat(path.parent().unwrap()).unwrap();
         let deploy = Deploy {
             path: path.to_path_buf(),
-            dir_id: fsops::DirId { dev: 0, ino: 0 },
+            dir_id: fsops::DirId {
+                dev: parent.st_dev,
+                ino: parent.st_ino,
+            },
             missing_dirs: None,
             dir_mode: 0o777,
             desired,
@@ -687,5 +704,30 @@ mod tests {
             assert_eq!(fs::read(&dest).unwrap(), b"user data");
             fs::remove_file(&dest).unwrap();
         }
+    }
+
+    /// The executor walks the planned directory again: another directory
+    /// at that path fails the item, and nothing is written in either one.
+    #[test]
+    fn a_directory_swapped_after_planning_fails_the_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        let file = Desired::File {
+            hash: Hash::of(b"new"),
+            meta: FileMeta::default(),
+        };
+        let plan = create_plan(&sub.join("a"), file, Some(b"new"));
+        fs::rename(&sub, dir.path().join("old")).unwrap();
+        fs::create_dir(&sub).unwrap();
+        let report = run_plan(plan, dir.path());
+        assert_eq!(report[0].action, Action::Fail, "{:?}", report[0].detail);
+        let why = report[0].detail.as_deref().unwrap_or_default();
+        assert!(
+            why.ends_with("sub changed while rustow was running; left unchanged"),
+            "{why}"
+        );
+        assert_eq!(fs::read_dir(&sub).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(dir.path().join("old")).unwrap().count(), 0);
     }
 }
