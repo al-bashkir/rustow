@@ -235,12 +235,19 @@ impl Dir {
 
     /// What is at `name` now, without following a symlink there.
     pub fn inspect(&self, name: &OsStr) -> Result<Observed> {
-        let st = match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
-            Err(Errno::ENOENT) => return Ok(Observed::Missing),
+        match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Err(Errno::ENOENT) => Ok(Observed::Missing),
             // This directory is open, but the user may not search it.
-            Err(Errno::EACCES) => return Ok(Observed::Hidden),
-            other => sys(other).ctx(|| format!("inspect {}", self.entry(name).display()))?,
-        };
+            Err(Errno::EACCES) => Ok(Observed::Hidden),
+            other => self.observe(
+                name,
+                sys(other).ctx(|| format!("inspect {}", self.entry(name).display()))?,
+            ),
+        }
+    }
+
+    /// What `name`, with the metadata `st`, is.
+    fn observe(&self, name: &OsStr, st: FileStat) -> Result<Observed> {
         Ok(match kind(&st) {
             SFlag::S_IFLNK => Observed::Symlink(self.link_text(name)?.into()),
             SFlag::S_IFDIR => Observed::Dir,
