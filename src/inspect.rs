@@ -64,14 +64,24 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
     Ok(if failed { 4 } else { i32::from(!shown.is_empty()) })
 }
 
+/// The name of `dest` in a diff: absolute in JSON, as everywhere in JSON
+/// output; else as `Printer::path` shows it.
+fn label(printer: &Printer, dest: &Path) -> String {
+    match printer.json {
+        true => dest.display().to_string(),
+        false => printer.path(dest),
+    }
+}
+
 /// What `diff` shows for one item; `None` when the item does not differ.
 fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
+    let label = label(printer, &item.dest);
     if let Step::Deploy(d) = &item.step
         && matches!(d.observed, Observed::Unreadable { .. } | Observed::Hidden)
     {
-        return Ok(show_unreadable(item, d, &printer.path(&item.dest)));
+        return Ok(show_unreadable(item, d, &label));
     }
-    let (text, binary) = step_text(item, &printer.path(&item.dest), old)?;
+    let (text, binary) = step_text(item, &label, old)?;
     let (status, detail) = match &item.step {
         // `diff` only reads: a directory it cannot write does not hide the content.
         Step::Deploy(d) => classify_deploy(d, &item.source.mode, old),
@@ -80,17 +90,22 @@ fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Resu
     if text.is_empty() && status != "ERROR" {
         return Ok(None);
     }
-    let kind = match &item.step {
-        Step::Deploy(d) if d.decision == Decision::FixMetadata => "metadata".into(),
-        _ => status.to_lowercase(),
-    };
     Ok(Some(Shown {
         item,
-        kind,
+        kind: kind(item, status),
         detail,
         binary,
         text,
     }))
+}
+
+/// The `kind` of a differing item: `metadata` when only the metadata
+/// differs, else its status word in lower case.
+fn kind(item: &PlanItem, status: &str) -> String {
+    match &item.step {
+        Step::Deploy(d) if d.decision == Decision::FixMetadata => "metadata".into(),
+        _ => status.to_lowercase(),
+    }
 }
 
 /// A destination that the user cannot read takes the decision of the plan:

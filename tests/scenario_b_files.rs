@@ -289,6 +289,11 @@ fn diff_json_lists_each_differing_item() {
     assert_eq!(modified["binary"], false);
     let text = modified["diff"].as_str().unwrap();
     assert!(text.contains("-{\"a\": \"mine\"}\n+{\"a\": 1}\n"), "{v}");
+    let dest = fx.home_path(SRC).display().to_string();
+    assert!(
+        text.starts_with(&format!("--- a/{dest}\n+++ b/{dest}\n")),
+        "JSON names the destination with its absolute path: {v}"
+    );
     assert_eq!(item("img.bin")["kind"], "outdated");
     assert_eq!(item("img.bin")["binary"], true);
     assert_eq!(item("app.conf.tmpl")["kind"], "metadata");
