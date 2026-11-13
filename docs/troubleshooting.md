@@ -38,6 +38,7 @@ The state records a destination whose source is gone. `status` and the deploy co
 
 - "another rustow process": a second run holds the lock. Wait for it.
 - "warning: the lock file … was removed or replaced during this run": something removed the lock file while rustow ran. A second run could then start at the same time. rustow still saves the state. Run `rustow status` to check the result. Do not remove the lock file.
+- "File too large": the file is larger than the file size limit of the shell (`ulimit -f`). The item fails, and rustow removes its temporary file. The other items go on. Raise the limit, then run again.
 - "content changed while rustow was running; left unchanged": a copied source changed between the plan and the write. rustow did not write that item. Run the command again.
 - Render error: the message gives the template and line. Check for undefined variables. Use `is defined`.
 - Decrypt error: see below.

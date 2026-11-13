@@ -163,6 +163,17 @@ impl Fixture {
         to_out(child.wait_with_output().unwrap())
     }
 
+    /// Like `run_env`, with the resource limit `res` of rustow set to `limit`.
+    pub fn run_limit(&self, res: nix::sys::resource::Resource, limit: u64, args: &[&str], env: &[(&str, &str)]) -> Out {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = self.command(args, env);
+        // SAFETY: setrlimit is async-signal-safe; nothing else runs between fork and exec.
+        unsafe {
+            cmd.pre_exec(move || Ok(nix::sys::resource::setrlimit(res, limit, limit)?));
+        }
+        output(cmd)
+    }
+
     /// Like `run`, with the umask of rustow set to `mask`.
     pub fn run_umask(&self, mask: nix::sys::stat::Mode, args: &[&str]) -> Out {
         use std::os::unix::process::CommandExt;
