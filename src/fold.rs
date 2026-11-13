@@ -8,7 +8,7 @@
 //! run deploys every one of them again (see `plan`), so that no content
 //! seen through the link disappears from view.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 
 use crate::error::{Error, Result};
@@ -21,24 +21,29 @@ use crate::state::{Record, State};
 #[derive(Debug, Default)]
 pub struct Folding {
     /// Directories deployed (or kept) as one symlink.
-    pub folds: Vec<RelPath>,
+    pub folds: BTreeSet<RelPath>,
     /// Recorded folded links to replace by real directories.
-    pub unfolds: Vec<RelPath>,
+    pub unfolds: BTreeSet<RelPath>,
 }
 
 impl Folding {
     /// True when a fold already deploys this source.
     pub fn covered(&self, source: &Source) -> bool {
-        source.scope == Scope::Home && self.folds.iter().any(|f| source.path.strip_prefix(f).is_some())
+        source.scope == Scope::Home && below_any(&source.path, &self.folds)
     }
 
     /// The unfolding directory this source lies below.
     pub fn unfolding(&self, source: &Source) -> Option<&RelPath> {
-        if source.scope != Scope::Home {
-            return None;
-        }
-        self.unfolds.iter().find(|u| source.dest.strip_prefix(u).is_some())
+        dir_above(source, &self.unfolds)
     }
+}
+
+/// The directory of `dirs` that a home source's destination lies below.
+pub fn dir_above<'a>(source: &Source, dirs: &'a BTreeSet<RelPath>) -> Option<&'a RelPath> {
+    if !is_home(source) {
+        return None;
+    }
+    ancestors(&source.dest).into_iter().find_map(|a| dirs.get(&a))
 }
 
 /// Destinations involved in a collision, with the collision text (see `plan`).
@@ -104,7 +109,7 @@ fn fold_candidates(
     selected: &[&Source],
     recorded: &BTreeMap<RelPath, &Record>,
     collided: &Collided,
-) -> Result<Vec<RelPath>> {
+) -> Result<BTreeSet<RelPath>> {
     let link_sources: BTreeSet<&RelPath> = discovery
         .sources
         .iter()
@@ -120,9 +125,9 @@ fn fold_candidates(
         .into_iter()
         .collect();
     candidates.sort_by_key(|d| (d.components().count(), d.clone()));
-    let mut folds: Vec<RelPath> = Vec::new();
+    let mut folds = BTreeSet::new();
     for dir in candidates {
-        if folds.iter().any(|f| dir.starts_with(f)) {
+        if below_any(&dir, &folds) {
             continue;
         }
         // Keeping rustow's own link changes nothing; a new fold must not
@@ -130,7 +135,7 @@ fn fold_candidates(
         let record = recorded.get(&dir).copied();
         let allowed = if record.is_some() { &link_sources } else { &chosen };
         if qualifies(ctx, &dir, record, allowed, collided)? {
-            folds.push(dir);
+            folds.insert(dir);
         }
     }
     Ok(folds)
@@ -152,23 +157,32 @@ fn qualifies(
 }
 
 /// Recorded folded links that a selected source now lies below and that are no longer folded.
-fn select_unfolds(selected: &[&Source], recorded: &BTreeMap<RelPath, &Record>, folds: &[RelPath]) -> Vec<RelPath> {
+fn select_unfolds(
+    selected: &[&Source],
+    recorded: &BTreeMap<RelPath, &Record>,
+    folds: &BTreeSet<RelPath>,
+) -> BTreeSet<RelPath> {
+    let above_selected: BTreeSet<RelPath> = selected
+        .iter()
+        .filter(|s| is_home(s))
+        .flat_map(|s| ancestors(&s.dest))
+        .collect();
     recorded
         .keys()
-        .filter(|dir| {
-            selected
-                .iter()
-                .any(|s| is_home(s) && s.dest.strip_prefix(dir).is_some())
-        })
-        .filter(|dir| !folds.contains(dir))
+        .filter(|dir| above_selected.contains(*dir) && !folds.contains(*dir))
         .cloned()
         .collect()
 }
 
-/// Repository files below `dir` that are not discovered sources: they
-/// would vanish from the destination if the folded link were unfolded.
-pub fn strays(ctx: &Context, discovery: &Discovery, dir: &RelPath) -> Result<Vec<RelPath>> {
-    let sources: BTreeSet<&RelPath> = discovery.sources.iter().map(|s| &s.path).collect();
+/// True when an ancestor directory of `path` is one of `dirs`.
+fn below_any(path: &RelPath, dirs: &BTreeSet<RelPath>) -> bool {
+    ancestors(path).iter().any(|a| dirs.contains(a))
+}
+
+/// Repository files below `dir` that are not one of `sources` (the
+/// discovered source paths): they would vanish from the destination if
+/// the folded link were unfolded.
+pub fn strays(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath) -> Result<Vec<RelPath>> {
     Ok(entries_below(ctx, dir)?
         .into_iter()
         .filter(|(f, is_dir)| !is_dir && !sources.contains(f))
@@ -189,6 +203,7 @@ fn recorded_folds<'a>(ctx: &Context, state: &'a State) -> BTreeMap<RelPath, &'a 
         .collect()
 }
 
+/// The directories above `path`, the nearest first.
 fn ancestors(path: &RelPath) -> Vec<RelPath> {
     let mut out = Vec::new();
     let mut cur = path.parent();

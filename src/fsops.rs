@@ -456,12 +456,18 @@ pub fn user_private_gid(owner: &str, primary_gid: u32, group: &str, members: &[S
 }
 
 /// `user_private_gid` of a uid from the account database; `None` when the
-/// account or its group is unknown.
+/// account or its group is unknown. Each uid is looked up once per run:
+/// planning asks for every link, and a lookup can take a millisecond.
 fn private_gid_of(owner: u32) -> Option<u32> {
     use nix::unistd::{Group, Uid, User};
-    let user = User::from_uid(Uid::from_raw(owner)).ok().flatten()?;
-    let group = Group::from_gid(user.gid).ok().flatten()?;
-    user_private_gid(&user.name, user.gid.as_raw(), &group.name, &group.mem)
+    use std::collections::HashMap;
+    thread_local!(static KNOWN: std::cell::RefCell<HashMap<u32, Option<u32>>> = Default::default());
+    let lookup = || {
+        let user = User::from_uid(Uid::from_raw(owner)).ok().flatten()?;
+        let group = Group::from_gid(user.gid).ok().flatten()?;
+        user_private_gid(&user.name, user.gid.as_raw(), &group.name, &group.mem)
+    };
+    KNOWN.with_borrow_mut(|known| *known.entry(owner).or_insert_with(lookup))
 }
 
 /// Applies `check_chain` to the real path of a cache entry, which may not

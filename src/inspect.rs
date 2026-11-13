@@ -2,6 +2,7 @@
 //! `diff` (may print secrets by design), `status` and `check` (never print
 //! content).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
@@ -367,12 +368,10 @@ fn deployed_status(mode: &Mode) -> &'static str {
     }
 }
 
-/// The recorded source is still in the repository: a source, a skipped
-/// file or a folded directory.
-fn source_exists(ctx: &Context, discovery: &Discovery, record: &Record) -> bool {
-    discovery.sources.iter().any(|s| s.path == record.source)
-        || discovery.skipped.iter().any(|s| s.path == record.source)
-        || (record.folded_dir && ctx.root.join(record.source.as_path()).is_dir())
+/// The recorded source is still in the repository: one of `known` (the
+/// sources and skipped files) or a folded directory.
+fn source_exists(ctx: &Context, known: &HashSet<&RelPath>, record: &Record) -> bool {
+    known.contains(&record.source) || (record.folded_dir && ctx.root.join(record.source.as_path()).is_dir())
 }
 
 /// Recorded destinations in the current targets whose source no longer exists.
@@ -387,9 +386,12 @@ fn orphans<'a>(
         .filter(|a| !matches!(a.as_str(), "." | "./"))
         .map(|a| RelPath::parse(a))
         .collect::<Result<_>>()?;
+    let paths: HashSet<&RelPath> = (discovery.sources.iter().map(|s| &s.path))
+        .chain(discovery.skipped.iter().map(|s| &s.path))
+        .collect();
     let mut found = Vec::new();
     for (dest, record) in &state.entries {
-        let known = source_exists(ctx, discovery, record);
+        let known = source_exists(ctx, &paths, record);
         let selected = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
         if known || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;

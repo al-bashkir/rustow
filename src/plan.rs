@@ -1,7 +1,7 @@
 //! Deployment planning. `decide` is the pure rule table that says what
 //! may happen at one path; the planner feeds it real filesystem state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -306,9 +306,10 @@ fn collision_details(
     folded: impl Fn(Scope) -> bool,
 ) -> BTreeMap<(Scope, &RelPath), String> {
     let mut collided = BTreeMap::new();
+    let by_path: HashMap<&RelPath, &Source> = discovery.sources.iter().map(|s| (&s.path, s)).collect();
     for c in check_collisions(&discovery.sources, &folded) {
         let detail = c.to_string();
-        for s in discovery.sources.iter().filter(|s| c.sources.contains(&s.path)) {
+        for s in c.sources.iter().filter_map(|p| by_path.get(p)) {
             collided.insert((s.scope, &s.dest), detail.clone());
         }
     }
@@ -405,12 +406,13 @@ fn plan_unfolds(
     folding: &mut fold::Folding,
     state: &State,
     items: &mut Vec<PlanItem>,
-) -> Result<Vec<RelPath>> {
-    let mut blocked = Vec::new();
+) -> Result<BTreeSet<RelPath>> {
+    let sources: HashSet<&RelPath> = discovery.sources.iter().map(|s| &s.path).collect();
+    let mut blocked = BTreeSet::new();
     for dir in &folding.unfolds {
-        let item = plan_unfold(ctx, discovery, dir, state)?;
+        let item = plan_unfold(ctx, &sources, dir, state)?;
         if !matches!(item.step, Step::Unfold { .. }) {
-            blocked.push(dir.clone());
+            blocked.insert(dir.clone());
         }
         items.push(item);
     }
@@ -420,17 +422,13 @@ fn plan_unfolds(
 
 /// A source below a folded directory that cannot be unfolded is blocked
 /// too: its destination path still runs through rustow's folded link.
-fn below_blocked_unfold(ctx: &Context, source: &Source, blocked: &[RelPath]) -> Option<PlanItem> {
-    let dir = blocked.iter().find(|d| is_below(source, d))?;
+fn below_blocked_unfold(ctx: &Context, source: &Source, blocked: &BTreeSet<RelPath>) -> Option<PlanItem> {
+    let dir = fold::dir_above(source, blocked)?;
     Some(PlanItem {
         source: source.clone(),
         dest: ctx.dest_path(source),
         step: unfold_pending(dir),
     })
-}
-
-fn is_below(source: &Source, dir: &RelPath) -> bool {
-    source.scope == Scope::Home && source.dest.strip_prefix(dir).is_some()
 }
 
 fn unfold_pending(dir: &RelPath) -> Step {
@@ -444,36 +442,41 @@ fn unfold_pending(dir: &RelPath) -> Step {
 /// run deploys again every source below it. Otherwise the unfold becomes
 /// a conflict and no deploy below it runs.
 fn hold_partial_unfolds(discovery: &Discovery, items: &mut [PlanItem]) {
-    let held: Vec<(RelPath, &RelPath)> = items
-        .iter()
-        .filter(|i| matches!(i.step, Step::Unfold { .. }))
-        .filter_map(|i| Some((i.source.dest.clone(), not_redeployed(discovery, items, &i.source.dest)?)))
-        .collect();
-    for (dir, missing) in held {
-        for item in items.iter_mut() {
-            if item.source.path == dir {
-                let detail = format!("{missing} would not be deployed again; run `rustow apply {dir}`");
-                item.step = blocked(Conflict::FoldedStrays, detail);
-            } else if is_below(&item.source, &dir) && matches!(item.step, Step::Deploy(_)) {
-                item.step = unfold_pending(&dir);
-            }
+    let held = not_redeployed(discovery, items);
+    let held_dirs: BTreeSet<RelPath> = held.keys().cloned().collect();
+    for item in items.iter_mut() {
+        if let Some(missing) = held.get(&item.source.path) {
+            let dir = &item.source.path;
+            let detail = format!("{missing} would not be deployed again; run `rustow apply {dir}`");
+            item.step = blocked(Conflict::FoldedStrays, detail);
+        } else if let Some(dir) = fold::dir_above(&item.source, &held_dirs)
+            && matches!(item.step, Step::Deploy(_))
+        {
+            item.step = unfold_pending(dir);
         }
     }
 }
 
-/// The first source below `dir` that `items` does not deploy without a conflict.
-fn not_redeployed<'a>(discovery: &'a Discovery, items: &[PlanItem], dir: &RelPath) -> Option<&'a RelPath> {
-    let clean: Vec<&RelPath> = items
+/// For each unfolding directory of `items`, the first source below it
+/// that `items` does not deploy without a conflict.
+fn not_redeployed<'a>(discovery: &'a Discovery, items: &[PlanItem]) -> BTreeMap<RelPath, &'a RelPath> {
+    let unfolds: BTreeSet<RelPath> = items
+        .iter()
+        .filter(|i| matches!(i.step, Step::Unfold { .. }))
+        .map(|i| i.source.dest.clone())
+        .collect();
+    let clean: HashSet<&RelPath> = items
         .iter()
         .filter(|i| deploys_cleanly(&i.step))
         .map(|i| &i.source.path)
         .collect();
-    discovery
-        .sources
-        .iter()
-        .filter(|s| is_below(s, dir))
-        .map(|s| &s.path)
-        .find(|p| !clean.contains(p))
+    let mut held = BTreeMap::new();
+    for s in discovery.sources.iter().filter(|s| !clean.contains(&s.path)) {
+        if let Some(dir) = fold::dir_above(s, &unfolds) {
+            held.entry(dir.clone()).or_insert(&s.path);
+        }
+    }
+    held
 }
 
 fn deploys_cleanly(step: &Step) -> bool {
@@ -483,7 +486,7 @@ fn deploys_cleanly(step: &Step) -> bool {
         && d.unwritable.is_none())
 }
 
-fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &State) -> Result<PlanItem> {
+fn plan_unfold(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath, state: &State) -> Result<PlanItem> {
     let source = Source {
         path: dir.clone(),
         scope: Scope::Home,
@@ -491,7 +494,7 @@ fn plan_unfold(ctx: &Context, discovery: &Discovery, dir: &RelPath, state: &Stat
         mode: Mode::Link,
     };
     let dest = ctx.dest_path(&source);
-    let strays = fold::strays(ctx, discovery, dir)?;
+    let strays = fold::strays(ctx, sources, dir)?;
     let link = state.entries.get(&dest).and_then(|r| r.link_target.clone());
     let step = match (fsops::parent_state(&ctx.home_target, dir)?, strays.is_empty()) {
         (_, false) => {

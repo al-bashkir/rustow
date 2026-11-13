@@ -536,15 +536,13 @@ pub fn check_collisions(sources: &[Source], folded: impl Fn(Scope) -> bool) -> V
     }
     let mut out = Vec::new();
     for ((scope, dest), group) in &by_dest {
-        let mut involved: Vec<RelPath> = group.iter().map(|s| s.path.clone()).collect();
-        for ((other_scope, other_dest), others) in &by_dest {
-            let below = other_dest
-                .strip_prefix(dest.as_str())
-                .is_some_and(|r| r.starts_with('/'));
-            if other_scope == scope && below {
-                involved.extend(others.iter().map(|s| s.path.clone()));
-            }
-        }
+        // Keys below `dest/` sort between `dest/` and `dest0` ('0' follows '/').
+        let below = by_dest.range((*scope, format!("{dest}/"))..(*scope, format!("{dest}0")));
+        let mut involved: Vec<RelPath> = group
+            .iter()
+            .chain(below.flat_map(|(_, g)| g))
+            .map(|s| s.path.clone())
+            .collect();
         if involved.len() > 1 {
             involved.sort();
             out.push(Collision {
@@ -897,6 +895,44 @@ mod tests {
         let c = check_collisions(&sources, |_| false);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].sources, [rel(".config.tmpl"), rel(".config/x")]);
+    }
+
+    #[test]
+    fn collision_needs_a_whole_component_and_the_same_scope() {
+        let sources = [
+            src("a/b", Scope::Home, "a/b"),
+            src("a/bc", Scope::Home, "a/bc"),
+            src("a/b-c", Scope::Home, "a/b-c"),
+            src("a/b.d", Scope::Home, "a/b.d"),
+            src("rustowroot/a/b/c", Scope::Root, "a/b/c"),
+            src("x.tmpl", Scope::Home, "x"),
+            src("x/y/z", Scope::Home, "x/y/z"),
+            src("x/y.tmpl", Scope::Home, "x/y"),
+        ];
+        let c = check_collisions(&sources, |_| false);
+        let found: Vec<(&str, Vec<&str>)> = c
+            .iter()
+            .map(|c| (c.dest.as_str(), c.sources.iter().map(RelPath::as_str).collect()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("x", vec!["x.tmpl", "x/y.tmpl", "x/y/z"]),
+                ("x/y", vec!["x/y.tmpl", "x/y/z"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn collision_below_a_case_folded_destination() {
+        let sources = [
+            src(".Config.tmpl", Scope::Home, ".Config"),
+            src(".config/a/b", Scope::Home, ".config/a/b"),
+        ];
+        assert!(check_collisions(&sources, |_| false).is_empty());
+        let c = check_collisions(&sources, |_| true);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].sources, [rel(".Config.tmpl"), rel(".config/a/b")]);
     }
 
     #[test]
