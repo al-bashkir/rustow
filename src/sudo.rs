@@ -17,18 +17,20 @@ use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsFd;
-use std::path::PathBuf;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::config::mode_bits_ok;
 use crate::error::{Error, Result};
 use crate::execute::{self, Policy};
 use crate::fsops::{DirId, Observed, TEMP_PREFIX};
 use crate::hash::Hash;
-use crate::plan::{Deploy, with_privilege_hint};
+use crate::plan::{Deploy, Desired, with_privilege_hint};
 
 /// The hidden command that the helper runs.
 pub const HELPER: &str = "__sudo-helper";
@@ -265,23 +267,21 @@ fn read_header(input: &mut impl Read) -> Result<Option<Header<Job<Deploy>>>> {
 }
 
 /// Runs one job with the executor's own code, walking with the trust rule
-/// of the header's user. A relative path, or a temporary name that is not
-/// one name with `TEMP_PREFIX`, is refused. A write streams its content
-/// from `body`.
+/// of the header's user, unless `refused` refuses it. A write streams its
+/// content from `body`.
 fn run(header: Header<Job<Deploy>>, body: &mut dyn Read) -> Done {
+    if let Some(why) = refused(&header.job) {
+        return Done::failed(format!("the sudo helper refuses this job: {why}"));
+    }
     let user = header.user;
-    let mut done = Done::failed("the sudo helper takes absolute paths and temporary names only".into());
+    let mut done = Done::failed(String::new());
     let result = match header.job {
         Job::Write {
             deploy,
             policy,
             backup,
             temp,
-        } if deploy.path.is_absolute()
-            && backup.is_absolute()
-            && temp.starts_with(TEMP_PREFIX)
-            && !temp.contains('/') =>
-        {
+        } => {
             let new = execute::NewFile {
                 from: body,
                 len: header.len,
@@ -294,13 +294,66 @@ fn run(header: Header<Job<Deploy>>, body: &mut dyn Read) -> Done {
             dir_id,
             observed,
             created_dirs,
-        } if path.is_absolute() => {
-            execute::remove_dest(&path, dir_id, &observed, &created_dirs, user, &mut done.removed_dirs).map(|()| None)
-        }
-        _ => return done,
+        } => execute::remove_dest(&path, dir_id, &observed, &created_dirs, user, &mut done.removed_dirs).map(|()| None),
     };
     done.result = result.map_err(with_privilege_hint);
     done
+}
+
+/// Why the helper refuses `job`, if it does: a path that is not absolute
+/// and normal, a directory name or temporary name that is not one name
+/// (the temporary one with `TEMP_PREFIX`), or a mode with bits that the
+/// configuration does not accept (`config::mode_bits_ok`).
+fn refused(job: &Job<Deploy>) -> Option<String> {
+    match job {
+        Job::Write {
+            deploy, backup, temp, ..
+        } => write_refused(deploy, backup, temp),
+        Job::Remove { path, created_dirs, .. } => {
+            abnormal(std::iter::once(path.as_path()).chain(created_dirs.iter().map(PathBuf::as_path)))
+        }
+    }
+}
+
+fn write_refused(d: &Deploy, backup: &Path, temp: &str) -> Option<String> {
+    let (base, names) = match &d.missing_dirs {
+        Some((base, names)) => (Some(base.as_path()), names.as_slice()),
+        None => (None, &[][..]),
+    };
+    let meta = match &d.desired {
+        Desired::File { meta, .. } => meta.mode,
+        Desired::Symlink(_) => None,
+    };
+    let mode = [d.dir_mode, d.file_mode]
+        .into_iter()
+        .chain(meta)
+        .find(|m| !mode_bits_ok(*m));
+    let temp_ok = temp.starts_with(TEMP_PREFIX) && one_name(temp.as_bytes());
+    abnormal([d.path.as_path(), backup].into_iter().chain(base))
+        .or_else(|| {
+            names
+                .iter()
+                .find(|n| !one_name(n.as_bytes()))
+                .map(|n| format!("{n:?} is not one name"))
+        })
+        .or_else(|| (!temp_ok).then(|| format!("{temp:?} is not one name that starts with {TEMP_PREFIX}")))
+        .or_else(|| mode.map(|m| format!("mode {m:04o} has bits beyond 0777")))
+}
+
+/// The message for the first of `paths` that is not absolute or has an
+/// empty, `.` or `..` part.
+fn abnormal<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Option<String> {
+    let normal = |p: &Path| match p.as_os_str().as_bytes().split_first() {
+        Some((b'/', rest)) => rest.split(|&b| b == b'/').all(one_name),
+        _ => false,
+    };
+    let bad = paths.find(|p| !normal(p))?;
+    Some(format!("{} is not an absolute path of names only", bad.display()))
+}
+
+/// True for one name: not empty, `.` or `..`, and without a `/`.
+fn one_name(name: &[u8]) -> bool {
+    !matches!(name, b"" | b"." | b"..") && !name.contains(&b'/')
 }
 
 #[cfg(test)]
@@ -438,6 +491,144 @@ mod tests {
         assert_eq!(fs::read(d.join("f")).unwrap(), b"old");
     }
 
+    /// The results of `jobs`, served as one input.
+    fn serve_all(jobs: &[Job<&Deploy>]) -> Vec<Done> {
+        let mut input = Vec::new();
+        for job in jobs {
+            frame(&mut input, job);
+        }
+        let mut output = Vec::new();
+        serve_on(&mut input.as_slice(), &mut output).unwrap();
+        output
+            .split(|&b| b == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_slice(l).unwrap())
+            .collect()
+    }
+
+    /// The helper refuses a job with a path that is not absolute and
+    /// normal, a directory name that is not one name, or a mode with bits
+    /// that the configuration does not accept. It writes nothing for it.
+    #[test]
+    fn the_helper_refuses_paths_names_and_modes_out_of_bounds() {
+        let (_t, d) = tmp();
+        fs::create_dir(d.join("sub")).unwrap();
+        let make = || {
+            let file = Desired::File {
+                hash: Hash::of(b"x"),
+                meta: FileMeta::default(),
+            };
+            crate::execute::tests::create(&d.join("sub/f"), file, Some(b"x"))
+        };
+        let good = make();
+        let write = |deploy| Job::Write {
+            deploy,
+            policy: Policy::Abort,
+            backup: d.join("bk/f"),
+            temp: format!("{TEMP_PREFIX}test"),
+        };
+        let bad: Vec<(Deploy, &str)> = vec![
+            (
+                Deploy {
+                    path: d.join("sub/../f"),
+                    ..make()
+                },
+                "sub/../f",
+            ),
+            (
+                Deploy {
+                    path: d.join("sub/./f"),
+                    ..make()
+                },
+                "sub/./f",
+            ),
+            (
+                Deploy {
+                    path: d.join("sub//f"),
+                    ..make()
+                },
+                "sub//f",
+            ),
+            (
+                Deploy {
+                    missing_dirs: Some(("relbase".into(), vec!["a".into()])),
+                    ..make()
+                },
+                "relbase",
+            ),
+            (
+                Deploy {
+                    missing_dirs: Some((d.join("sub"), vec!["a/b".into()])),
+                    ..make()
+                },
+                "a/b",
+            ),
+            (
+                Deploy {
+                    missing_dirs: Some((d.join("sub"), vec!["..".into()])),
+                    ..make()
+                },
+                "..",
+            ),
+            (
+                Deploy {
+                    file_mode: 0o4755,
+                    ..make()
+                },
+                "4755",
+            ),
+            (
+                Deploy {
+                    dir_mode: 0o2755,
+                    ..make()
+                },
+                "2755",
+            ),
+            (
+                Deploy {
+                    desired: Desired::File {
+                        hash: Hash::of(b"x"),
+                        meta: FileMeta {
+                            mode: Some(0o1644),
+                            ..FileMeta::default()
+                        },
+                    },
+                    ..make()
+                },
+                "1644",
+            ),
+        ];
+        let mut jobs: Vec<Job<&Deploy>> = bad.iter().map(|(deploy, _)| write(deploy)).collect();
+        for (backup, temp) in [("bk/../f", ""), ("bk/f", "x/")] {
+            jobs.push(Job::Write {
+                deploy: &good,
+                policy: Policy::Abort,
+                backup: d.join(backup),
+                temp: format!("{temp}{TEMP_PREFIX}test"),
+            });
+        }
+        fs::write(d.join("sub/r"), "r").unwrap();
+        let mut gone = remove(&d.join("sub/r"));
+        if let Job::Remove { path, .. } = &mut gone {
+            *path = d.join("sub/./r");
+        }
+        jobs.push(gone);
+        let mut shown: Vec<&str> = bad.iter().map(|(_, why)| *why).collect();
+        shown.extend(["bk/../f", "x/.rustow-tmp-test", "sub/./r"]);
+        let done = serve_all(&jobs);
+        assert_eq!(done.len(), jobs.len());
+        for (done, want) in done.iter().zip(shown) {
+            let why = done.result.as_ref().unwrap_err();
+            assert!(
+                why.starts_with("the sudo helper refuses this job: ") && why.contains(want),
+                "{why}"
+            );
+        }
+        assert_eq!(fs::read_dir(d.join("sub")).unwrap().count(), 1, "only r");
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 1, "only sub");
+        assert!(serve_all(&[write(&good)])[0].result.is_ok(), "the same job, valid");
+    }
+
     /// Frames follow each other directly: each header starts where the
     /// content of the one before ends, also when a job reads nothing.
     #[test]
@@ -471,7 +662,7 @@ mod tests {
                 .result
                 .as_ref()
                 .unwrap_err()
-                .contains("absolute paths and temporary names only")
+                .contains("relative is not an absolute path of names only")
         );
         assert!(lines[1].result.is_ok() && !d.join("a").exists());
     }

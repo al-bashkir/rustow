@@ -517,6 +517,12 @@ impl RawEntry {
     }
 }
 
+/// True when `mode` holds only permission bits (0777): no setuid, setgid
+/// or sticky bit. The configuration and the sudo helper accept no other.
+pub(crate) fn mode_bits_ok(mode: u32) -> bool {
+    mode & !0o777 == 0
+}
+
 /// Parses an octal permission string such as "0600". Special bits
 /// (setuid, setgid, sticky) are rejected: dotfiles never need them.
 pub(crate) fn parse_mode(text: &str) -> std::result::Result<u32, String> {
@@ -526,7 +532,7 @@ pub(crate) fn parse_mode(text: &str) -> std::result::Result<u32, String> {
         return Err(bad());
     }
     let mode = u32::from_str_radix(text, 8).map_err(|_| bad())?;
-    if mode > 0o777 {
+    if !mode_bits_ok(mode) {
         return Err(bad());
     }
     if mode & 0o400 == 0 {
