@@ -468,7 +468,7 @@ fn undeploy(
     }
     let stop = interrupt_flag()?;
     forget_links(&mut state, selector, &removals);
-    let items = execute::remove(removals, &stop, &mut state);
+    let items = execute::remove(removals, &stop, &mut state, &ctx.cache_dir);
     finish(&ctx, &state, held.as_ref(), printer, &items)
 }
 

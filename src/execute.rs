@@ -694,11 +694,11 @@ fn verify(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
 
 /// Removes managed destinations and the empty directories rustow created for them.
 /// The `sudo` removals wait for one sudo helper call at the end.
-pub fn remove(removals: Vec<Removal>, stop: &AtomicBool, state: &mut State) -> Vec<ItemReport> {
+pub fn remove(removals: Vec<Removal>, stop: &AtomicBool, state: &mut State, cache_dir: &Path) -> Vec<ItemReport> {
     let mut out = Vec::with_capacity(removals.len());
     let (mut jobs, mut slots) = (Vec::new(), Vec::new());
     for r in removals {
-        let (action, detail, job) = remove_item(&r, stop, state);
+        let (action, detail, job) = remove_item(&r, stop, state, cache_dir);
         if let Some(job) = job {
             jobs.push(job);
             slots.push((out.len(), r.dest.clone()));
@@ -727,6 +727,7 @@ fn remove_item(
     r: &Removal,
     stop: &AtomicBool,
     state: &mut State,
+    cache_dir: &Path,
 ) -> (Action, Option<String>, Option<Job<&'static Deploy>>) {
     if stop.load(Ordering::SeqCst) {
         let why = "interrupted before this item; nothing changed";
@@ -736,7 +737,7 @@ fn remove_item(
         Verdict::Keep(why) => (Action::Conflict, Some(why.clone()), None),
         Verdict::Fail(why) => (Action::Fail, Some(why.clone()), None),
         Verdict::Forget => {
-            state.entries.remove(&r.dest);
+            drop_record(state, &r.dest, cache_dir);
             (Action::Forget, Some("already gone".into()), None)
         }
         Verdict::Remove {
@@ -766,7 +767,7 @@ fn remove_item(
             expect,
         } => match remove_one(&r.path, *dir_id, (observed, expect.as_ref()), state) {
             Ok(()) => {
-                state.entries.remove(&r.dest);
+                drop_record(state, &r.dest, cache_dir);
                 (Action::Remove, None, None)
             }
             Err(e) => {
@@ -775,6 +776,34 @@ fn remove_item(
             }
         },
     }
+}
+
+/// Drops the record of `dest`, and the cache entry behind its link while
+/// it holds what rustow wrote, so that a later deploy writes it again. An
+/// entry edited through the link stays: the next deploy reports it, and
+/// `cache clean` removes it.
+fn drop_record(state: &mut State, dest: &Path, cache_dir: &Path) {
+    let Some(record) = state.entries.remove(dest) else {
+        return;
+    };
+    if let (Some(entry), Some(hash)) = (&record.cache_path, &record.applied_hash) {
+        // shortcut: a failure keeps the entry; the next deploy reports it.
+        let _ = remove_cache_entry(cache_dir, entry, hash);
+    }
+}
+
+/// Removes the cache file `entry` when its content has `hash`.
+fn remove_cache_entry(cache_dir: &Path, entry: &Path, hash: &Hash) -> Result<()> {
+    // private_tree would create the directories of an entry that is gone.
+    if entry.symlink_metadata().is_err() {
+        return Ok(());
+    }
+    let (parent, name) = fsops::split(entry)?;
+    let dir = fsops::private_tree(cache_dir, parent)?;
+    if matches!(dir.inspect(name)?, Observed::File { hash: now, .. } if now == *hash) {
+        dir.remove(name)?;
+    }
+    Ok(())
 }
 
 fn remove_one(path: &Path, dir_id: DirId, planned: (&Observed, Option<&Hash>), state: &mut State) -> Result<()> {

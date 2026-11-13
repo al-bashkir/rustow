@@ -120,6 +120,33 @@ fn edits_through_the_symlink_are_detected_as_modified() {
     assert!(read(&fx.home_path(".gitconfig")).contains("Example User"));
 }
 
+/// undeploy removes the cache entry behind the link too, also when the
+/// link is already gone, so a changed template deploys again. An entry
+/// edited through the link stays, and the next apply reports it.
+#[test]
+fn a_changed_template_deploys_again_after_undeploy() {
+    let fx = templated();
+    fx.ok(&["apply"]);
+    let entry = cache_target(&fx, ".gitconfig");
+    fx.ok(&["undeploy", ".gitconfig.tmpl"]);
+    assert!(!entry.exists(), "the unchanged entry goes");
+    fx.write("rustow.toml", &config("Other User"));
+    fx.ok(&["apply"]);
+    assert!(read(&fx.home_path(".gitconfig")).contains("Other User"));
+
+    fs::remove_file(fx.home_path(".gitconfig")).unwrap();
+    fx.ok(&["undeploy", ".gitconfig.tmpl"]);
+    assert!(!entry.exists(), "the entry of a link that is gone goes too");
+    fx.ok(&["apply"]);
+
+    fs::write(&entry, "edited by hand\n").unwrap();
+    fx.ok(&["undeploy", ".gitconfig.tmpl"]);
+    assert_eq!(read(&entry), "edited by hand\n", "an edited entry stays");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("cache entry"), "{out:?}");
+}
+
 #[test]
 fn failed_render_keeps_old_cache_and_dest() {
     let fx = templated();
