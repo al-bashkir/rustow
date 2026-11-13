@@ -159,6 +159,17 @@ impl State {
         self.registrations.get(source) == Some(&Registration::Link)
     }
 
+    /// Forgets each created directory that is gone: the user removed it, so
+    /// a directory there later is not rustow's. One that rustow cannot look
+    /// at stays.
+    pub fn forget_missing_dirs(&mut self) {
+        use std::io::ErrorKind::{NotADirectory, NotFound};
+        self.created_dirs.retain(|d| match fs::symlink_metadata(d) {
+            Ok(m) => m.is_dir(),
+            Err(e) => !matches!(e.kind(), NotFound | NotADirectory),
+        });
+    }
+
     /// Loads the state of `repo`; a missing file gives an empty state.
     pub fn load(dir: &Path, repo_id: &str, repo: &Path) -> Result<State> {
         // As for a write (`Dir::private`): rustow never reads the state through a symlink.
@@ -398,6 +409,27 @@ mod tests {
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(&State::file(&dir, "id")), 0o600);
+    }
+
+    #[test]
+    fn a_created_directory_that_is_gone_is_forgotten() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = |name: &str| d.path().join(name);
+        for dir in ["kept", "closed/inside"] {
+            fs::create_dir_all(p(dir)).unwrap();
+        }
+        fs::write(p("file"), "").unwrap();
+        fs::set_permissions(p("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+        let mut s = sample();
+        s.created_dirs = ["kept", "gone", "file", "file/below", "closed/inside"].map(p).into();
+        s.forget_missing_dirs();
+        fs::set_permissions(p("closed"), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut want = vec![p("kept")];
+        if !nix::unistd::geteuid().is_root() {
+            want.insert(0, p("closed/inside")); // rustow cannot look: it stays
+        }
+        assert_eq!(s.created_dirs.into_iter().collect::<Vec<_>>(), want);
     }
 
     #[test]

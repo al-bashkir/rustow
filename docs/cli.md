@@ -184,7 +184,7 @@ rustow writes each file through a temporary file (`.rustow-tmp-…`) in the same
 
 `unlink` removes link-mode records and folded directory links whose symlink still has the recorded text. `undeploy` removes all modes. It removes a copy only if the content hash is unchanged. With a template or decrypted link, it also removes the cache entry behind it when that is unchanged; an entry that you edited through the link stays, and the next `apply` reports it. A system file that you cannot read goes through the sudo helper, which checks the hash as root. An item that fails does not stop the others. Both accept sources that you removed from the repository. If you replaced a folded directory link yourself, they forget its record and leave what is there. They do the same when a directory above a destination now resolves inside the repository or its cache (for example, you replaced it with a symlink into the repository): what is there is a source, so they never remove it.
 
-rustow also removes parent directories that it created, only when they are empty.
+rustow also removes parent directories that it created, only when they are empty. When you remove such a directory yourself, the next `apply`, `link`, `file apply`, `template apply`, `unlink` or `undeploy` forgets it. A directory that you make there later is yours.
 
 A destination that changed stays in place, and the item is a conflict. Under the default policy (`skip`), rustow removes the other items. Under `--on-conflict abort`, it removes nothing when any item is a conflict or an error. `unlink` and `undeploy` do not take `--backup`, `--force`, `--on-conflict backup` or `--on-conflict overwrite`: they exit 2. Move or remove a changed destination yourself.
 

@@ -583,3 +583,22 @@ fn a_destination_inside_the_state_directory_is_refused() {
     assert!(is_regular(&state));
     assert!(fx.state_json()["entries"].is_object(), "rustow's own state stays");
 }
+
+/// The state forgets a created directory that the user removed: an empty
+/// directory that the user makes there later is not rustow's to remove.
+#[test]
+fn a_created_directory_that_the_user_removed_is_forgotten() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n[defaults]\nfold_directories = false\n");
+    fx.write(".config/a/x", "x\n");
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let created = |fx: &Fixture| fx.state_json()["created_dirs"].as_array().unwrap().clone();
+    let dir = serde_json::json!(fx.home_path(".config/a"));
+    assert!(created(&fx).contains(&dir), "{:?}", created(&fx));
+    fs::remove_dir_all(fx.home_path(".config/a")).unwrap();
+    fs::remove_dir_all(fx.repo.join(".config")).unwrap();
+    fx.ok(&["apply"]);
+    assert!(!created(&fx).contains(&dir), "{:?}", created(&fx));
+    assert!(created(&fx).contains(&serde_json::json!(fx.home_path(".config"))));
+}

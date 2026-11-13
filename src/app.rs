@@ -434,11 +434,18 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     };
     let mut items = execute::execute(plan, &run, &mut state);
     items.extend(orphaned);
-    finish(&ctx, &state, held.as_ref(), printer, &items)
+    finish(&ctx, &mut state, held.as_ref(), printer, &items)
 }
 
 /// Reports the items first, so a state write failure cannot hide what changed on disk.
-fn finish(ctx: &Context, state: &State, held: Option<&Lock>, printer: &Printer, items: &[ItemReport]) -> Result<i32> {
+fn finish(
+    ctx: &Context,
+    state: &mut State,
+    held: Option<&Lock>,
+    printer: &Printer,
+    items: &[ItemReport],
+) -> Result<i32> {
+    state.forget_missing_dirs();
     let saved = save(ctx, state, held);
     printer.items(items, RunKind::Applied);
     saved.map(|()| execute::exit_code(items))
@@ -467,7 +474,7 @@ fn undeploy(
     let stop = interrupt_flag()?;
     forget_links(&mut state, selector, &removals);
     let items = execute::remove(removals, &stop, &mut state, &ctx.cache_dir);
-    finish(&ctx, &state, held.as_ref(), printer, &items)
+    finish(&ctx, &mut state, held.as_ref(), printer, &items)
 }
 
 /// The policy of `undeploy` and `unlink`: they never remove a changed
