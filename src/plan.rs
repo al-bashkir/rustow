@@ -6,12 +6,13 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::config::{Backend, Metadata, Owner};
 use crate::error::{Error, Result};
-use crate::fsops::{self, FileMeta, Observed, ParentState};
+use crate::fsops::{self, DirId, FileMeta, Observed, ParentState};
 use crate::hash::Hash;
 use crate::paths::{RelPath, Scope, link_text};
 use crate::repo::Context;
@@ -202,6 +203,8 @@ pub struct CacheWrite {
 pub struct Deploy {
     /// Real destination path (ancestor symlinks resolved).
     pub path: PathBuf,
+    /// Identity of the deepest existing directory of `path` at planning.
+    pub dir_id: DirId,
     /// Deepest existing ancestor and the directories to create below it.
     pub missing_dirs: Option<(PathBuf, Vec<String>)>,
     pub dir_mode: u32,
@@ -496,7 +499,10 @@ fn plan_unfold(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath, state:
     let dest = ctx.dest_path(&source);
     let strays = fold::strays(ctx, sources, dir)?;
     let link = state.entries.get(&dest).and_then(|r| r.link_target.clone());
-    let step = match (fsops::parent_state(&ctx.home_target, dir)?, strays.is_empty()) {
+    let step = match (
+        fsops::parent_state(&ctx.home_target, dir, geteuid().as_raw())?,
+        strays.is_empty(),
+    ) {
         (_, false) => {
             let list: Vec<&str> = strays.iter().take(3).map(RelPath::as_str).collect();
             let detail = format!(
@@ -508,7 +514,7 @@ fn plan_unfold(ctx: &Context, sources: &HashSet<&RelPath>, dir: &RelPath, state:
                 detail,
             }
         }
-        (ParentState::Ready(parent), true) => unfold_step(parent.join(dir.file_name()), link)?,
+        (ParentState::Ready { dir: parent, .. }, true) => unfold_step(parent.join(dir.file_name()), link)?,
         _ => Step::Blocked {
             conflict: Conflict::ParentBlocked,
             detail: dest.display().to_string(),
@@ -534,16 +540,16 @@ fn unfold_step(path: PathBuf, link: Option<PathBuf>) -> Result<Step> {
 /// Real destination path and the directories to create for it. Below an
 /// unfolding directory, that directory counts as missing.
 fn locate(ctx: &Context, source: &Source, unfolding: Option<&RelPath>) -> Result<ParentState> {
-    let root = ctx.target_root(source.scope);
+    let (root, me) = (ctx.target_root(source.scope), geteuid().as_raw());
     let Some(dir) = unfolding else {
-        return fsops::parent_state(root, &source.dest);
+        return fsops::parent_state(root, &source.dest, me);
     };
-    match fsops::parent_state(root, dir)? {
-        ParentState::Ready(existing) => {
+    match fsops::parent_state(root, dir, me)? {
+        ParentState::Ready { dir: existing, id } => {
             let below = source.dest.parent().and_then(|p| p.strip_prefix(dir));
             let mut missing = vec![dir.file_name().to_owned()];
             missing.extend(below.iter().flat_map(|b| b.components().map(str::to_owned)));
-            Ok(ParentState::Missing { existing, missing })
+            Ok(ParentState::Missing { existing, id, missing })
         }
         other => Ok(other),
     }
@@ -552,9 +558,10 @@ fn locate(ctx: &Context, source: &Source, unfolding: Option<&RelPath>) -> Result
 /// Directories to create: the deepest existing ancestor and the names below it.
 type MissingDirs = Option<(PathBuf, Vec<String>)>;
 
-/// Result of locating a destination: its path, or a step that ends planning early.
+/// Result of locating a destination: its path, the identity of its
+/// deepest existing directory, or a step that ends planning early.
 enum Located {
-    At(PathBuf, MissingDirs),
+    At(PathBuf, DirId, MissingDirs),
     Early(Step),
 }
 
@@ -564,8 +571,8 @@ fn blocked(conflict: Conflict, detail: String) -> Step {
 
 /// Finds the real destination path and the directories to create for it.
 fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&RelPath>) -> Result<Located> {
-    let (path, missing_dirs) = match locate(ctx, source, unfolding)? {
-        ParentState::Ready(parent) => (parent.join(source.dest.file_name()), None),
+    let (path, id, missing_dirs) = match locate(ctx, source, unfolding)? {
+        ParentState::Ready { dir, id } => (dir.join(source.dest.file_name()), id, None),
         ParentState::Blocked { path, reason } => {
             let detail = format!("{}: {reason}", path.display());
             return Ok(Located::Early(blocked(Conflict::ParentBlocked, detail)));
@@ -573,19 +580,19 @@ fn locate_dest(ctx: &Context, source: &Source, dest: &Path, unfolding: Option<&R
         ParentState::Missing { .. } if !ctx.config.defaults.create_directories => {
             return Ok(Located::Early(blocked(Conflict::NoParent, dest.display().to_string())));
         }
-        ParentState::Missing { existing, missing } => {
+        ParentState::Missing { existing, id, missing } => {
             let path = missing
                 .iter()
                 .fold(existing.clone(), |p, m| p.join(m))
                 .join(source.dest.file_name());
-            (path, Some((existing, missing)))
+            (path, id, Some((existing, missing)))
         }
     };
     if path.starts_with(&ctx.root) || path.starts_with(&ctx.cache_dir) {
         let detail = format!("{} resolves inside the repository or its cache", path.display());
         return Ok(Located::Early(blocked(Conflict::ParentBlocked, detail)));
     }
-    Ok(Located::At(path, missing_dirs))
+    Ok(Located::At(path, id, missing_dirs))
 }
 
 /// A symlink must point only at a file that nobody but root or the
@@ -688,7 +695,7 @@ fn needs_sudo(
     unwritable: Option<String>,
     owner: (Option<u32>, Option<u32>),
 ) -> (Option<String>, bool) {
-    use nix::unistd::{getegid, geteuid};
+    use nix::unistd::getegid;
     let changes = match decision {
         Decision::Create | Decision::Update | Decision::FixMetadata => true,
         Decision::Conflict(c) => c.resolvable(),
@@ -751,8 +758,8 @@ fn plan_one(
     record: Option<&Record>,
     unfolding: Option<&RelPath>,
 ) -> Result<Step> {
-    let (path, missing_dirs) = match locate_dest(ctx, source, dest, unfolding)? {
-        Located::At(path, missing_dirs) => (path, missing_dirs),
+    let (path, dir_id, missing_dirs) = match locate_dest(ctx, source, dest, unfolding)? {
+        Located::At(path, dir_id, missing_dirs) => (path, dir_id, missing_dirs),
         Located::Early(step) => return Ok(step),
     };
     let want = match want(ctx, source, &path) {
@@ -763,7 +770,7 @@ fn plan_one(
         Ok(o) => o,
         Err(step) => return Ok(step),
     };
-    deploy_step(source, record, path, missing_dirs, want, observed)
+    deploy_step(source, record, (path, dir_id, missing_dirs), want, observed)
 }
 
 /// True when the symlink at `path` reaches the wanted link target in other text.
@@ -778,8 +785,7 @@ fn same_link(path: &Path, observed: &Observed, desired: &Desired) -> bool {
 fn deploy_step(
     source: &Source,
     record: Option<&Record>,
-    path: PathBuf,
-    missing_dirs: MissingDirs,
+    (path, dir_id, missing_dirs): (PathBuf, DirId, MissingDirs),
     want: Want,
     observed: Observed,
 ) -> Result<Step> {
@@ -809,6 +815,7 @@ fn deploy_step(
     };
     Ok(Step::Deploy(Box::new(Deploy {
         path,
+        dir_id,
         missing_dirs,
         dir_mode: if source.mode.backend().is_some() { 0o700 } else { 0o777 },
         desired: want.desired,
@@ -1144,8 +1151,8 @@ fn removal_verdict(observed: Observed, record: &Record) -> Verdict {
 /// Real path of a recorded destination and what is there now.
 fn observe_recorded(ctx: &Context, record: &Record, dest: &Path, rel: &Path) -> Result<(PathBuf, Observed)> {
     let rel = RelPath::parse(&rel.to_string_lossy())?;
-    match fsops::parent_state(ctx.target_root(record.scope), &rel)? {
-        ParentState::Ready(parent) => {
+    match fsops::parent_state(ctx.target_root(record.scope), &rel, geteuid().as_raw())? {
+        ParentState::Ready { dir: parent, .. } => {
             let path = parent.join(rel.file_name());
             let observed = fsops::inspect(&path)?;
             Ok((path, observed))

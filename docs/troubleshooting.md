@@ -74,6 +74,8 @@ rustow checks every symlink (see the [trust rule](security.md#trust-rule)). Only
 
 "symlink target is not safe: …" names a symlinked ancestor of the destination, for example `~/.config`. Its target directory fails the same rule. Fix the permissions of that directory.
 
+"symlink is not safe: … is owned by uid N" names a symlinked ancestor that another user owns. That user can point it to another directory. Replace it with your own symlink.
+
 ## Permission errors for system files
 
 Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file that you cannot write (see [system files](system-files.md#privileges)). "sudo failed": sudo did not get your password, or there was no terminal. Run the command again in a terminal. An unreadable destination gives a per-item error with a hint; rustow does not use sudo to read it.

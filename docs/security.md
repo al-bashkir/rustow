@@ -22,7 +22,12 @@ A symlink must point only at a file that other users cannot change. rustow check
 
 When a check fails, the item is a conflict. The message starts with "untrusted link target: repository source: …" or "untrusted link target: cache entry: …". It gives the path and the cause, for example "writable by others" or "writable by group N, which is not the private group of uid M; run `chmod g-w <path>`". It also tells you to copy the file instead.
 
-A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow follows it only when its target directory passes the same rule for the current user. Otherwise the item is a conflict: "symlink target is not safe: …".
+A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow opens the directories above a destination one at a time and never follows a symlink by accident. It follows a symlinked ancestor only when both checks pass for the current user:
+
+- The symlink itself is owned by root or by you. Its mode bits do not count. Otherwise the item is a conflict: "symlink is not safe: …".
+- Its target directory passes the same rule. Otherwise the item is a conflict: "symlink target is not safe: …".
+
+A walk follows at most 40 symlinks. A dangling symlink blocks the item: "symlink does not resolve".
 
 ## Error messages
 

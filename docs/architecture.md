@@ -63,6 +63,10 @@ With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a Te
 
 A skipped entry has a kind (`source::SkipKind`): `Present` for a path in the repository that cannot deploy (also a path that rustow cannot read), `Missing` for a registration whose source does not exist. Only a `Present` entry counts as an existing source, so a recorded destination of a `Missing` one is ORPHANED.
 
+## Directories
+
+`fsops::Dir::walk` resolves a path one component at a time from an open directory (`openat` with `O_NOFOLLOW`; `O_PATH` on Linux, `O_SEARCH` on macOS). A real directory needs no check. A symlink is followed only when `fsops::check_dir` accepts its owner (mode 0) and the directory that it reaches, and when it is still the same symlink after that. `fsops::parent_state` uses the walk for the planner. It returns the real path and the `DirId` (device and inode) of the deepest existing directory. `Deploy::dir_id` keeps it.
+
 ## Input and output
 
 - rustow reads `rustow.toml`, `.rustowignore`, the state file and `state import` input with `fsops::read_limited`: a regular file, opened with `O_NONBLOCK`, with a size limit.

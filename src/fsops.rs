@@ -16,6 +16,9 @@ use crate::error::{Error, IoContext, Result};
 use crate::hash::Hash;
 use crate::paths::RelPath;
 
+mod dir;
+pub use dir::{Dir, DirId, Walked};
+
 /// Name prefix of every temporary file rustow creates. Names with it are
 /// reserved at any depth, so a file left by a crash is never deployed.
 pub const TEMP_PREFIX: &str = ".rustow-tmp-";
@@ -314,68 +317,37 @@ fn sync_dir(dir: &Path) {
 /// State of the directories above a destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParentState {
-    /// The canonical parent directory exists.
-    Ready(PathBuf),
-    /// `existing` (canonical) exists; `missing` components must be created below it.
-    Missing { existing: PathBuf, missing: Vec<String> },
+    /// The parent directory exists at the real path `dir`.
+    Ready { dir: PathBuf, id: DirId },
+    /// `existing` (real path) exists; `missing` components must be created below it.
+    Missing {
+        existing: PathBuf,
+        id: DirId,
+        missing: Vec<String>,
+    },
     /// An ancestor is a file, a dangling or unsafe symlink, or not readable.
     Blocked { path: PathBuf, reason: String },
 }
 
-/// Walks `dest`'s ancestors below `scope_root` (canonical). Symlinked
-/// ancestors are followed only to a directory owned by the current user
-/// or root that others cannot write (sticky root-owned dirs are fine).
-pub fn parent_state(scope_root: &Path, dest: &RelPath) -> Result<ParentState> {
-    let Some(parent) = dest.parent() else {
-        return Ok(ParentState::Ready(scope_root.to_path_buf()));
-    };
-    let parts: Vec<&str> = parent.components().collect();
-    let mut cur = scope_root.to_path_buf();
-    for (i, part) in parts.iter().enumerate() {
-        let next = cur.join(part);
-        let blocked = |reason: String| {
-            Ok(ParentState::Blocked {
-                path: next.clone(),
-                reason,
-            })
-        };
-        match fs::symlink_metadata(&next) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let missing = parts[i..].iter().map(|s| (*s).to_owned()).collect();
-                return Ok(ParentState::Missing { existing: cur, missing });
-            }
-            Err(e) => return blocked(e.to_string()),
-            Ok(m) if m.is_dir() => cur = next,
-            Ok(m) if m.file_type().is_symlink() => match safe_dir_target(&next) {
-                Ok(real) => cur = real,
-                Err(reason) => return blocked(reason),
-            },
-            Ok(_) => return blocked("not a directory".into()),
-        }
-    }
-    Ok(ParentState::Ready(cur))
-}
-
-/// Resolves a symlinked ancestor to a directory that passes `check_dir` for
-/// the current user: the same owner and group rule as a link target's chain.
-fn safe_dir_target(link: &Path) -> std::result::Result<PathBuf, String> {
-    let real = fs::canonicalize(link).map_err(|e| format!("symlink does not resolve: {e}"))?;
-    let m = fs::metadata(&real).map_err(|e| e.to_string())?;
-    if !m.is_dir() {
-        return Err(format!(
-            "symlink points to {}, which is not a directory",
-            real.display()
-        ));
-    }
-    let me = geteuid().as_raw();
-    let dir = Owned {
-        path: real.clone(),
-        uid: m.uid(),
-        gid: m.gid(),
-        mode: m.mode(),
-    };
-    check_dir(&dir, me, private_gid_of(me)).map_err(|why| format!("symlink target is not safe: {why}"))?;
-    Ok(real)
+/// Walks `dest`'s ancestors below `scope_root` with `Dir::walk`: a
+/// symlinked ancestor is followed only when `check_dir` accepts, for
+/// `me`, the symlink's owner and the directory it reaches.
+pub fn parent_state(scope_root: &Path, dest: &RelPath, me: u32) -> Result<ParentState> {
+    let parent = dest
+        .parent()
+        .map_or_else(|| scope_root.to_path_buf(), |p| scope_root.join(p.as_path()));
+    Ok(match Dir::open(&parent, me)? {
+        Walked::Ready(dir) => ParentState::Ready {
+            id: dir.id()?,
+            dir: dir.path,
+        },
+        Walked::Missing { dir, missing } => ParentState::Missing {
+            id: dir.id()?,
+            existing: dir.path,
+            missing,
+        },
+        Walked::Blocked { path, reason } => ParentState::Blocked { path, reason },
+    })
 }
 
 /// Creates `missing` below `existing` with `mode` (subject to umask) and
@@ -748,46 +720,78 @@ mod tests {
         assert!(ensure_private_dir(&d.join("file")).is_err());
     }
 
+    fn dir_id(p: &Path) -> DirId {
+        let st = nix::sys::stat::stat(p).unwrap();
+        DirId {
+            dev: st.st_dev,
+            ino: st.st_ino,
+        }
+    }
+
     #[test]
     fn parent_state_cases() {
         let (_t, d) = tmp();
+        let state = |dest: &str| parent_state(&d.join("h"), &rel(dest), geteuid().as_raw()).unwrap();
+        let reason = |dest: &str| match state(dest) {
+            ParentState::Blocked { reason, .. } => reason,
+            other => panic!("{dest}: {other:?}"),
+        };
+        let ready = |dir: PathBuf| ParentState::Ready { id: dir_id(&dir), dir };
         fs::create_dir_all(d.join("h/.config")).unwrap();
+        assert_eq!(state(".bashrc"), ready(d.join("h")));
         assert_eq!(
-            parent_state(&d.join("h"), &rel(".bashrc")).unwrap(),
-            ParentState::Ready(d.join("h"))
-        );
-        assert_eq!(
-            parent_state(&d.join("h"), &rel(".config/nvim/lua/init.lua")).unwrap(),
+            state(".config/nvim/lua/init.lua"),
             ParentState::Missing {
                 existing: d.join("h/.config"),
+                id: dir_id(&d.join("h/.config")),
                 missing: vec!["nvim".into(), "lua".into()]
             }
         );
-        // A safe symlinked ancestor is followed.
+        // Safe symlinked ancestors are followed, also relative ones with `..`.
         fs::create_dir_all(d.join("data/cfg")).unwrap();
         symlink(d.join("data"), d.join("h/.local")).unwrap();
-        assert_eq!(
-            parent_state(&d.join("h"), &rel(".local/cfg/x")).unwrap(),
-            ParentState::Ready(d.join("data/cfg"))
-        );
-        // A file, a dangling link, and a world-writable target block.
+        assert_eq!(state(".local/cfg/x"), ready(d.join("data/cfg")));
+        symlink("../data/./cfg", d.join("h/rel")).unwrap();
+        assert_eq!(state("rel/x"), ready(d.join("data/cfg")));
+        // A file, a dangling link, a loop and a world-writable target block.
         fs::write(d.join("h/file"), b"").unwrap();
-        assert!(matches!(
-            parent_state(&d.join("h"), &rel("file/x")).unwrap(),
-            ParentState::Blocked { .. }
-        ));
+        assert_eq!(reason("file/x"), "not a directory");
         symlink(d.join("gone"), d.join("h/dangling")).unwrap();
-        assert!(matches!(
-            parent_state(&d.join("h"), &rel("dangling/x")).unwrap(),
-            ParentState::Blocked { .. }
-        ));
+        assert_eq!(reason("dangling/x"), "symlink does not resolve");
+        symlink("loop", d.join("h/loop")).unwrap();
+        assert!(reason("loop/x").contains("symbolic links"), "{}", reason("loop/x"));
         fs::create_dir(d.join("open")).unwrap();
         fs::set_permissions(d.join("open"), fs::Permissions::from_mode(0o777)).unwrap();
         symlink(d.join("open"), d.join("h/open")).unwrap();
-        assert!(matches!(
-            parent_state(&d.join("h"), &rel("open/x")).unwrap(),
-            ParentState::Blocked { .. }
-        ));
+        let open = reason("open/x");
+        assert!(
+            open.starts_with("symlink target is not safe") && open.contains("writable by others"),
+            "{open}"
+        );
+    }
+
+    /// A symlinked ancestor must be owned by root or by the user, as each
+    /// path on a link target's chain: another user could point it elsewhere.
+    #[test]
+    fn a_symlinked_ancestor_is_followed_only_when_its_owner_is_trusted() {
+        let me = geteuid().as_raw();
+        if me == 0 {
+            eprintln!("SKIP: root owns every symlink it creates");
+            return;
+        }
+        let (_t, d) = tmp();
+        fs::create_dir(d.join("h")).unwrap();
+        // /usr is root-owned and not writable by others on Linux and macOS.
+        symlink("/usr", d.join("h/sys")).unwrap();
+        let ready = parent_state(&d.join("h"), &rel("sys/x"), me).unwrap();
+        assert!(matches!(ready, ParentState::Ready { .. }), "{ready:?}");
+        match parent_state(&d.join("h"), &rel("sys/x"), me + 1).unwrap() {
+            ParentState::Blocked { path, reason } => {
+                assert_eq!(path, d.join("h/sys"));
+                assert!(reason.contains(&format!("owned by uid {me}")), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

@@ -11,6 +11,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 
+use nix::unistd::geteuid;
+
 use crate::error::{Error, Result};
 use crate::fsops::{self, ParentState};
 use crate::paths::{RelPath, Scope, same_link_target};
@@ -228,7 +230,7 @@ fn still_linked(ctx: &Context, dir: &RelPath, record: &Record) -> bool {
 fn dest_allows_fold(ctx: &Context, dir: &RelPath, recorded: bool) -> Result<bool> {
     match fs::symlink_metadata(ctx.home_target.join(dir.as_path())) {
         Err(_) => Ok(!matches!(
-            fsops::parent_state(&ctx.home_target, dir)?,
+            fsops::parent_state(&ctx.home_target, dir, geteuid().as_raw())?,
             ParentState::Blocked { .. }
         )),
         Ok(m) if m.file_type().is_symlink() => Ok(recorded || reaches_dir(ctx, dir)?),
@@ -239,7 +241,7 @@ fn dest_allows_fold(ctx: &Context, dir: &RelPath, recorded: bool) -> Result<bool
 /// The symlink at the destination of `dir` names the repository directory
 /// `dir`, in any text. A link elsewhere is the user's.
 fn reaches_dir(ctx: &Context, dir: &RelPath) -> Result<bool> {
-    let ParentState::Ready(parent) = fsops::parent_state(&ctx.home_target, dir)? else {
+    let ParentState::Ready { dir: parent, .. } = fsops::parent_state(&ctx.home_target, dir, geteuid().as_raw())? else {
         return Ok(false);
     };
     let link = parent.join(dir.file_name());

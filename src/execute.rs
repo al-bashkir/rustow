@@ -634,6 +634,7 @@ mod tests {
         };
         let deploy = Deploy {
             path: path.to_path_buf(),
+            dir_id: fsops::DirId { dev: 0, ino: 0 },
             missing_dirs: None,
             dir_mode: 0o777,
             desired,
