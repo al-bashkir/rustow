@@ -271,3 +271,35 @@ fn a_state_directory_from_the_environment_inside_the_repository_is_refused() {
     assert!(!fx.repo.join("rustow").exists(), "nothing written there");
     assert!(!fx.home_path(".bashrc").exists());
 }
+
+/// With `--ignored`, a path argument may name an ignored path: it gives
+/// its IGNORED row. Path arguments select the IGNORED rows as they select
+/// the other rows. Without `--ignored`, an ignored path argument is an error.
+#[test]
+fn status_ignored_shows_the_row_of_an_ignored_path_argument() {
+    let fx = Fixture::new();
+    fx.write(".rustowignore", "*.bak\nprivate/\n");
+    fx.write("a.bak", "x");
+    fx.write("private/key", "k");
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let rows = |args: &[&str]| {
+        let out = fx.run(&[&["status", "--ignored"], args].concat());
+        assert_eq!(out.code, 0, "{args:?}: {out:?}");
+        out.stdout.lines().map(str::to_owned).collect::<Vec<_>>()
+    };
+    let ignored = |p: &str| format!("  IGNORED {p}");
+    assert_eq!(
+        rows(&["a.bak"]),
+        [ignored("a.bak"), "0 ok, 1 ignored, 0 need attention".into()]
+    );
+    assert_eq!(
+        rows(&["private/key"]),
+        [ignored("private"), "0 ok, 1 ignored, 0 need attention".into()]
+    );
+    assert_eq!(rows(&[".bashrc"]), ["1 ok, 0 need attention"]);
+    assert_eq!(rows(&["."]).len(), 3, "all ignored rows");
+    let out = fx.run(&["status", "a.bak"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("'a.bak' is ignored by .rustowignore"), "{out:?}");
+}

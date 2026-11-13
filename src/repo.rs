@@ -89,6 +89,9 @@ pub struct Context {
     pub notices: Vec<String>,
     /// Passphrase prompts allowed (`--interactive`).
     pub interactive: bool,
+    /// A path argument may name an ignored path; it selects no source
+    /// (`status --ignored`, which shows its IGNORED row).
+    pub ignored_args: bool,
     /// Private keys, loaded on first use.
     pub keys: crate::crypto::Keys,
 }
@@ -129,6 +132,7 @@ impl Context {
             state_dir,
             notices,
             interactive: false,
+            ignored_args: false,
             keys: Default::default(),
         })
     }
@@ -218,6 +222,9 @@ impl Context {
             )));
         }
         if self.ignore.is_ignored(&rel, is_dir) {
+            if self.ignored_args {
+                return Ok(rel);
+            }
             let by = self.ignore.ignoring_rule(&rel, is_dir).unwrap_or(IGNORE_FILE);
             return Err(Error::Usage(format!("'{rel}' is ignored by {by}")));
         }

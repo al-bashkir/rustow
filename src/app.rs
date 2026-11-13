@@ -134,14 +134,16 @@ fn template_list(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 }
 
 fn diff_cmd(g: &Global, env: &Env, p: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
-    let prepared = prepare(g, env, p, paths, selector, false)?;
+    let prepared = prepare(open(g, env, p)?, p, paths, selector, false)?;
     p.warn(prepared.ctx.skipped(&prepared.discovery, paths)?);
     p.warn(&prepared.discovery.rule_warnings);
     inspect::diff(&prepared.plan, &prepared.state, p)
 }
 
 fn status_cmd(g: &Global, env: &Env, p: &mut Printer, a: &StatusArgs) -> Result<i32> {
-    let s = prepare(g, env, p, &a.paths.paths, Selector::All, false)?;
+    let mut ctx = open(g, env, p)?;
+    ctx.ignored_args = a.ignored;
+    let s = prepare(ctx, p, &a.paths.paths, Selector::All, false)?;
     p.warn(&plan::other_targets(&s.ctx, &a.paths.paths, &s.state)?);
     inspect::status(&s.ctx, &s.plan, &s.discovery, &s.state, &a.paths.paths, a.ignored, p)
 }
@@ -288,17 +290,15 @@ pub struct Prepared {
     _lock: Option<Lock>,
 }
 
-/// Context, state and plan for the sources a command selects. Takes the
-/// repository lock first when `locked`.
+/// State and plan for the sources a command selects in `ctx` (from
+/// `open`). Takes the repository lock first when `locked`.
 fn prepare(
-    g: &Global,
-    env: &Env,
-    printer: &mut Printer,
+    mut ctx: Context,
+    printer: &Printer,
     paths: &[String],
     selector: Selector,
     locked: bool,
 ) -> Result<Prepared> {
-    let mut ctx = open(g, env, printer)?;
     let lock = lock_run(&ctx, printer, !locked, true)?;
     let mut state = ctx.load_state()?;
     let discovery = ctx.discover()?;
@@ -406,7 +406,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         discovery,
         plan,
         _lock: held,
-    } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
+    } = prepare(open(g, env, printer)?, printer, paths, selector, !g.dry_run)?;
     printer.warn(ctx.skipped(&discovery, paths)?);
     printer.warn(&discovery.rule_warnings);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;

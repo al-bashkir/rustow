@@ -38,4 +38,4 @@ rustow skips symlinks and FIFOs in the repository with a warning. Ignore them to
 
 rustow never decrypts an ignored source.
 
-Use `rustow status --ignored` to list ignored paths. Use `rustow check` to validate the rules.
+Use `rustow status --ignored` to list ignored paths. `rustow status --ignored <path>` shows the IGNORED row of an ignored path, and of the ignored paths below a directory. Without `--ignored`, an ignored path argument is a usage error (exit 2). Use `rustow check` to validate the rules.

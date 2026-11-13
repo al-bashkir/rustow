@@ -325,13 +325,7 @@ pub fn status(
         detail: Some(s.reason.clone()),
     }));
     if ignored {
-        rows.extend(discovery.ignored.iter().map(|p| Row {
-            source: p.to_string(),
-            dest: None,
-            mode: String::new(),
-            status: "IGNORED",
-            detail: None,
-        }));
+        rows.extend(ignored_rows(discovery, args)?);
     }
     let attention = rows.iter().filter(|r| !CLEAN.contains(&r.status)).count();
     if printer.json {
@@ -344,6 +338,21 @@ pub fn status(
         print_rows(&rows, attention, printer);
     }
     Ok(i32::from(attention > 0))
+}
+
+/// The IGNORED rows of `status --ignored`: each ignored path at or below a
+/// path argument, or an ignored directory above one.
+fn ignored_rows(discovery: &Discovery, args: &[String]) -> Result<Vec<Row>> {
+    let wanted = prefixes(args)?;
+    let selected = |p: &&RelPath| wanted.is_empty() || wanted.iter().any(|a| p.starts_with(a) || a.starts_with(p));
+    let row = |p: &RelPath| Row {
+        source: p.to_string(),
+        dest: None,
+        mode: String::new(),
+        status: "IGNORED",
+        detail: None,
+    };
+    Ok(discovery.ignored.iter().filter(selected).map(row).collect())
 }
 
 /// The status rows as text, then the summary line.
@@ -460,6 +469,14 @@ fn source_exists(ctx: &Context, known: &HashSet<&RelPath>, record: &Record) -> b
 /// skipped path above that source, if any.
 type Gone<'a, 'd> = (&'a PathBuf, &'a Record, Option<&'d Skipped>);
 
+/// The path arguments as repository paths; none (or ".") selects all.
+fn prefixes(args: &[String]) -> Result<Vec<RelPath>> {
+    (args.iter())
+        .filter(|a| !matches!(a.as_str(), "." | "./"))
+        .map(|a| RelPath::parse(a))
+        .collect()
+}
+
 /// Recorded destinations in the current targets whose source no longer
 /// exists. A source below a skipped path (an unreadable directory) comes
 /// with that path: rustow cannot tell if it is still there.
@@ -469,11 +486,7 @@ fn orphans<'a, 'd>(
     state: &'a State,
     args: &[String],
 ) -> Result<Vec<Gone<'a, 'd>>> {
-    let prefixes: Vec<RelPath> = args
-        .iter()
-        .filter(|a| !matches!(a.as_str(), "." | "./"))
-        .map(|a| RelPath::parse(a))
-        .collect::<Result<_>>()?;
+    let prefixes = prefixes(args)?;
     let present: Vec<&Skipped> = discovery
         .skipped
         .iter()
