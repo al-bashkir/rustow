@@ -370,16 +370,15 @@ pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
 
 /// Whether the change of `d` may create a temporary file in the
 /// destination's directory (a new file or a replaced object), and in the
-/// backup's (a change that may go to the backup: a conflict, an update or
-/// a metadata change of a file that the plan could not read, whose content
-/// may not be the recorded one, or a change of a file that the plan could
-/// not see).
+/// backup's (a change that may go to the backup: a conflict, or a change
+/// of a file that the plan could not read or see, whose content may not be
+/// the recorded one). An item that does not change needs neither.
 fn temp_places(d: &Deploy, policy: Policy) -> (bool, bool) {
     let file = matches!(d.desired, Desired::File { .. });
     let replaces = matches!(d.decision, Decision::Create | Decision::Conflict(_));
-    let unread = matches!(d.decision, Decision::Update | Decision::FixMetadata) && d.expect.is_some();
-    let here = d.decision == Decision::Update || (file && replaces) || unread;
-    let unverified = unread || d.observed == Observed::Hidden;
+    let changes = !matches!(d.decision, Decision::UpToDate | Decision::Adopt);
+    let unverified = changes && (d.expect.is_some() || d.observed == Observed::Hidden);
+    let here = d.decision == Decision::Update || (file && replaces) || unverified;
     let away = policy == Policy::Backup && (unverified || matches!(d.decision, Decision::Conflict(_)));
     (here, away)
 }
@@ -1126,6 +1125,14 @@ pub(crate) mod tests {
                 (true, true),
             ),
             (unreadable, Decision::UpToDate, Some(Hash::of(b"x")), (false, false)),
+            (Observed::Hidden, Decision::Create, None, (true, true)),
+            (Observed::Hidden, Decision::Update, Some(Hash::of(b"x")), (true, true)),
+            (
+                Observed::Hidden,
+                Decision::UpToDate,
+                Some(Hash::of(b"x")),
+                (false, false),
+            ),
         ];
         for (observed, decision, expect, want) in cases {
             (d.observed, d.decision, d.expect) = (observed, decision, expect);

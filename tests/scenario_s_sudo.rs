@@ -597,6 +597,20 @@ fn the_backup_directories_of_a_system_file_are_made_by_the_user() {
     assert_eq!(s.calls(), 1, "a home file never uses sudo");
 }
 
+/// `--backup` makes backup directories only for an item whose change may
+/// move something away: a clean file in a directory that you cannot
+/// search gets none.
+#[test]
+fn a_clean_file_that_you_cannot_see_gets_no_backup_directory() {
+    let s = Sudo::new(SEARCHES);
+    hidden(&s, "0640");
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let out = s.run(&["apply", "--backup"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("0 changed"), "{out:?}");
+    assert_eq!(walk(&s.fx.state.join("rustow/backups")), Vec::<PathBuf>::new());
+}
+
 /// A file owner may give its file any of its own groups, so a `group`
 /// that the user is a member of needs no sudo in a directory that the
 /// user can write: the primary group and, when the user has one, a
