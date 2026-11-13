@@ -299,14 +299,19 @@ fn print_rows(rows: &[Row], attention: usize, printer: &Printer) {
     }
 }
 
-/// "N ok, N need attention"; skipped sources are counted apart, when any.
+/// "N ok, N need attention"; skipped sources and ignored paths are counted
+/// apart, when any.
 fn summary(rows: &[Row], attention: usize) -> String {
-    let skipped = rows.iter().filter(|r| r.status == "SKIPPED").count();
-    let ok = rows.len() - attention - skipped;
-    match skipped {
-        0 => format!("{ok} ok, {attention} need attention"),
-        n => format!("{ok} ok, {n} skipped, {attention} need attention"),
+    let count = |status| rows.iter().filter(|r| r.status == status).count();
+    let (skipped, ignored) = (count("SKIPPED"), count("IGNORED"));
+    let mut parts = vec![format!("{} ok", rows.len() - attention - skipped - ignored)];
+    for (n, what) in [(skipped, "skipped"), (ignored, "ignored")] {
+        if n > 0 {
+            parts.push(format!("{n} {what}"));
+        }
     }
+    parts.push(format!("{attention} need attention"));
+    parts.join(", ")
 }
 
 fn row(item: &PlanItem, state: &State) -> Row {

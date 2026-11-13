@@ -203,9 +203,20 @@ fn status_lists_ignored_on_request() {
     let fx = Fixture::new();
     fx.write(".rustowignore", "*.bak\n");
     fx.write("a.bak", "x");
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
     let out = fx.run(&["status", "--ignored"]);
     assert!(
         out.stdout.contains("IGNORED") && out.stdout.contains("a.bak"),
         "{out:?}"
     );
+    assert_eq!(
+        out.stdout.lines().last(),
+        Some("1 ok, 1 ignored, 0 need attention"),
+        "{out:?}"
+    );
+    fx.write("n.age.gpg", "x");
+    let out = fx.run(&["status", "--ignored"]);
+    let summary = "1 ok, 1 skipped, 1 ignored, 0 need attention";
+    assert_eq!(out.stdout.lines().last(), Some(summary), "{out:?}");
 }
