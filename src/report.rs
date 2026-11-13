@@ -25,24 +25,41 @@ pub fn out(args: std::fmt::Arguments) {
 }
 
 /// `text` for human output: each control character escaped, `\n`, `\t`
-/// and `\r` by name, any other (ESC, the rest of C0, DEL, C1) as `\xNN`.
-/// A file name then cannot start a new report line or a terminal
-/// sequence. JSON output escapes on its own and does not use this.
+/// and `\r` by name, any other (ESC, the rest of C0, DEL, C1) as `\xNN`;
+/// each bidirectional control as `\u{NNNN}`; a backslash as `\\`. A file
+/// name then cannot start a new report line or a terminal sequence, nor
+/// look like another name. JSON output escapes on its own and does not use this.
 pub fn shown(text: &str) -> Cow<'_, str> {
-    if !text.chars().any(char::is_control) {
+    if !text.chars().any(|c| escape(c).is_some()) {
         return Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len() + 8);
     for c in text.chars() {
-        match c {
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            c if c.is_control() => out.push_str(&format!("\\x{:02x}", u32::from(c))),
-            c => out.push(c),
+        match escape(c) {
+            Some(escaped) => out.push_str(&escaped),
+            None => out.push(c),
         }
     }
     Cow::Owned(out)
+}
+
+/// How `shown` writes `c`; `None` when it shows as it is.
+fn escape(c: char) -> Option<String> {
+    let code = u32::from(c);
+    match c {
+        '\\' => Some(r"\\".into()),
+        '\n' => Some(r"\n".into()),
+        '\t' => Some(r"\t".into()),
+        '\r' => Some(r"\r".into()),
+        c if c.is_control() => Some(format!("\\x{code:02x}")),
+        c if is_bidi(c) => Some(format!("\\u{{{code:04x}}}")),
+        _ => None,
+    }
+}
+
+/// The Unicode bidirectional controls: marks, embeddings, overrides and isolates.
+fn is_bidi(c: char) -> bool {
+    matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 /// Colors are on for text output to a terminal, unless `--no-color` or a
@@ -90,8 +107,14 @@ impl Printer {
 
     /// Informational message on stderr.
     pub fn notice(&self, msg: &str) {
+        self.shown_notice(&shown(msg));
+    }
+
+    /// `notice` for a message that is ready to print: its names went
+    /// through `shown` already (the notices of `pending`).
+    pub fn shown_notice(&self, msg: &str) {
         if !self.quiet && !self.json {
-            eprintln!("note: {}", shown(msg));
+            eprintln!("note: {msg}");
         }
     }
 
@@ -371,6 +394,26 @@ mod tests {
         assert!(matches!(shown("plain ~/é ok"), Cow::Borrowed("plain ~/é ok")));
         assert_eq!(shown("a\nb\tc\rd"), r"a\nb\tc\rd");
         assert_eq!(shown("\x1b[2J\x00\x7f\u{9b}x"), r"\x1b[2J\x00\x7f\x9bx");
+    }
+
+    /// A backslash in a name is escaped too, so an escape in the output
+    /// always stands for one character: `tab\there` and a real tab differ.
+    #[test]
+    fn shown_escapes_a_backslash() {
+        assert_eq!(shown(r"tab\there"), r"tab\\there");
+        assert_ne!(shown(r"tab\there"), shown("tab\there"));
+        assert_eq!(shown(r"\"), r"\\");
+    }
+
+    /// Bidirectional controls can make a name look like another one.
+    #[test]
+    fn shown_escapes_bidirectional_controls() {
+        let all = "\u{61c}\u{200e}\u{200f}\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}";
+        let want = r"\u{061c}\u{200e}\u{200f}\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}";
+        assert_eq!(shown(all), want);
+        assert_eq!(shown("a\u{202e}b"), r"a\u{202e}b");
+        let near = "\u{61b}\u{61d}\u{200d}\u{2010}\u{2029}\u{202f}\u{2065}\u{206a}";
+        assert!(matches!(shown(near), Cow::Borrowed(_)), "only these code points");
     }
 
     /// On a terminal each verb gets its color: changes green, notes cyan,

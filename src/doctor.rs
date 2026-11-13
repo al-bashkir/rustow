@@ -16,6 +16,9 @@ struct Check {
     level: &'static str,
     name: &'static str,
     detail: String,
+    /// The detail is ready to print: its names went through `shown`, and
+    /// a shell command in it must not (the lines of `pending::report`).
+    shown: bool,
 }
 
 fn check(level: &'static str, name: &'static str, detail: impl Into<String>) -> Check {
@@ -23,6 +26,7 @@ fn check(level: &'static str, name: &'static str, detail: impl Into<String>) -> 
         level,
         name,
         detail: detail.into(),
+        shown: false,
     }
 }
 
@@ -60,7 +64,11 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
         outln!("{}", json!({ "checks": list }));
     } else {
         for c in &checks {
-            outln!("{:>5}  {}: {}", c.level, c.name, crate::report::shown(&c.detail));
+            let detail = match c.shown {
+                true => c.detail.as_str().into(),
+                false => crate::report::shown(&c.detail),
+            };
+            outln!("{:>5}  {}: {detail}", c.level, c.name);
         }
     }
     Ok(i32::from(checks.iter().any(|c| c.level == "fail")))
@@ -115,7 +123,12 @@ fn temp_files(ctx: &Context) -> Vec<Check> {
     let journal = ctx.state_dir.join(format!("{}.pending", ctx.repo_id));
     match crate::pending::report(&journal) {
         Ok(left) if left.is_empty() => vec![check("ok", "temp files", "none left by an interrupted run")],
-        Ok(left) => left.into_iter().map(|line| check("warn", "temp file", line)).collect(),
+        Ok(left) => (left.into_iter())
+            .map(|line| Check {
+                shown: true,
+                ..check("warn", "temp file", line)
+            })
+            .collect(),
         Err(e) => vec![check("warn", "temp files", e.to_string())],
     }
 }

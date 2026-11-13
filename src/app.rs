@@ -259,7 +259,7 @@ fn lock(ctx: &Context, printer: &Printer, dry_run: bool) -> Result<Option<Lock>>
     }
     let mut lock = state::lock(&ctx.state_dir, &ctx.repo_id)?;
     match lock.start_journal() {
-        Ok(notices) => notices.iter().for_each(|n| printer.notice(n)),
+        Ok(notices) => notices.iter().for_each(|n| printer.shown_notice(n)),
         Err(e) => eprintln!(
             "warning: {}; the temporary files of this run are not journaled",
             crate::report::shown(&e.to_string())

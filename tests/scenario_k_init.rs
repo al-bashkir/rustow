@@ -253,7 +253,10 @@ fn cache_dir_with_glob_characters_is_escaped_once() {
     let fx = Fixture::new();
     fx.write("rustow.toml", "version = 1\n[defaults]\ncache_dir = \"c[1]\"\n");
     let out = fx.ok(&["init"]);
-    assert!(out.stdout.contains("/c\\[1]/"), "{out:?}");
+    assert!(
+        out.stdout.contains(r"/c\\[1]/"),
+        "the output escapes the backslash: {out:?}"
+    );
     let want = "/.rustowcache/\n/c\\[1]/\n";
     assert_eq!(read(&fx.repo.join(".gitignore")), want);
     assert_eq!(read(&fx.repo.join(".rustowignore")), want);

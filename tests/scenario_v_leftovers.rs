@@ -95,25 +95,32 @@ fn the_next_run_removes_a_temporary_file_that_a_killed_run_left() {
 
 /// A leftover that the user cannot remove (here in a directory without
 /// write access; in practice a file of the sudo helper) stays, with its
-/// journal line, and rustow prints the command that removes it.
+/// journal line, and rustow prints the command that removes it. The shell
+/// reads the path in the command back to the same bytes, also with a
+/// control character in it.
 #[test]
 fn a_leftover_the_user_cannot_remove_gets_the_command_to_remove_it() {
-    let fx = Fixture::new();
-    let ro = fx.base.join("ro dir");
-    fs::create_dir(&ro).unwrap();
-    let (journal, temp) = killed_run(&fx, &ro);
-    let set_mode = |mode| fs::set_permissions(&ro, fs::Permissions::from_mode(mode)).unwrap();
-    set_mode(0o555);
-    let command = format!("sudo rm -- '{}'", temp.display());
-    let doctor = fx.run(&["doctor"]);
-    let out = fx.run(&["apply"]);
-    let again = read(&journal);
-    set_mode(0o755);
-    assert!(doctor.stdout.contains(&command), "{doctor:?}");
-    assert_eq!(out.code, 0, "{out:?}");
-    assert!(out.stderr.contains(&command), "{out:?}");
-    assert!(temp.exists(), "{out:?}");
-    assert_eq!(again, format!("{}\n", serde_json::json!(temp)), "the journal keeps it");
+    for (dir, quoted) in [
+        ("ro dir", "'{base}/ro dir/.rustow-tmp-dead'"),
+        ("ro\x1bdir", r"$'{base}/ro\x1bdir/.rustow-tmp-dead'"),
+    ] {
+        let fx = Fixture::new();
+        let ro = fx.base.join(dir);
+        fs::create_dir(&ro).unwrap();
+        let (journal, temp) = killed_run(&fx, &ro);
+        let set_mode = |mode| fs::set_permissions(&ro, fs::Permissions::from_mode(mode)).unwrap();
+        set_mode(0o555);
+        let command = format!("sudo rm -- {}", quoted.replace("{base}", fx.base.to_str().unwrap()));
+        let doctor = fx.run(&["doctor"]);
+        let out = fx.run(&["apply"]);
+        let again = read(&journal);
+        set_mode(0o755);
+        assert!(doctor.stdout.contains(&command), "{doctor:?}");
+        assert_eq!(out.code, 0, "{out:?}");
+        assert!(out.stderr.contains(&command), "{out:?}");
+        assert!(temp.exists(), "{out:?}");
+        assert_eq!(again, format!("{}\n", serde_json::json!(temp)), "the journal keeps it");
+    }
 }
 
 /// Each temporary file of the sudo helper is in the journal before the

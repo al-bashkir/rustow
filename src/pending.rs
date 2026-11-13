@@ -19,6 +19,7 @@ use nix::unistd::geteuid;
 
 use crate::error::{IoContext, Result};
 use crate::fsops::{self, Dir, TEMP_PREFIX, Walked};
+use crate::report::shown;
 use crate::state::MAX_STATE_SIZE;
 
 /// The journal of the run that holds the lock. Dropping it ends the
@@ -54,7 +55,8 @@ enum Leftover {
 impl Pending {
     /// Starts the journal at `path`. First it removes the temporary files
     /// that an interrupted run left and that the journal lists, and gives
-    /// one notice for each.
+    /// one notice for each, ready to print: the command in a notice must
+    /// not go through `shown` again, so the names in it already did.
     pub fn start(path: PathBuf) -> Result<(Pending, Vec<String>)> {
         let mut notices = Vec::new();
         let me = geteuid().as_raw();
@@ -96,6 +98,8 @@ impl Drop for Pending {
 
 /// One line for each temporary file that the journal at `path` lists and
 /// that may still be there, with what to do about it (for `doctor`).
+/// Like the notices of `Pending::start`, each line is ready to print: its
+/// names went through `shown`, and its command is a `shell_word`.
 pub fn report(path: &Path) -> Result<Vec<String>> {
     let me = geteuid().as_raw();
     Ok(entries(path)?
@@ -103,7 +107,7 @@ pub fn report(path: &Path) -> Result<Vec<String>> {
         .filter_map(|temp| match leftover(temp, me) {
             Leftover::Removable => Some(format!(
                 "{}: {LEFT}; the next command that changes files removes it",
-                temp.display()
+                named(temp)
             )),
             other => kept(temp, &other),
         })
@@ -112,11 +116,16 @@ pub fn report(path: &Path) -> Result<Vec<String>> {
 
 const LEFT: &str = "a temporary file that an interrupted run left";
 
+/// `path` escaped for a notice (`shown`).
+fn named(path: &Path) -> String {
+    shown(&path.display().to_string()).into_owned()
+}
+
 /// The notice for a leftover that the user cannot remove or cannot look at.
 fn kept(temp: &Path, found: &Leftover) -> Option<String> {
     match found {
         Leftover::NeedsRoot => Some(needs_root(temp)),
-        Leftover::Unchecked(why) => Some(format!("{}: cannot look for {LEFT}: {why}", temp.display())),
+        Leftover::Unchecked(why) => Some(format!("{}: cannot look for {LEFT}: {}", named(temp), shown(why))),
         Leftover::Gone | Leftover::Removable => None,
     }
 }
@@ -127,11 +136,15 @@ fn recover(temp: &Path, me: u32, notices: &mut Vec<String>) -> bool {
         Leftover::Gone => false,
         Leftover::Removable => match remove(temp) {
             Ok(()) => {
-                notices.push(format!("removed {}: {LEFT}", temp.display()));
+                notices.push(format!("removed {}: {LEFT}", named(temp)));
                 false
             }
             Err(e) => {
-                notices.push(format!("{}: {LEFT}; cannot remove it: {e}", temp.display()));
+                notices.push(format!(
+                    "{}: {LEFT}; cannot remove it: {}",
+                    named(temp),
+                    shown(&e.to_string())
+                ));
                 true
             }
         },
@@ -170,22 +183,32 @@ fn leftover(temp: &Path, me: u32) -> Leftover {
 fn needs_root(temp: &Path) -> String {
     format!(
         "{}: {LEFT}; remove it with `sudo rm -- {}`",
-        temp.display(),
+        named(temp),
         shell_word(temp)
     )
 }
 
-/// `path` as one shell word: in single quotes unless it has only letters,
-/// digits and `/._-+:@%,=`.
+/// `path` as one shell word that the shell reads back to the same bytes,
+/// and that prints safely as it is: bare when it has only letters, digits
+/// and `/._-+:@%,=`; in single quotes when `shown` changes nothing in it;
+/// else in `$'...'` (bash, zsh), with `\xHH` for each byte that is not
+/// printable ASCII, and for `\` and `'`.
 fn shell_word(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    if text
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c))
-    {
-        return text.into_owned();
+    use std::os::unix::ffi::OsStrExt;
+    match path.to_str() {
+        Some(t) if t.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c)) => t.to_owned(),
+        Some(t) if shown(t) == t => format!("'{}'", t.replace('\'', r"'\''")),
+        _ => {
+            let bytes = path.as_os_str().as_bytes().iter();
+            let body: String = bytes
+                .map(|&b| match b {
+                    b' '..=b'~' if b != b'\\' && b != b'\'' => char::from(b).to_string(),
+                    _ => format!("\\x{b:02x}"),
+                })
+                .collect();
+            format!("$'{body}'")
+        }
     }
-    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 /// The temporary files that the journal at `path` lists; none when there
@@ -236,6 +259,51 @@ mod tests {
         assert_eq!(shell_word(Path::new("/a b/x")), "'/a b/x'");
         assert_eq!(shell_word(Path::new("/it's")), r"'/it'\''s'");
         assert_eq!(shell_word(Path::new("/$(x)")), "'/$(x)'");
+        assert_eq!(shell_word(Path::new("/é")), "'/é'");
+    }
+
+    /// A path with a character that `shown` escapes goes into `$'...'`
+    /// with `\xHH` for each byte that is not plain printable ASCII, so the
+    /// printed command is safe and the shell reads the same bytes back.
+    #[test]
+    fn a_path_that_shown_escapes_is_a_dollar_quoted_word() {
+        use std::os::unix::ffi::OsStrExt;
+        let cases: [&[u8]; 6] = [
+            b"/etc/a\x1bb",
+            b"/a\\b",
+            b"/a\tb\nc",
+            "/a\u{202e}b'c é".as_bytes(),
+            b"/bad\xff",
+            b"/x\x7f\x01",
+        ];
+        for bytes in cases {
+            let path = Path::new(OsStr::from_bytes(bytes));
+            let word = shell_word(path);
+            assert!(word.starts_with("$'") && word.ends_with('\''), "{word}");
+            assert!(
+                word.bytes().all(|b| (b' '..=b'~').contains(&b)),
+                "printable ASCII: {word}"
+            );
+            let Ok(out) = std::process::Command::new("bash")
+                .args(["-c", &format!("printf %s {word}")])
+                .output()
+            else {
+                eprintln!("SKIP: no bash");
+                return;
+            };
+            assert_eq!(out.stdout, bytes, "{word}");
+        }
+        assert_eq!(shell_word(Path::new("/etc/a\x1bb")), r"$'/etc/a\x1bb'");
+        assert_eq!(shell_word(Path::new("/it's\t")), r"$'/it\x27s\x09'");
+    }
+
+    /// The notice escapes the path of the text, and gives the command as it is.
+    #[test]
+    fn the_notice_for_root_names_the_path_once_escaped_and_once_quoted() {
+        assert_eq!(
+            needs_root(Path::new("/etc/a\x1bb/.rustow-tmp-1")),
+            format!(r"/etc/a\x1bb/.rustow-tmp-1: {LEFT}; remove it with `sudo rm -- $'/etc/a\x1bb/.rustow-tmp-1'`")
+        );
     }
 
     /// rustow looks at a leftover only through its directory, walked with

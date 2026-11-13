@@ -84,7 +84,7 @@ Every temporary name comes from `fsops::temp_name(dirs)`, and the caller passes 
 
 - rustow reads `rustow.toml`, `.rustowignore`, the state file and `state import` input with `fsops::read_limited`: a regular file, opened with `O_NONBLOCK`, with a size limit.
 - rustow starts `gpg`, the sudo program and the editor by the absolute path that `fsops::find_program` returns. The lookup skips relative `PATH` entries.
-- Human output passes each path and message through `report::shown`, which escapes control characters. `Printer::path` does it for destinations. JSON output does not use it.
+- Human output passes each path and message through `report::shown`, which escapes control characters, bidirectional controls and backslashes. `Printer::path` does it for destinations. JSON output does not use it. The notices of `pending` are the exception: they hold a shell command (`pending::shell_word`, printable ASCII) that must not be escaped again, so `pending` escapes their paths itself, and `Printer::shown_notice` and `doctor` print them as they are.
 
 ## Cache
 
