@@ -431,3 +431,23 @@ fn edit_refuses_a_symlinked_workspace_root() {
         "no plaintext outside the cache"
     );
 }
+
+/// The editor gets plaintext: an editor named without a `/` is looked up
+/// only in absolute PATH entries, never in the current directory.
+#[test]
+fn edit_never_runs_an_editor_from_the_current_directory() {
+    let (mut fx, key) = keyed();
+    fx.write("s", "x\n");
+    fx.ok(&["enc", "s"]);
+    let marker = fx.base.join("ran");
+    fx.editor("planted", &format!("touch '{}'", marker.display()));
+    fx.cwd = fx.base.join("bin");
+    let out = fx.run_env(
+        &["enc", "edit", "s.age"],
+        &[("VISUAL", "planted"), ("PATH", ":/usr/bin:/bin")],
+    );
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("cannot run editor 'planted'"), "{out:?}");
+    assert!(!marker.exists(), "{out:?}");
+    assert_eq!(fx.age_decrypt(&fx.repo.join("s.age"), &key), "x\n");
+}

@@ -76,7 +76,7 @@ pub fn gpg_homedir(ctx: &Context) -> std::result::Result<PathBuf, String> {
 
 fn gpg(ctx: &Context) -> std::result::Result<&gpg::Gpg, String> {
     let handle = ctx.keys.gpg.get_or_init(|| {
-        let program = fsops::find_in_path("gpg")
+        let program = fsops::find_program("gpg")
             .ok_or("gpg not found in PATH; install GnuPG 2.2 or newer to use .gpg sources")?;
         let homedir = gpg_homedir(ctx)?;
         gpg::check_homedir(&homedir, &[&ctx.root, &ctx.cache_dir])?;

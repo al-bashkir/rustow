@@ -18,7 +18,7 @@ Run rustow as yourself. Your HOME, your state, your keys and your cache stay in 
 - The plan and the dry run show these items with "via sudo". A dry run, `status` and `diff` never run sudo.
 - When sudo fails (wrong password, no terminal), each of these items fails with a message, for example "sudo failed (exit status: 1); system files that you cannot write need it". The other items stay done. The exit code is 4.
 - A home file never uses sudo. A home destination that you cannot write fails with "…; elevated privileges may be required".
-- `RUSTOW_SUDO` names another program, for example `doas`. rustow runs `$RUSTOW_SUDO -- <rustow> __sudo-helper`.
+- `RUSTOW_SUDO` names another program, for example `doas`. rustow runs `$RUSTOW_SUDO -- <rustow> __sudo-helper`. A name without a `/` (also the default `sudo`) is looked up in the absolute directories of `PATH` only.
 - A backup (`--backup`) of a system file that the helper replaced is owned by root.
 - Anyone who may run `sudo rustow` may write any file as root: do not allow rustow in sudoers without a password unless you mean that.
 

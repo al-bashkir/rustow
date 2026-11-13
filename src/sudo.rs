@@ -48,8 +48,13 @@ pub struct Done {
 
 /// Runs the helper through sudo and returns one result per job.
 pub fn call(jobs: &[Job<&Deploy>]) -> Result<Vec<Done>> {
-    let program = std::env::var_os("RUSTOW_SUDO").unwrap_or_else(|| "sudo".into());
-    let shown = PathBuf::from(&program).display().to_string();
+    let name = std::env::var_os("RUSTOW_SUDO").unwrap_or_else(|| "sudo".into());
+    let shown = PathBuf::from(&name).display().to_string();
+    let program = crate::fsops::find_program(&name).ok_or_else(|| {
+        Error::Failed(format!(
+            "{shown}: not found in PATH; system files that you cannot write need it"
+        ))
+    })?;
     let exe = std::env::current_exe().map_err(|e| Error::Failed(format!("find the rustow binary: {e}")))?;
     let input = Zeroizing::new(serde_json::to_vec(jobs).map_err(|e| Error::Failed(format!("encode sudo jobs: {e}")))?);
     let mut child = Command::new(&program)

@@ -305,3 +305,15 @@ fn closed_stdout_ends_quietly_without_a_panic() {
     assert!(!stderr.contains("panicked"), "{stderr}");
     assert_eq!(out.status.code(), Some(141), "{:?}", out.status);
 }
+
+/// An empty or relative PATH entry names the current directory, here the
+/// repository: a `gpg` file there is never the gpg program.
+#[test]
+fn doctor_ignores_gpg_in_relative_path_entries() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let fake = fx.write("gpg", "#!/bin/sh\n");
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = fx.run_env(&["doctor"], &[("PATH", ":.:bin")]);
+    assert!(out.stdout.contains("gpg: not found in PATH"), "{out:?}");
+}

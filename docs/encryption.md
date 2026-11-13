@@ -27,7 +27,7 @@ identity_files = ["~/.config/rustow/age/identity.txt"]
 
 ## GnuPG
 
-rustow runs the installed `gpg` (GnuPG 2.2 or newer). It finds `gpg` in `PATH`. You cannot configure the path. rustow needs `gpg` only when it processes a selected, non-ignored `.gpg` source.
+rustow runs the installed `gpg` (GnuPG 2.2 or newer). It finds `gpg` in the absolute directories of `PATH`. It skips an empty or relative entry. You cannot configure the path. rustow needs `gpg` only when it processes a selected, non-ignored `.gpg` source.
 
 Install GnuPG:
 
@@ -111,7 +111,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - It refuses nested suffixes such as `x.age.gpg` (exit 2, "nested encryption suffixes are not supported"). It also refuses a name that is empty after rustow removes the suffixes, such as `.age` or `.tmpl.age` (exit 2).
 - It checks the recipients of the backend before it decrypts. Empty or invalid recipients give exit 2. A GPG fingerprint that is not in the keyring, or a key that is not trusted (validity unknown), revoked, expired or cannot encrypt, gives exit 4. Then the editor does not start and rustow leaves no workspace.
 - rustow decrypts into `<cache>/edit/edit-XXXX/` (mode 0700) as a 0600 file with the logical name.
-- The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell.
+- The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell. A program name without a `/` is looked up in the absolute directories of `PATH` only.
 - If the editor fails, the ciphertext stays unchanged and rustow removes the workspace.
 - If the encryption fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.

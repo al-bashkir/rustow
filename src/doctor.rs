@@ -46,7 +46,7 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
         ),
     ];
     checks.extend(encryption_checks(ctx));
-    checks.push(match crate::fsops::find_in_path("gpg") {
+    checks.push(match crate::fsops::find_program("gpg") {
         Some(path) => check("ok", "gpg", path.display().to_string()),
         None => check("warn", "gpg", "not found in PATH; needed only for .gpg sources"),
     });

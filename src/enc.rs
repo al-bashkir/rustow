@@ -444,6 +444,8 @@ fn run_editor(file: &Path) -> Result<std::process::ExitStatus> {
     let editor = var("VISUAL").or_else(|| var("EDITOR")).unwrap_or_else(|| "vi".into());
     let mut words = editor.split_whitespace();
     let program = words.next().unwrap_or("vi");
+    let path = crate::fsops::find_program(program)
+        .ok_or_else(|| Error::Failed(format!("cannot run editor '{program}': not found in PATH")))?;
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [
         signal_hook::consts::SIGINT,
@@ -453,7 +455,7 @@ fn run_editor(file: &Path) -> Result<std::process::ExitStatus> {
         signal_hook::flag::register(sig, Arc::clone(&stop))
             .map_err(|e| Error::Failed(format!("signal handler: {e}")))?;
     }
-    let status = Command::new(program)
+    let status = Command::new(path)
         .args(words)
         .arg(file)
         .status()

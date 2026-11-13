@@ -161,3 +161,21 @@ fn home_files_never_use_sudo() {
     assert!(is_symlink(&rw.join("y")));
     assert_eq!(s.calls(), 0, "home files never use sudo");
 }
+
+/// A sudo program named without a `/` is looked up only in absolute PATH
+/// entries: an empty entry would run `./fake-sudo` from the current directory.
+#[test]
+fn sudo_from_the_current_directory_never_runs() {
+    let mut s = Sudo::new(FAKE);
+    s.fx.cwd = s.fx.base.clone();
+    let env = [
+        ("RUSTOW_SUDO", "fake-sudo"),
+        ("PATH", ":/usr/bin:/bin"),
+        ("FAKE_SUDO_LOG", s.log.to_str().unwrap()),
+        ("FAKE_SUDO_UNLOCK", s.etc.to_str().unwrap()),
+    ];
+    let out = s.fx.run_env(&["apply"], &env);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("fake-sudo: not found in PATH"), "{out:?}");
+    assert_eq!(s.calls(), 0, "{out:?}");
+}

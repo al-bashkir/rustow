@@ -1,8 +1,10 @@
 //! Conservative filesystem primitives. Nothing here follows the final
 //! path component of a destination, and every write is atomic.
 
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -499,15 +501,24 @@ pub fn owner_of(dir: &Path) -> Result<u32> {
         .ctx(|| format!("inspect {}", dir.display()))
 }
 
-/// First executable file called `name` in `PATH`.
-pub fn find_in_path(name: &str) -> Option<PathBuf> {
+/// The program to start for `name`: a name with a `/` as given, else the
+/// first executable file called `name` in `PATH`. Callers start this path,
+/// so `Command` never searches `PATH` itself.
+pub fn find_program(name: impl AsRef<OsStr>) -> Option<PathBuf> {
+    let name = name.as_ref();
+    if name.as_bytes().contains(&b'/') {
+        return Some(PathBuf::from(name));
+    }
     find_in(&std::env::var_os("PATH")?, name)
 }
 
-/// First executable file called `name` in a `PATH`-style list.
-fn find_in(path_list: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+/// First executable file called `name` in a `PATH`-style list. An empty or
+/// relative entry is skipped: it names the current directory (often the
+/// repository), where anyone who can write a file could plant a program.
+fn find_in(path_list: &OsStr, name: impl AsRef<Path>) -> Option<PathBuf> {
     std::env::split_paths(path_list)
-        .map(|dir| dir.join(name))
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(&name))
         .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
@@ -904,6 +915,27 @@ mod tests {
         assert_eq!(find_in(&list, "tool"), None, "not executable");
         assert_eq!(find_in(&list, "dir"), None, "a directory is not a program");
         fs::set_permissions(d.join("bin/tool"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(find_in(&list, "tool"), Some(d.join("bin/tool")));
+    }
+
+    #[test]
+    fn find_in_skips_entries_that_are_not_absolute() {
+        let (_t, d) = tmp();
+        fs::create_dir(d.join("bin")).unwrap();
+        fs::write(d.join("bin/tool"), b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(d.join("bin/tool"), fs::Permissions::from_mode(0o755)).unwrap();
+        // The same directory, named relative to the current directory.
+        let up: PathBuf = std::env::current_dir()
+            .unwrap()
+            .components()
+            .skip(1)
+            .map(|_| "..")
+            .collect();
+        let relative = up.join(d.join("bin").strip_prefix("/").unwrap());
+        assert!(relative.join("tool").is_file(), "{}", relative.display());
+        let list = std::env::join_paths([Path::new(""), Path::new("."), &relative]).unwrap();
+        assert_eq!(find_in(&list, "tool"), None);
+        let list = std::env::join_paths([Path::new(""), &relative, &d.join("bin")]).unwrap();
         assert_eq!(find_in(&list, "tool"), Some(d.join("bin/tool")));
     }
 
