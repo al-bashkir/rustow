@@ -191,10 +191,22 @@ fn write_path(
 /// Moves the file or symlink `name` of `dir` to `backup`, whose parent
 /// must exist (the user made it: the sudo helper makes no directory) and
 /// is walked for `me`; never over an existing backup. `temp` names the
-/// copy across filesystems.
-pub fn backup(dir: &Dir, name: &OsStr, backup: &Path, me: u32, temp: &str) -> Result<()> {
+/// copy across filesystems. A `private` backup is of a file that `me`
+/// could not see: it keeps only its owner bits before it gets into the
+/// directory of `me` (`Dir::restrict`), and its old mode when the move fails.
+pub fn backup(dir: &Dir, name: &OsStr, backup: &Path, me: u32, temp: &str, private: bool) -> Result<()> {
     let (to, to_name) = split(backup)?;
-    dir.move_to(name, &open_ready(to, me)?, to_name, temp)
+    let to = open_ready(to, me)?;
+    let restricted = match private {
+        true => dir.restrict(name)?,
+        false => None,
+    };
+    let moved = dir.move_to(name, &to, to_name, temp);
+    if let (Err(_), Some((file, mode))) = (&moved, restricted) {
+        // Best effort: the item fails anyway.
+        let _ = file.set_permissions(fs::Permissions::from_mode(mode));
+    }
+    moved
 }
 
 /// Removes each of `dirs`, deepest first, while it is an empty directory,
@@ -750,19 +762,39 @@ mod tests {
         let (dir, me) = (open(&d), geteuid().as_raw());
         fs::write(d.join("f"), b"data").unwrap();
         symlink("t", d.join("l")).unwrap();
-        assert!(backup(&dir, name("f"), &d.join("bk/a/f"), me, T).is_err());
+        assert!(backup(&dir, name("f"), &d.join("bk/a/f"), me, T, false).is_err());
         assert!(!d.join("bk").exists() && d.join("f").exists(), "it makes no directory");
         ensure_private_dir(&d.join("bk/a")).unwrap();
-        backup(&dir, name("f"), &d.join("bk/a/f"), me, T).unwrap();
-        backup(&dir, name("l"), &d.join("bk/a/l"), me, T).unwrap();
+        backup(&dir, name("f"), &d.join("bk/a/f"), me, T, false).unwrap();
+        backup(&dir, name("l"), &d.join("bk/a/l"), me, T, false).unwrap();
         assert!(!d.join("f").exists());
         assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
         assert_eq!(fs::read_link(d.join("bk/a/l")).unwrap(), PathBuf::from("t"));
         // Never overwrite an existing backup.
         fs::write(d.join("f"), b"again").unwrap();
-        let e = backup(&dir, name("f"), &d.join("bk/a/f"), me, T).unwrap_err();
+        let e = backup(&dir, name("f"), &d.join("bk/a/f"), me, T, false).unwrap_err();
         assert!(e.to_string().ends_with("bk/a/f already exists"), "{e}");
         assert_eq!(fs::read(d.join("bk/a/f")).unwrap(), b"data");
+    }
+
+    /// A private backup (of a file that `me` could not see) keeps only the
+    /// owner bits of the file that it moves. When the move fails, the file
+    /// gets its mode back. A symlink moves as it is.
+    #[test]
+    fn a_private_backup_keeps_only_the_owner_bits() {
+        let (_t, d) = tmp();
+        let (dir, me) = (open(&d), geteuid().as_raw());
+        fs::write(d.join("f"), b"data").unwrap();
+        fs::set_permissions(d.join("f"), fs::Permissions::from_mode(0o754)).unwrap();
+        symlink("t", d.join("l")).unwrap();
+        ensure_private_dir(&d.join("bk")).unwrap();
+        fs::write(d.join("bk/taken"), b"older").unwrap();
+        assert!(backup(&dir, name("f"), &d.join("bk/taken"), me, T, true).is_err());
+        assert_eq!(mode_of(&d.join("f")), 0o754, "the mode comes back");
+        backup(&dir, name("f"), &d.join("bk/f"), me, T, true).unwrap();
+        assert_eq!(mode_of(&d.join("bk/f")), 0o700);
+        backup(&dir, name("l"), &d.join("bk/l"), me, T, true).unwrap();
+        assert_eq!(fs::read_link(d.join("bk/l")).unwrap(), PathBuf::from("t"));
     }
 
     #[test]
@@ -1081,12 +1113,17 @@ mod tests {
         symlink("t", src.path().join("l")).unwrap();
         let (from, me) = (open(src.path()), geteuid().as_raw());
         ensure_private_dir(&dst.path().join("bk")).unwrap();
-        backup(&from, name("f"), &dst.path().join("bk/f"), me, T).unwrap();
-        backup(&from, name("l"), &dst.path().join("bk/l"), me, T).unwrap();
+        backup(&from, name("f"), &dst.path().join("bk/f"), me, T, false).unwrap();
+        backup(&from, name("l"), &dst.path().join("bk/l"), me, T, false).unwrap();
         assert!(!src.path().join("f").exists() && fs::symlink_metadata(src.path().join("l")).is_err());
         assert_eq!(fs::read(dst.path().join("bk/f")).unwrap(), b"data");
         assert_eq!(mode_of(&dst.path().join("bk/f")), 0o640);
         assert_eq!(fs::read_link(dst.path().join("bk/l")).unwrap(), PathBuf::from("t"));
+        // A private copy has only the owner bits.
+        fs::write(src.path().join("p"), b"data").unwrap();
+        fs::set_permissions(src.path().join("p"), fs::Permissions::from_mode(0o640)).unwrap();
+        backup(&from, name("p"), &dst.path().join("bk/p"), me, T, true).unwrap();
+        assert_eq!(mode_of(&dst.path().join("bk/p")), 0o600);
     }
 
     #[test]

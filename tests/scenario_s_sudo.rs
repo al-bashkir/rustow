@@ -590,11 +590,33 @@ fn the_backup_directories_of_a_system_file_are_made_by_the_user() {
     assert_eq!(saved.len(), 1, "{out:?}");
     assert_eq!(read(&saved[0]), "old\n");
     assert_eq!(mode(saved[0].parent().unwrap()), 0o700, "private");
+    assert_eq!(mode(&saved[0]), 0o644, "a file that you could see keeps its mode");
 
     let home = s.run(&["apply", "--backup", ".homeconf"]);
     assert_eq!(home.code, 0, "{home:?}");
     assert!(is_symlink(&s.fx.home_path(".homeconf")));
     assert_eq!(s.calls(), 1, "a home file never uses sudo");
+}
+
+/// The helper moves the old file as root into your backup directory. A
+/// file that you could not see (its directory is not searchable for you)
+/// keeps only its owner bits there: you cannot read it there either.
+#[test]
+fn the_backup_of_a_file_that_you_cannot_see_is_not_readable_for_you() {
+    let s = Sudo::new(SEARCHES);
+    let x = hidden(&s, "0644");
+    assert_eq!(s.run(&["apply"]).code, 0);
+    uncovered(&s, || fs::write(&x, "root's edit\n").unwrap());
+    s.fx.write("rustowroot/etc/hidden/x.conf", "y\n");
+    let out = s.run(&["apply", "--backup", "rustowroot/etc/hidden"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    let saved: Vec<_> = walk(&s.fx.state.join("rustow/backups"))
+        .into_iter()
+        .filter(|p| p.ends_with("hidden/x.conf"))
+        .collect();
+    assert_eq!(saved.len(), 1, "{out:?}");
+    assert_eq!((read(&saved[0]), mode(&saved[0])), ("root's edit\n".into(), 0o600));
+    assert_eq!(uncovered(&s, || (read(&x), mode(&x))), ("y\n".into(), 0o644));
 }
 
 /// `--backup` makes backup directories only for an item whose change may

@@ -474,7 +474,7 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     let temp = temp_in(Some(&dir.path), away, &to)?;
     let mut detail = None;
     if away {
-        detail = Some(backup(&dir, name, &to, &temp, me())?);
+        detail = Some(backup(&dir, name, &to, &temp, me(), false)?);
     }
     write_cache(&dir, name, &temp, cache).map(|()| detail)
 }
@@ -558,7 +558,10 @@ fn replace(
     away: (Policy, &Path),
     me: u32,
 ) -> Result<Option<String>> {
-    let detail = clear_conflict(dir, name, away, new.temp, me)?;
+    // The helper moves it as root into the user's backup directory: a file
+    // that the user could not see must stay unreadable for the user there.
+    let hidden = d.observed == Observed::Hidden;
+    let detail = clear_conflict(dir, name, away, new.temp, me, hidden)?;
     put(dir, name, d, new, false)?;
     Ok(detail)
 }
@@ -593,24 +596,25 @@ fn fix_metadata(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
 }
 
 /// Moves the conflicting destination to the backup path `to` (its
-/// directory walked for `me`), or removes it.
+/// directory walked for `me`; `private` as in `fsops::backup`), or removes it.
 fn clear_conflict(
     dir: &Dir,
     name: &OsStr,
     (policy, to): (Policy, &Path),
     temp: &str,
     me: u32,
+    private: bool,
 ) -> Result<Option<String>> {
     if policy == Policy::Backup {
-        return backup(dir, name, to, temp, me).map(Some);
+        return backup(dir, name, to, temp, me, private).map(Some);
     }
     dir.remove(name)?;
     Ok(None)
 }
 
 /// Moves `name` to `to`, whose directory the user made (`temp_in`).
-fn backup(dir: &Dir, name: &OsStr, to: &Path, temp: &str, me: u32) -> Result<String> {
-    fsops::backup(dir, name, to, me, temp)?;
+fn backup(dir: &Dir, name: &OsStr, to: &Path, temp: &str, me: u32, private: bool) -> Result<String> {
+    fsops::backup(dir, name, to, me, temp, private)?;
     Ok(format!("backup saved to {}", to.display()))
 }
 

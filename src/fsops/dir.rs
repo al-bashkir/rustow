@@ -463,6 +463,23 @@ impl Dir {
         Ok(dir)
     }
 
+    /// Keeps only the owner bits of the regular file `name`, and returns
+    /// the open file with its old mode. `None` for a symlink: it has no
+    /// mode of its own, and it moves as it is.
+    pub fn restrict(&self, name: &OsStr) -> Result<Option<(File, u32)>> {
+        let path = self.entry(name);
+        let st =
+            sys(fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW)).ctx(|| format!("inspect {}", path.display()))?;
+        if kind(&st) == SFlag::S_IFLNK {
+            return Ok(None);
+        }
+        let (file, meta) = self.open_regular(name)?;
+        let old = meta.mode() & 0o7777;
+        file.set_permissions(Permissions::from_mode(old & 0o700))
+            .ctx(|| format!("restrict {}", path.display()))?;
+        Ok(Some((file, old)))
+    }
+
     /// Moves the file or symlink `name` to `to_name` in `to`, never over
     /// anything there. Across filesystems it copies into the temporary file
     /// `temp` in `to`, renames that to `to_name`, then removes `name`: a
