@@ -217,6 +217,24 @@ fn diff_exit_codes_and_scope() {
     assert_eq!(one.code, 0, "{one:?}");
 }
 
+/// A missing destination differs also when the wanted content is empty:
+/// `diff` uses the plan of `apply`, which creates the file.
+#[test]
+fn diff_shows_a_missing_empty_file() {
+    let fx = Fixture::new();
+    fx.write("empty.txt", "");
+    fx.ok(&["file", "add", "empty.txt"]);
+    let out = fx.run(&["diff"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert_eq!(out.stdout, "--- /dev/null\n+++ b/~/empty.txt\n", "{out:?}");
+    let out = fx.run(&["diff", "--json"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(v["items"][0]["kind"], "missing", "{v}");
+    fx.ok(&["apply"]);
+    assert_eq!(fx.run(&["diff"]).code, 0);
+}
+
 #[test]
 fn binary_diff_message() {
     let fx = Fixture::new();

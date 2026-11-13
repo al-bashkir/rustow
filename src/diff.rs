@@ -4,7 +4,8 @@
 use similar::TextDiff;
 
 /// Unified diff from `current` (what is deployed) to `desired`. `None`
-/// means the side does not exist. Empty when both are equal.
+/// means the side does not exist. Empty when both are equal; only the
+/// headers when one side is absent and the other is empty.
 pub fn render(label: &str, current: Option<&[u8]>, desired: Option<&[u8]>) -> String {
     if current == desired {
         return String::new();
@@ -14,10 +15,14 @@ pub fn render(label: &str, current: Option<&[u8]>, desired: Option<&[u8]>) -> St
     let (Some(old), Some(new)) = (as_text(current), as_text(desired)) else {
         return format!("Binary files {old_label} and {new_label} differ\n");
     };
-    TextDiff::from_lines(old, new)
+    let text = TextDiff::from_lines(old, new)
         .unified_diff()
         .header(&old_label, &new_label)
-        .to_string()
+        .to_string();
+    match text.is_empty() {
+        true => format!("--- {old_label}\n+++ {new_label}\n"),
+        false => text,
+    }
 }
 
 /// True when the sides differ and `render` summarizes them as binary.
@@ -59,6 +64,13 @@ mod tests {
         let d = render("~/.x", None, Some(b"one\n"));
         assert!(d.starts_with("--- /dev/null\n+++ b/~/.x\n"), "{d}");
         assert!(d.contains("+one\n"), "{d}");
+    }
+
+    /// An absent side differs from an empty one: the headers say which is absent.
+    #[test]
+    fn missing_empty_file_has_headers_only() {
+        assert_eq!(render("~/.x", None, Some(b"")), "--- /dev/null\n+++ b/~/.x\n");
+        assert_eq!(render("~/.x", Some(b""), None), "--- a/~/.x\n+++ /dev/null\n");
     }
 
     #[test]

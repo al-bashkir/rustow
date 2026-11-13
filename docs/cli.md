@@ -151,7 +151,7 @@ The state can record a destination that is not under the current target, for exa
 
 ## diff
 
-`diff` uses the same plan as `apply`. It prints unified diffs for copies and cache entries. For symlinks and metadata it prints descriptive lines, for example `~/.x: metadata mode 0600 uid 1000 gid 1000 -> mode 0640`. It summarizes binary files. It can print secrets. Exit 0, 1 or 4.
+`diff` uses the same plan as `apply`. It prints unified diffs for copies and cache entries. For symlinks and metadata it prints descriptive lines, for example `~/.x: metadata mode 0600 uid 1000 gid 1000 -> mode 0640`. It summarizes binary files. A missing file whose wanted content is empty shows only the two header lines, `--- /dev/null` and `+++ b/<dest>`. It can print secrets. Exit 0, 1 or 4.
 
 `diff` reads the content of a file only when its hash differs from the wanted one. It shows content up to 1 MiB. When the current file or the wanted content is larger, it prints one line with both sizes instead, for example "~/.big: differ (0 → 2097152 bytes); too large to show". A missing file counts as 0 bytes.
 
