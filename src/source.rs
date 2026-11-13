@@ -229,8 +229,8 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Resu
                 continue;
             }
         };
-        let rel = repo_relative(repo, entry.path())?;
-        if visit_entry(rel, entry.file_type(), ignore, cfg, &mut out) {
+        let (rel, utf8) = repo_relative(repo, entry.path())?;
+        if visit_entry((rel, utf8), entry.file_type(), ignore, cfg, &mut out) {
             walker.skip_current_dir();
         }
     }
@@ -252,7 +252,10 @@ pub fn discover(repo: &Path, ignore: &Ignore, cfg: &Config, host: &Host) -> Resu
 fn unreadable(repo: &Path, e: walkdir::Error) -> Result<Skipped> {
     let why = e.io_error().map_or_else(|| e.to_string(), ToString::to_string);
     match e.path().filter(|p| *p != repo) {
-        Some(path) => Ok(Skipped::new(repo_relative(repo, path)?, format!("cannot read: {why}"))),
+        Some(path) => Ok(Skipped::new(
+            repo_relative(repo, path)?.0,
+            format!("cannot read: {why}"),
+        )),
         None => Err(Error::Failed(format!("scan repository {}: {why}", repo.display()))),
     }
 }
@@ -349,12 +352,25 @@ fn apply_meta(source: Source, meta: TemplateMeta, has_rule: bool, host: &Host) -
     Placed::Deploy(source)
 }
 
-/// Sorts one walked entry into sources, skipped files or ignored paths. True when the walker must skip the directory.
-fn visit_entry(rel: RelPath, file_type: std::fs::FileType, ignore: &Ignore, cfg: &Config, out: &mut Discovery) -> bool {
+/// Sorts one walked entry (its path, and whether the name is UTF-8) into
+/// sources, skipped files or ignored paths. True when the walker must skip
+/// the directory: an ignored one, or one whose name is not UTF-8.
+fn visit_entry(
+    (rel, utf8): (RelPath, bool),
+    file_type: std::fs::FileType,
+    ignore: &Ignore,
+    cfg: &Config,
+    out: &mut Discovery,
+) -> bool {
     if ignore.is_ignored(&rel, file_type.is_dir()) {
         if !ignore.is_reserved(&rel, file_type.is_dir()) {
             out.ignored.push(rel);
         }
+        return file_type.is_dir();
+    }
+    if !utf8 {
+        out.skipped
+            .push(Skipped::new(rel, "name is not valid UTF-8; rename it".into()));
         return file_type.is_dir();
     }
     if file_type.is_dir() {
@@ -386,15 +402,11 @@ pub fn unexpected_kind(file_type: std::fs::FileType) -> Option<&'static str> {
     }
 }
 
-fn repo_relative(repo: &Path, path: &Path) -> Result<RelPath> {
+/// The repository-relative form of `path`, and whether it is UTF-8. A path
+/// that is not comes back lossy (U+FFFD for each bad byte sequence).
+pub fn repo_relative(repo: &Path, path: &Path) -> Result<(RelPath, bool)> {
     let rel = path.strip_prefix(repo).unwrap_or(path);
-    let text = rel.to_str().ok_or_else(|| {
-        Error::Config(format!(
-            "repository path '{}' is not valid UTF-8; rename it",
-            rel.display()
-        ))
-    })?;
-    RelPath::parse(text)
+    Ok((RelPath::parse(&rel.to_string_lossy())?, rel.to_str().is_some()))
 }
 
 /// Each `[[files]]`, `[[template_rules]]` and `rustow file add` entry that

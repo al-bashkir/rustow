@@ -13,7 +13,7 @@ use std::fs;
 
 use nix::unistd::geteuid;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::fsops::{self, ParentState};
 use crate::paths::{RelPath, Scope, same_link_target};
 use crate::repo::Context;
@@ -273,11 +273,8 @@ fn entries_below(ctx: &Context, dir: &RelPath) -> Result<Vec<(RelPath, bool)>> {
             Ok(e) => (e.path(), e.file_type().is_dir()),
             Err(e) => (e.path().unwrap_or(&top), false),
         };
-        let rel = path.strip_prefix(&ctx.root).unwrap_or(path);
-        let rel = rel
-            .to_str()
-            .ok_or_else(|| Error::Config(format!("non-UTF-8 path below {dir}")))?;
-        out.push((RelPath::parse(rel)?, is_dir));
+        // A name that is not UTF-8 is never a source.
+        out.push((crate::source::repo_relative(&ctx.root, path)?.0, is_dir));
     }
     Ok(out)
 }

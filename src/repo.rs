@@ -88,6 +88,13 @@ impl Context {
                 "refusing to use the filesystem root as the repository".into(),
             ));
         }
+        // The state file records the root as text.
+        if root.to_str().is_none() {
+            let shown = root.display();
+            return Err(Error::Config(format!(
+                "repository path '{shown}' is not valid UTF-8; rename it"
+            )));
+        }
         let host = Host::current();
         let mut config = Config::load(&root)?;
         config.apply_host(&host);

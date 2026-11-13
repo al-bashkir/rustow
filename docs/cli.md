@@ -76,6 +76,7 @@ A problem with one source does not stop the run. rustow skips that source and de
 - a file with a `[[template_rules]]` entry that is not a template;
 - a template in `[[files]]`;
 - a symlink or another file that is not a regular file;
+- a file or directory whose name is not valid UTF-8 ("name is not valid UTF-8; rename it"). The warning shows each bad byte sequence as `�`. rustow skips everything below such a directory, and a directory above it does not fold. A `.rustowignore` pattern that matches the name (with `�`) ignores it without a warning;
 - a directory or a path below the repository root that rustow cannot read, for example a directory without read permission or a path that is too long ("cannot read: Permission denied …"). A directory above it does not fold. A repository root that rustow cannot read still stops the command;
 - a `[[files]]` or `[[template_rules]]` entry, or a `rustow file add` registration, whose source does not exist, is ignored, is reserved or is a directory.
 
@@ -90,7 +91,7 @@ warning: gone.json: rustow.toml [[files]] entry does not exist (remove the entry
 
 `-q` hides these lines. With `--json`, the output has a `warnings` array. Each object has `source` and `reason`. Warnings do not change the exit code. `status` shows a skipped source as SKIPPED. `check` prints the warnings, but they are not problems. `unlink` and `undeploy` read only the state, so they do not look at skipped sources.
 
-Problems that are not about one source still stop every command with exit 2. Examples: TOML syntax, an unknown key, an unsupported `version`, a bad `mode` string, a repository path that is not UTF-8, a cache or state directory that is the repository or one of its parents, or an in-repository cache or state directory that holds files that are not rustow's. Some problems with these directories have other exit codes: a state directory that you do not own, or that is not a real directory, exits 4. A symlink or a non-directory above an in-repository cache or state directory exits 3. See [cache and state directories](configuration.md#cache-and-state-directories).
+Problems that are not about one source still stop every command with exit 2. Examples: TOML syntax, an unknown key, an unsupported `version`, a bad `mode` string, a path to the repository root that is not UTF-8, a cache or state directory that is the repository or one of its parents, or an in-repository cache or state directory that holds files that are not rustow's. Some problems with these directories have other exit codes: a state directory that you do not own, or that is not a real directory, exits 4. A symlink or a non-directory above an in-repository cache or state directory exits 3. See [cache and state directories](configuration.md#cache-and-state-directories).
 
 ## Conflict policies
 

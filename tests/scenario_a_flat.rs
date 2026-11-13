@@ -260,6 +260,46 @@ fn absolute_link_to_the_source_is_taken_over() {
     assert!(twice.stdout.contains("0 changed, 1 unchanged"), "{twice:?}");
 }
 
+/// A file or directory whose name is not UTF-8 is one skipped entry. The
+/// warning shows the name lossy; the rest deploys, and the directory above
+/// it does not fold. An ignored one gives no warning.
+#[test]
+fn a_name_that_is_not_utf8_is_skipped() {
+    use std::os::unix::ffi::OsStrExt;
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.write(".config/app/a.conf", "a\n");
+    let bad = std::ffi::OsStr::from_bytes(b"bad\xff");
+    fs::write(fx.repo.join(bad), "x").unwrap();
+    write_file(&fx.repo.join(".config/app").join(bad).join("inner"), "i");
+    let apply = fx.run(&["apply"]);
+    assert_eq!(apply.code, 0, "{apply:?}");
+    for path in ["bad\u{fffd}", ".config/app/bad\u{fffd}"] {
+        let warning = format!("warning: {path}: name is not valid UTF-8; rename it");
+        assert!(apply.stderr.contains(&warning), "{apply:?}");
+    }
+    assert!(!apply.stderr.contains("inner"), "{apply:?}");
+    assert!(is_symlink(&fx.home_path(".bashrc")));
+    assert!(is_symlink(&fx.home_path(".config/app/a.conf")));
+    let app = fs::symlink_metadata(fx.home_path(".config/app")).unwrap();
+    assert!(app.is_dir(), "no fold over a name that is not UTF-8: {apply:?}");
+    fx.write(".rustowignore", "bad*\n");
+    let ignored = fx.ok(&["apply"]);
+    assert!(!ignored.stderr.contains("UTF-8"), "{ignored:?}");
+
+    let mut odd = Fixture::new();
+    odd.repo = odd.home.join(bad);
+    odd.cwd = odd.repo.clone();
+    odd.write(".bashrc", "b\n");
+    let out = odd.run(&["apply"]);
+    assert_eq!(
+        out.code, 2,
+        "a repository path that is not UTF-8 stops every command: {out:?}"
+    );
+    assert!(out.stderr.contains("is not valid UTF-8"), "{out:?}");
+    assert!(!odd.home_path(".bashrc").exists(), "{out:?}");
+}
+
 /// A recorded destination below an unreadable directory is not orphaned:
 /// rustow cannot tell if its source is still there. `status` shows it as
 /// SKIPPED with the reason of the directory.
