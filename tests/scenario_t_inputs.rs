@@ -84,6 +84,23 @@ fn a_fifo_as_state_file_is_refused() {
     refused(&fx, &["status"], &state.display().to_string(), "is not a regular file");
 }
 
+/// rustow never follows a symlink at the state file: it is not a regular
+/// file either, wherever it points.
+#[test]
+fn a_symlink_as_state_file_is_refused() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let state = state_file(&fx);
+    let copy = fx.base.join("state-copy.json");
+    fs::rename(&state, &copy).unwrap();
+    for target in [Path::new("/dev/zero"), copy.as_path()] {
+        std::os::unix::fs::symlink(target, &state).unwrap();
+        refused(&fx, &["status"], &state.display().to_string(), "is not a regular file");
+        fs::remove_file(&state).unwrap();
+    }
+}
+
 #[test]
 fn state_import_of_a_device_or_fifo_is_refused() {
     let fx = Fixture::new();

@@ -106,12 +106,18 @@ pub fn open_regular(path: &Path) -> Result<(File, fs::Metadata)> {
 
 /// Reads an input file of rustow (configuration, ignore rules, state): a
 /// regular file of at most `limit` bytes, opened with `flags`. A FIFO, a
-/// device, a directory or a larger file is a configuration error that
-/// names the file, never its content.
+/// device, a directory, a symlink under `O_NOFOLLOW` or a larger file is a
+/// configuration error that names the file, never its content.
 pub fn read_limited(path: &Path, flags: OFlag, limit: u64) -> Result<Vec<u8>> {
-    let (file, meta) = open_nonblocking(path, flags)?;
+    let not_regular = || Error::Config(format!("{} is not a regular file", path.display()));
+    let (file, meta) = match open_nonblocking(path, flags) {
+        Err(_) if flags.contains(OFlag::O_NOFOLLOW) && fs::symlink_metadata(path).is_ok_and(|m| m.is_symlink()) => {
+            return Err(not_regular());
+        }
+        opened => opened?,
+    };
     if !meta.is_file() {
-        return Err(Error::Config(format!("{} is not a regular file", path.display())));
+        return Err(not_regular());
     }
     read_at_most(file, &path.display().to_string(), limit)
 }
