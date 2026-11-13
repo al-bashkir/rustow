@@ -8,10 +8,13 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 
-/// Applies a link, a template link and a registered copy, then moves the
-/// repository to `~/dotfiles2`. Returns the old root.
+/// Applies a link, a template link, a decrypt link and a registered copy,
+/// then moves the repository to `~/dotfiles2`. Returns the old root.
 fn moved() -> (Fixture, PathBuf) {
     let mut fx = Fixture::new();
+    let key = fx.age_key("main");
+    fx.age_config(&[&key], &[&key], "");
+    fx.age_encrypt("s.age", "s\n", &[&key]);
     fx.write(".bashrc", "b\n");
     fx.write("a.conf", "a\n");
     fx.write(".t.tmpl", "t\n");
@@ -57,16 +60,21 @@ fn state_adopt_takes_over_a_moved_repository() {
     assert_eq!(fx.state_json()["files"], json!(["a.conf"]), "registrations are kept");
     let status = fx.run(&["status"]);
     assert!(!status.stderr.contains("moved repository"), "{status:?}");
+    // The records name the moved cache entry: an edit made there through the link stays.
+    let clean = fx.ok(&["cache", "clean"]);
+    assert!(!clean.stdout.contains("remove"), "{clean:?}");
     let out = fx.ok(&["apply"]);
     assert!(!out.stdout.contains("conflict"), "{out:?}");
-    for (name, content) in [(".bashrc", "b\n"), (".t", "t\n")] {
+    for (name, content) in [(".bashrc", "b\n"), (".t", "t\n"), ("s", "s\n")] {
         let path = fx.home_path(name);
         assert!(is_symlink(&path), "{name}: {out:?}");
         assert!(fs::canonicalize(&path).unwrap().starts_with(&fx.repo), "{name}");
         assert_eq!(read(&path), content);
     }
-    let ids = fs::read_dir(fx.repo.join(".rustowcache/rendered")).unwrap().count();
-    assert_eq!(ids, 1, "the cache entries moved to the new repository id");
+    for kind in ["rendered", "decrypted"] {
+        let ids = fs::read_dir(fx.repo.join(".rustowcache").join(kind)).unwrap().count();
+        assert_eq!(ids, 1, "{kind}: the cache entries moved to the new repository id");
+    }
     assert!(is_regular(&fx.home_path("a.conf")));
     assert_eq!(mtime(&fx.home_path("a.conf")), copied, "the copy is unchanged");
     assert_eq!(fx.ok(&["status"]).code, 0);
