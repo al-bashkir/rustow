@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::OFlag;
@@ -175,27 +175,65 @@ fn parse_versioned(bytes: &[u8], steps: &[Migration]) -> std::result::Result<Sta
 /// Exclusive per-repository lock, held while a command changes anything.
 pub struct Lock {
     _file: File,
+    pub path: PathBuf,
+    /// Device and inode of the locked file.
+    id: (u64, u64),
+}
+
+impl Lock {
+    /// True when the path no longer names the locked file: another run
+    /// can then lock a new file there and run at the same time.
+    pub fn replaced(&self) -> bool {
+        file_id(&self.path).ok() != Some(self.id)
+    }
+}
+
+fn file_id(path: &Path) -> std::io::Result<(u64, u64)> {
+    fs::symlink_metadata(path).map(|m| (m.dev(), m.ino()))
 }
 
 pub fn lock(dir: &Path, repo_id: &str) -> Result<Lock> {
     fsops::ensure_private_dir(dir)?;
     let path = dir.join(format!("{repo_id}.lock"));
+    // A file removed and created again between the open and the lock is
+    // locked by nobody else: lock the new one instead.
+    for _ in 0..3 {
+        let lock = lock_file(&path)?;
+        if !lock.replaced() {
+            return Ok(lock);
+        }
+    }
+    Err(Error::Failed(format!(
+        "the lock file {} changed while rustow locked it; try again",
+        path.display()
+    )))
+}
+
+fn lock_file(path: &Path) -> Result<Lock> {
     let file = OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .mode(0o600)
         .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits())
-        .open(&path)
+        .open(path)
         .ctx(|| format!("open lock {}", path.display()))?;
     match file.try_lock() {
-        Ok(()) => Ok(Lock { _file: file }),
-        Err(fs::TryLockError::WouldBlock) => Err(Error::Failed(format!(
-            "another rustow process is using this repository (lock {})",
-            path.display()
-        ))),
-        Err(fs::TryLockError::Error(e)) => Err(e).ctx(|| format!("lock {}", path.display())),
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            return Err(Error::Failed(format!(
+                "another rustow process is using this repository (lock {})",
+                path.display()
+            )));
+        }
+        Err(fs::TryLockError::Error(e)) => return Err(e).ctx(|| format!("lock {}", path.display())),
     }
+    let meta = file.metadata().ctx(|| format!("lock {}", path.display()))?;
+    Ok(Lock {
+        _file: file,
+        path: path.to_path_buf(),
+        id: (meta.dev(), meta.ino()),
+    })
 }
 
 #[cfg(test)]
@@ -345,5 +383,16 @@ mod tests {
         assert!(e.contains("another rustow"), "{e}");
         drop(first);
         assert!(lock(d.path(), "id").is_ok());
+    }
+
+    #[test]
+    fn a_lock_knows_when_its_file_is_replaced() {
+        let d = tempfile::tempdir().unwrap();
+        let held = lock(d.path(), "id").unwrap();
+        assert!(!held.replaced());
+        std::fs::remove_file(&held.path).unwrap();
+        assert!(held.replaced(), "removed");
+        let second = lock(d.path(), "id").unwrap();
+        assert!(held.replaced() && !second.replaced(), "a new file in its place");
     }
 }

@@ -166,11 +166,24 @@ fn enc_cmd(g: &Global, env: &Env, p: &mut Printer, e: EncArgs) -> Result<i32> {
         ));
     }
     let mut ctx = open(g, env, p)?;
-    let _lock = lock(&ctx, false)?;
+    let held = lock(&ctx, false)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let code = enc_run(&mut ctx, &mut state, e, p)?;
-    state.save(&ctx.state_dir, &ctx.repo_id)?;
+    save(&ctx, &state, held.as_ref())?;
     Ok(code)
+}
+
+/// Saves the state; first warns when the lock file was removed or
+/// replaced during the run, so another run may have overlapped this one.
+fn save(ctx: &Context, state: &State, held: Option<&Lock>) -> Result<()> {
+    if let Some(lock) = held.filter(|l| l.replaced()) {
+        eprintln!(
+            "warning: the lock file {} was removed or replaced during this run; \
+             another rustow process may have changed files at the same time",
+            crate::report::shown(&lock.path.display().to_string())
+        );
+    }
+    state.save(&ctx.state_dir, &ctx.repo_id)
 }
 
 /// Encrypts a source, or edits an encrypted one (which may prompt).
@@ -344,7 +357,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
         mut state,
         discovery,
         plan,
-        _lock,
+        _lock: held,
     } = prepare(g, env, printer, paths, selector, !g.dry_run)?;
     printer.warn(ctx.skipped(&discovery, paths)?);
     printer.warn(&discovery.rule_warnings);
@@ -384,12 +397,12 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     };
     let mut items = execute::execute(plan, &run, &mut state);
     items.extend(orphaned);
-    finish(&ctx, &state, printer, &items)
+    finish(&ctx, &state, held.as_ref(), printer, &items)
 }
 
 /// Reports the items first, so a state write failure cannot hide what changed on disk.
-fn finish(ctx: &Context, state: &State, printer: &Printer, items: &[ItemReport]) -> Result<i32> {
-    let saved = state.save(&ctx.state_dir, &ctx.repo_id);
+fn finish(ctx: &Context, state: &State, held: Option<&Lock>, printer: &Printer, items: &[ItemReport]) -> Result<i32> {
+    let saved = save(ctx, state, held);
     printer.items(items, RunKind::Applied);
     saved.map(|()| execute::exit_code(items))
 }
@@ -405,7 +418,7 @@ fn undeploy(
     ask: bool,
 ) -> Result<i32> {
     let ctx = open(g, env, printer)?;
-    let _lock = lock(&ctx, g.dry_run)?;
+    let held = lock(&ctx, g.dry_run)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let removals = plan::plan_removal(&ctx, paths, selector, &state)?;
     let predicted = execute::predict_removal(&removals);
@@ -420,7 +433,7 @@ fn undeploy(
     let stop = interrupt_flag()?;
     forget_links(&mut state, selector, &removals);
     let items = execute::remove(removals, &stop, &mut state);
-    finish(&ctx, &state, printer, &items)
+    finish(&ctx, &state, held.as_ref(), printer, &items)
 }
 
 /// With `ask`, shows on stderr what would go and asks on the terminal.

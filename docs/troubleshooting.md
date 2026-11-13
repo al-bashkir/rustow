@@ -37,6 +37,7 @@ The state records a destination whose source is gone. `status` and the deploy co
 ## Exit code 4
 
 - "another rustow process": a second run holds the lock. Wait for it.
+- "warning: the lock file … was removed or replaced during this run": something removed the lock file while rustow ran. A second run could then start at the same time. rustow still saves the state. Run `rustow status` to check the result. Do not remove the lock file.
 - Render error: the message gives the template and line. Check for undefined variables. Use `is defined`.
 - Decrypt error: see below.
 - "cannot write to directory X: Permission denied …; elevated privileges may be required": you cannot write the directory of a home destination. Change the directory. Under the default policy, rustow wrote the other items. With `--on-conflict abort`, it wrote nothing.

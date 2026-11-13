@@ -162,6 +162,24 @@ fn home_files_never_use_sudo() {
     assert_eq!(s.calls(), 0, "home files never use sudo");
 }
 
+/// The lock stops a second run only while its file is in place. A file
+/// that disappears during the run (here while sudo asks for the password)
+/// lets another run start, so rustow warns before it saves the state.
+#[test]
+fn a_lock_file_removed_during_the_run_is_reported() {
+    let s = Sudo::new(&FAKE.replacen('\n', "\nrm -f \"$XDG_STATE_HOME\"/rustow/*.lock\n", 1));
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stderr.contains("warning: the lock file") && out.stderr.contains("was removed or replaced during this run"),
+        "{out:?}"
+    );
+    assert_eq!(read(&s.fx.root_path("etc/app.conf")), "a\n");
+    let again = s.run(&["apply"]);
+    assert_eq!(again.code, 0, "the state was saved: {again:?}");
+    assert!(!again.stderr.contains("warning"), "no sudo, no removal: {again:?}");
+}
+
 /// A sudo program named without a `/` is looked up only in absolute PATH
 /// entries: an empty entry would run `./fake-sudo` from the current directory.
 #[test]
