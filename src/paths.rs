@@ -55,6 +55,12 @@ impl RelPath {
         self.0.rsplit_once('/').map(|(parent, _)| RelPath(parent.to_owned()))
     }
 
+    /// The directories above this path, the nearest first. They borrow
+    /// the text: copies would cost the square of the depth.
+    pub fn ancestors(&self) -> impl DoubleEndedIterator<Item = &str> {
+        self.0.rmatch_indices('/').map(|(end, _)| &self.0[..end])
+    }
+
     pub fn join(&self, child: &RelPath) -> RelPath {
         RelPath(format!("{}/{}", self.0, child.0))
     }
@@ -91,6 +97,13 @@ impl<'de> serde::Deserialize<'de> for RelPath {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
         let text = String::deserialize(d)?;
         RelPath::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Sets and maps of paths answer for the text of an ancestor (`ancestors`).
+impl std::borrow::Borrow<str> for RelPath {
+    fn borrow(&self) -> &str {
+        &self.0
     }
 }
 
@@ -209,6 +222,8 @@ mod tests {
         assert_eq!(p.file_name(), "init.lua");
         assert_eq!(p.parent(), Some(rel(".config/nvim")));
         assert_eq!(rel(".bashrc").parent(), None);
+        assert_eq!(p.ancestors().collect::<Vec<_>>(), [".config/nvim", ".config"]);
+        assert_eq!(rel(".bashrc").ancestors().count(), 0);
         assert_eq!(rel(".config").join(&rel("nvim/x")), rel(".config/nvim/x"));
         assert!(p.starts_with(&rel(".config")));
         assert!(p.starts_with(&p));

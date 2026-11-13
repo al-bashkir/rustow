@@ -45,7 +45,7 @@ pub fn dir_above<'a>(source: &Source, dirs: &'a BTreeSet<RelPath>) -> Option<&'a
     if !is_home(source) {
         return None;
     }
-    ancestors(&source.dest).into_iter().find_map(|a| dirs.get(&a))
+    source.dest.ancestors().find_map(|a| dirs.get(a))
 }
 
 /// Destinations involved in a collision, with the collision text (see `plan`).
@@ -76,17 +76,17 @@ fn is_home(source: &Source) -> bool {
 /// The `[[file_rules]]` value of `path` or of its nearest ancestor
 /// directory; `default` when no rule covers it.
 pub fn fold_allowed(rules: &BTreeMap<RelPath, bool>, default: bool, path: &RelPath) -> bool {
-    std::iter::once(path.clone())
-        .chain(ancestors(path))
-        .find_map(|p| rules.get(&p).copied())
+    std::iter::once(path.as_str())
+        .chain(path.ancestors())
+        .find_map(|p| rules.get(p).copied())
         .unwrap_or(default)
 }
 
 /// A direct child of home, or of `~/.local` (`share`, `state`, `bin`, ...):
 /// on a new machine these are often missing, and a fold would let
 /// programs write keys, tokens and history into the repository.
-pub fn never_folds(dir: &RelPath) -> bool {
-    let mut parts = dir.components();
+pub fn never_folds(dir: &str) -> bool {
+    let mut parts = dir.split('/');
     matches!(
         (parts.next(), parts.next(), parts.next()),
         (_, None, _) | (Some(".local"), Some(_), None)
@@ -112,31 +112,26 @@ fn fold_candidates(
     recorded: &BTreeMap<RelPath, &Record>,
     collided: &Collided,
 ) -> Result<BTreeSet<RelPath>> {
-    let link_sources: BTreeSet<&RelPath> = discovery
-        .sources
-        .iter()
-        .filter(|s| foldable(ctx, s))
-        .map(|s| &s.path)
-        .collect();
-    let chosen: BTreeSet<&RelPath> = selected.iter().filter(|s| foldable(ctx, s)).map(|s| &s.path).collect();
-    let mut candidates: Vec<RelPath> = chosen
-        .iter()
-        .flat_map(|p| ancestors(p))
-        .filter(|d| !never_folds(d))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    candidates.sort_by_key(|d| (d.components().count(), d.clone()));
+    let mut contents = Contents {
+        linked: discovery
+            .sources
+            .iter()
+            .filter(|s| foldable(ctx, s))
+            .map(|s| &s.path)
+            .collect(),
+        chosen: selected.iter().filter(|s| foldable(ctx, s)).map(|s| &s.path).collect(),
+        ..Contents::default()
+    };
     let mut folds = BTreeSet::new();
-    for dir in candidates {
-        if below_any(&dir, &folds) {
+    // A directory sorts before the paths below it: the outermost comes first.
+    for dir in dirs_above(contents.chosen.iter().copied()) {
+        if never_folds(dir.as_str()) || below_any(&dir, &folds) {
             continue;
         }
         // Keeping rustow's own link changes nothing; a new fold must not
         // expose sources that this run does not select.
-        let record = recorded.get(&dir).copied();
-        let allowed = if record.is_some() { &link_sources } else { &chosen };
-        if qualifies(ctx, &dir, record.is_some(), allowed, collided)? {
+        let recorded = recorded.contains_key(&dir);
+        if qualifies(ctx, &dir, recorded, &mut contents, collided)? {
             folds.insert(dir);
         }
     }
@@ -144,18 +139,18 @@ fn fold_candidates(
 }
 
 /// `dir` can be one symlink: no home destination collides at or below it,
-/// its destination allows a fold, and it holds only `allowed` sources.
+/// its destination allows a fold, and it holds only sources that the fold may hold.
 fn qualifies(
     ctx: &Context,
     dir: &RelPath,
     recorded: bool,
-    allowed: &BTreeSet<&RelPath>,
+    contents: &mut Contents,
     collided: &Collided,
 ) -> Result<bool> {
     let collides = collided
         .keys()
         .any(|(scope, dest)| *scope == Scope::Home && dest.starts_with(dir));
-    Ok(!collides && dest_allows_fold(ctx, dir, recorded)? && holds_only(ctx, dir, allowed)?)
+    Ok(!collides && dest_allows_fold(ctx, dir, recorded)? && contents.holds_only(ctx, dir, recorded)?)
 }
 
 /// Recorded folded links that a selected source now lies below and that are no longer folded.
@@ -164,11 +159,7 @@ fn select_unfolds(
     recorded: &BTreeMap<RelPath, &Record>,
     folds: &BTreeSet<RelPath>,
 ) -> BTreeSet<RelPath> {
-    let above_selected: BTreeSet<RelPath> = selected
-        .iter()
-        .filter(|s| is_home(s))
-        .flat_map(|s| ancestors(&s.dest))
-        .collect();
+    let above_selected = dirs_above(selected.iter().filter(|s| is_home(s)).map(|s| &s.dest));
     recorded
         .keys()
         .filter(|dir| above_selected.contains(*dir) && !folds.contains(*dir))
@@ -178,7 +169,26 @@ fn select_unfolds(
 
 /// True when an ancestor directory of `path` is one of `dirs`.
 fn below_any(path: &RelPath, dirs: &BTreeSet<RelPath>) -> bool {
-    ancestors(path).iter().any(|a| dirs.contains(a))
+    path.ancestors().any(|a| dirs.contains(a))
+}
+
+/// The directories above `paths`, each once.
+fn dirs_above<'a>(paths: impl Iterator<Item = &'a RelPath>) -> BTreeSet<RelPath> {
+    let mut dirs = BTreeSet::new();
+    for path in paths {
+        add_up(&mut dirs, path.parent());
+    }
+    dirs
+}
+
+/// Adds `dir` and each directory above it to `dirs`. The way up stops at
+/// one that `dirs` has: the directories above that one are there already.
+fn add_up(dirs: &mut BTreeSet<RelPath>, dir: Option<RelPath>) {
+    let mut next = dir;
+    while let Some(dir) = next.filter(|d| !dirs.contains(d)) {
+        next = dir.parent();
+        dirs.insert(dir);
+    }
 }
 
 /// Repository files below `dir` that are not one of `sources` (the
@@ -203,17 +213,6 @@ fn recorded_folds<'a>(ctx: &Context, state: &'a State) -> BTreeMap<RelPath, &'a 
             Some((RelPath::parse(rel).ok()?, r))
         })
         .collect()
-}
-
-/// The directories above `path`, the nearest first.
-pub fn ancestors(path: &RelPath) -> Vec<RelPath> {
-    let mut out = Vec::new();
-    let mut cur = path.parent();
-    while let Some(p) = cur {
-        cur = p.parent();
-        out.push(p);
-    }
-    out
 }
 
 /// The destination of `dir` is still exactly the symlink rustow recorded.
@@ -249,16 +248,59 @@ fn reaches_dir(ctx: &Context, dir: &RelPath) -> Result<bool> {
     Ok(fs::read_link(&link).is_ok_and(|text| same_link_target(&link, &text, &target)))
 }
 
-/// No entry below `dir` is reserved (cache, state, `.git`), not even a
-/// cache or state directory that does not exist yet, and every
-/// non-directory entry is one of `allowed`: the fold would expose them.
-fn holds_only(ctx: &Context, dir: &RelPath, allowed: &BTreeSet<&RelPath>) -> Result<bool> {
-    if ctx.ignore.holds_internal(dir) {
-        return Ok(false);
+/// The sources that a fold may hold, and what the walks below the fold
+/// candidates found. A walk marks each directory above an entry that a
+/// fold would expose, so one walk answers for each directory below it.
+#[derive(Default)]
+struct Contents<'a> {
+    /// Home link sources that may fold: a recorded fold may hold them.
+    linked: BTreeSet<&'a RelPath>,
+    /// The ones that this run selects: a new fold may hold only these.
+    chosen: BTreeSet<&'a RelPath>,
+    /// Each directory that a walk reached.
+    walked: BTreeSet<RelPath>,
+    /// Directories with an entry below them that is reserved or not one of `linked`.
+    not_linked: BTreeSet<RelPath>,
+    /// Directories with an entry below them that is reserved or not one of `chosen`.
+    not_chosen: BTreeSet<RelPath>,
+}
+
+impl Contents<'_> {
+    /// No entry below `dir` is reserved (cache, state, `.git`), not even a
+    /// cache or state directory that does not exist yet, and every
+    /// non-directory entry is a source that the fold may hold (`linked`
+    /// for a `recorded` fold, else `chosen`): the fold would expose them.
+    fn holds_only(&mut self, ctx: &Context, dir: &RelPath, recorded: bool) -> Result<bool> {
+        if ctx.ignore.holds_internal(dir) {
+            return Ok(false);
+        }
+        if !self.walked.contains(dir) {
+            self.walk(ctx, dir)?;
+        }
+        let exposed = if recorded { &self.not_linked } else { &self.not_chosen };
+        Ok(!exposed.contains(dir))
     }
-    Ok(entries_below(ctx, dir)?
-        .iter()
-        .all(|(p, is_dir)| !ctx.ignore.is_reserved(p, *is_dir) && (*is_dir || allowed.contains(p))))
+
+    /// Walks below `dir` and marks each entry that a fold would expose,
+    /// with the directories above it. An entry that cannot be read is one
+    /// (`entries_below`).
+    fn walk(&mut self, ctx: &Context, dir: &RelPath) -> Result<()> {
+        self.walked.insert(dir.clone());
+        for (path, is_dir) in entries_below(ctx, dir)? {
+            let reserved = ctx.ignore.is_reserved(&path, is_dir);
+            let exposed = |allowed: &BTreeSet<&RelPath>| reserved || !is_dir && !allowed.contains(&path);
+            if exposed(&self.linked) {
+                add_up(&mut self.not_linked, Some(path.clone()));
+            }
+            if exposed(&self.chosen) {
+                add_up(&mut self.not_chosen, Some(path.clone()));
+            }
+            if is_dir {
+                self.walked.insert(path);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Repository-relative paths of all entries below `dir` (symlinks and

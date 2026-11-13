@@ -729,22 +729,22 @@ fn locate_dest(
 /// say); `None` for any other case.
 fn repo_symlink(ctx: &Context, source: &Source, state: &State) -> Option<String> {
     let target = ctx.target_root(source.scope);
-    let dir = fold::ancestors(&source.dest).into_iter().rev().find(|d| {
-        let abs = target.join(d.as_path());
+    let dir = source.dest.ancestors().rev().find(|d| {
+        let abs = target.join(d);
         fs::symlink_metadata(&abs).is_ok_and(|m| m.is_symlink())
             && fs::canonicalize(&abs).is_ok_and(|real| real.starts_with(&ctx.root))
     })?;
-    if state.entries.contains_key(&target.join(dir.as_path())) {
+    if state.entries.contains_key(&target.join(dir)) {
         return None;
     }
-    let never = if source.scope == Scope::Home && fold::never_folds(&dir) {
+    let never = if source.scope == Scope::Home && fold::never_folds(dir) {
         " and never folds"
     } else {
         ""
     };
     Some(format!(
         "{} is a symlink into the repository that rustow does not manage{never}; replace it with a real directory",
-        target.join(dir.as_path()).display()
+        target.join(dir).display()
     ))
 }
 

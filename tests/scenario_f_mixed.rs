@@ -193,6 +193,22 @@ fn destination_resolving_into_repository_is_blocked() {
     assert_eq!(read(&fx.repo.join(".config/nvim/init.lua")), "precious\n");
 }
 
+/// Without folding, a symlink into the repository below a top-level
+/// directory (a GNU Stow fold) blocks the files below it too.
+#[test]
+fn unmanaged_fold_below_the_top_level_is_blocked_without_folding() {
+    let fx = nvim("version = 1\n[defaults]\nfold_directories = false\n");
+    let link = fx.home_path(".config/nvim");
+    std::os::unix::fs::symlink(fx.repo.join(".config/nvim"), &link).unwrap();
+    let detail = format!(
+        "{} is a symlink into the repository that rustow does not manage; replace it with a real directory",
+        link.display()
+    );
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains(&detail), "{out:?}");
+}
+
 /// Review C1: a folded link replaced by a real directory with user files
 /// must never lose those files, whatever the conflict policy.
 #[test]
@@ -440,6 +456,28 @@ fn selective_apply_folds_only_fully_selected_directories() {
     assert!(!is_symlink(&fx.home_path(".config")), "{out:?}");
     assert!(is_symlink(&fx.home_path(".config/a")), "{out:?}");
     assert!(!fx.home_path(".config/b").exists(), "{out:?}");
+}
+
+/// A file that a fold would expose blocks the fold of each directory
+/// above it, and of no other directory.
+#[test]
+fn a_stray_blocks_only_the_folds_above_it() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", FOLD);
+    fx.write(".rustowignore", "*.swp\n");
+    for file in ["a/x", "b/z", "b/c/y", "b/c/d/w"] {
+        fx.write(&format!(".config/app/{file}"), "x\n");
+    }
+    fx.write(".config/app/b/c/.y.swp", "junk");
+    fs::create_dir_all(fx.home_path(".config")).unwrap();
+    let out = fx.ok(&["apply"]);
+    for dir in ["app", "app/b", "app/b/c"] {
+        let real = fs::symlink_metadata(fx.home_path(&format!(".config/{dir}"))).unwrap();
+        assert!(real.is_dir(), "{dir} is not folded: {out:?}");
+    }
+    for link in ["app/a", "app/b/z", "app/b/c/y", "app/b/c/d"] {
+        assert!(is_symlink(&fx.home_path(&format!(".config/{link}"))), "{link}: {out:?}");
+    }
 }
 
 /// Only a home collision at or below a directory blocks its fold: not one
