@@ -98,9 +98,10 @@ fn render_at(name: &str, source: &str, context: &Value, offset: usize) -> Result
         .map_err(|e| e.to_string())?;
     env.set_syntax(syntax);
     let describe = |e: minijinja::Error| {
-        let why = match e.kind() {
-            minijinja::ErrorKind::OutOfFuel => "exceeded the evaluation limit".to_owned(),
-            kind => kind.to_string(),
+        let why = match (e.kind(), e.detail()) {
+            (minijinja::ErrorKind::OutOfFuel, _) => "exceeded the evaluation limit".to_owned(),
+            (kind, Some(detail)) if SAFE_DETAILS.iter().any(|p| fits(p, detail)) => format!("{kind}: {detail}"),
+            (kind, _) => kind.to_string(),
         };
         match e.line() {
             Some(line) => format!("template {name}, line {}: {why}", line + offset),
@@ -109,6 +110,80 @@ fn render_at(name: &str, source: &str, context: &Value, offset: usize) -> Result
     };
     let template = env.template_from_named_str(name, source).map_err(describe)?;
     template.render(minijinja::value::Serde(context)).map_err(describe)
+}
+
+/// MiniJinja error details whose `{}` slots hold only a word of
+/// `TYPE_WORDS`. Other details can quote a value or the template text, so
+/// they stay hidden.
+const SAFE_DETAILS: &[&str] = &[
+    "tried to use {} operator on unsupported types {} and {}",
+    "{} is not iterable",
+    "not iterable",
+    "cannot convert {} to {}",
+    "cannot calculate length of value of type {}",
+    "cannot join value of type {}",
+    "can only sum numbers, got {}",
+    "value of type {} cannot be sliced",
+    "invalid float literal",
+];
+
+/// MiniJinja's value kinds, operators and conversion targets.
+const TYPE_WORDS: &[&str] = &[
+    "undefined",
+    "none",
+    "bool",
+    "number",
+    "string",
+    "bytes",
+    "sequence",
+    "map",
+    "iterator",
+    "plain object",
+    "invalid value",
+    "integer",
+    "float",
+    "char",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "f32",
+    "f64",
+    "+",
+    "-",
+    "*",
+    "/",
+    "//",
+    "%",
+    "**",
+];
+
+/// Whether `detail` is `pattern` with each `{}` replaced by a word of `TYPE_WORDS`.
+fn fits(pattern: &str, detail: &str) -> bool {
+    let mut parts = pattern.split("{}");
+    let Some(mut rest) = parts.next().and_then(|head| detail.strip_prefix(head)) else {
+        return false;
+    };
+    for literal in parts {
+        let end = if literal.is_empty() {
+            Some(rest.len())
+        } else {
+            rest.find(literal)
+        };
+        match end {
+            Some(end) if TYPE_WORDS.contains(&&rest[..end]) => rest = &rest[end + literal.len()..],
+            _ => return false,
+        }
+    }
+    rest.is_empty()
 }
 
 /// A host fact that a meta condition compares.
@@ -372,6 +447,23 @@ mod tests {
             render("t", "{% if vars.nope is defined %}x{% endif %}", &ctx()).unwrap(),
             ""
         );
+    }
+
+    /// A detail that names only types says what is wrong; a detail that
+    /// can quote a value stays hidden.
+    #[test]
+    fn errors_show_a_detail_only_when_it_names_no_value() {
+        let c = context(json!({ "s": "x", "pin": 4711 }).as_object().unwrap(), Path::new("/h"));
+        let e = render("t", "{{ vars.s + 1 }}", &c).unwrap_err();
+        assert_eq!(
+            e,
+            "template t, line 1: invalid operation: tried to use + operator on unsupported types string and number"
+        );
+        let e = render("t", "\n{% for x in vars.pin %}{% endfor %}", &c).unwrap_err();
+        assert_eq!(e, "template t, line 2: invalid operation: number is not iterable");
+        // MiniJinja says "unable to calculate 4711 // 0".
+        let e = render("t", "{{ vars.pin // 0 }}", &c).unwrap_err();
+        assert_eq!(e, "template t, line 1: invalid operation");
     }
 
     #[test]
