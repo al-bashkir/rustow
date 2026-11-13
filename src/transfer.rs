@@ -32,8 +32,10 @@ struct Registrations {
 }
 
 /// Prints the registrations as JSON, or writes them to `file`: a new file,
-/// or any file when `replace` (`--force`).
+/// or any file when `replace` (`--force`). "-" prints them, as `import`
+/// reads "-" from stdin.
 pub fn export(ctx: &Context, file: Option<&Path>, replace: bool) -> Result<i32> {
+    let file = file.filter(|f| *f != Path::new("-"));
     let state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
     let Lists { files, links } = Lists::of(&state.registrations);
     let regs = Registrations {

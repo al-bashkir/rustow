@@ -31,6 +31,8 @@ fn export_then_import_on_another_machine() {
     assert!(!file.exists());
     old.ok(&["state", "export", file.to_str().unwrap()]);
     assert_eq!(read(&file), out.stdout);
+    assert_eq!(old.ok(&["state", "export", "-"]).stdout, out.stdout, "\"-\" is stdout");
+    assert!(!old.repo.join("-").exists());
 
     let new = machine();
     new.ok(&["state", "import", "-n", file.to_str().unwrap()]);

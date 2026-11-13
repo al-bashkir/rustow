@@ -175,7 +175,7 @@ pub enum CacheCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum StateCommand {
-    /// Print the registrations of this machine as JSON (or write them to FILE)
+    /// Print the registrations of this machine as JSON (or write them to FILE; "-" prints them)
     Export {
         #[arg(value_name = "FILE")]
         file: Option<PathBuf>,

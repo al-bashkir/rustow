@@ -49,7 +49,7 @@ A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts
 | `doctor`                        | Report on the environment.                                                                                                             |
 | `undeploy [-y] [PATH]...`       | Remove managed destinations of any mode. Without a path, asks first.                                                                   |
 | `cache clean`                   | Remove unused cache entries and stale edit workspaces.                                                                                 |
-| `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON.                                                            |
+| `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON. `-` prints them.                                           |
 | `state import FILE`             | Add the registrations in FILE (`-` for stdin) to this machine.                                                                         |
 | `state adopt OLD_ROOT`          | Take over the state of this repository from its path before a move.                                                                    |
 | `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                                                                                      |
@@ -199,7 +199,7 @@ Removes this repository's cache entries that no recorded symlink uses, and empty
 The state file of one machine holds registrations: `file add` copies and copy-mode `link` links. To use them on another machine:
 
 ```sh
-rustow state export regs.json      # on the old machine (no FILE: print to stdout)
+rustow state export regs.json      # on the old machine (no FILE or "-": print to stdout)
 rustow state import regs.json      # on the new machine ("-" reads stdin)
 ```
 
