@@ -30,6 +30,23 @@ fn a_fifo_as_configuration_or_ignore_file_is_refused() {
     }
 }
 
+/// A file that rustow cannot read is a configuration error too: it names
+/// the file and the cause.
+#[test]
+fn an_unreadable_configuration_or_ignore_file_is_refused() {
+    if nix::unistd::geteuid().is_root() {
+        return; // root reads it anyway
+    }
+    for name in ["rustow.toml", ".rustowignore"] {
+        let fx = Fixture::new();
+        fx.write(".bashrc", "b\n");
+        let file = fx.write(name, "\n");
+        fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+        refused(&fx, &["check"], name, "Permission denied");
+        refused(&fx, &["status"], name, "Permission denied");
+    }
+}
+
 /// A symlink that does not resolve is not a missing file: the defaults
 /// (no rules) would deploy into the wrong target, or deploy ignored files.
 #[test]

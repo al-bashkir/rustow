@@ -10,9 +10,8 @@ use std::path::Path;
 use ::ignore::gitignore::{Gitignore, GitignoreBuilder};
 use nix::fcntl::OFlag;
 
-use crate::config::{CONFIG_FILE, GlobalRule, MAX_FILE_SIZE, text_of};
+use crate::config::{CONFIG_FILE, GlobalRule, read_config_file};
 use crate::error::{Error, Result};
-use crate::fsops;
 use crate::paths::RelPath;
 use crate::template::Host;
 
@@ -38,11 +37,7 @@ fn within_limit(what: &str, count: usize) -> Result<()> {
 /// The text of `.rustowignore` at `file` (empty when it is missing), with at
 /// most `MAX_RULES` patterns; comments and blank lines do not count.
 fn read_ignore_file(file: &Path) -> Result<String> {
-    let text = match fsops::read_limited(file, OFlag::empty(), MAX_FILE_SIZE) {
-        Ok(bytes) => text_of(file, bytes)?,
-        Err(e) if e.is_not_found() => String::new(),
-        Err(e) => return Err(e),
-    };
+    let text = read_config_file(file, OFlag::empty())?.unwrap_or_default();
     let patterns = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#'));
     within_limit(IGNORE_FILE, patterns.count())?;
     Ok(text)

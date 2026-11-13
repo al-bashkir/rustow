@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use nix::fcntl::OFlag;
 
-use crate::config::{CONFIG_FILE, MAX_FILE_SIZE, edit, text_of};
+use crate::config::{CONFIG_FILE, edit, read_config_file};
 use crate::error::{Error, Result};
 use crate::fsops;
 use crate::paths::RelPath;
@@ -152,7 +152,7 @@ fn read_config(ctx: &Context) -> Result<(String, u32)> {
     match fs::symlink_metadata(&path) {
         Err(_) => Ok((String::new(), 0o644)),
         Ok(m) => {
-            let text = text_of(&path, fsops::read_limited(&path, OFlag::O_NOFOLLOW, MAX_FILE_SIZE)?)?;
+            let text = read_config_file(&path, OFlag::O_NOFOLLOW)?.unwrap_or_default();
             Ok((text, m.permissions().mode() & 0o7777))
         }
     }

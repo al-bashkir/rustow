@@ -19,9 +19,19 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// The largest `rustow.toml` or `.rustowignore` that rustow reads.
 pub const MAX_FILE_SIZE: u64 = 16 << 20;
 
-/// The text of a configuration file that `fsops::read_limited` read.
-pub fn text_of(path: &Path, bytes: Vec<u8>) -> Result<String> {
-    String::from_utf8(bytes).map_err(|_| Error::Config(format!("{} is not valid UTF-8", path.display())))
+/// The text of the configuration file `path` (`rustow.toml` or
+/// `.rustowignore`), read with `flags`; `None` when it does not exist. Any
+/// other problem, also one to open or read it, is a configuration error
+/// that names the file and the cause.
+pub fn read_config_file(path: &Path, flags: OFlag) -> Result<Option<String>> {
+    let bytes = match fsops::read_limited(path, flags, MAX_FILE_SIZE) {
+        Ok(bytes) => bytes,
+        Err(e) if e.is_not_found() => return Ok(None),
+        Err(e @ Error::Io { .. }) => return Err(Error::Config(e.to_string())),
+        Err(e) => return Err(e),
+    };
+    let text = String::from_utf8(bytes).map_err(|_| Error::Config(format!("{} is not valid UTF-8", path.display())))?;
+    Ok(Some(text))
 }
 
 /// Encryption backend, chosen by the outer `.age` / `.gpg` source suffix.
@@ -193,10 +203,9 @@ impl Config {
     /// Loads `<repo>/rustow.toml`; an absent file gives the defaults.
     pub fn load(repo: &Path) -> Result<Config> {
         let path = repo.join(CONFIG_FILE);
-        match fsops::read_limited(&path, OFlag::empty(), MAX_FILE_SIZE) {
-            Ok(bytes) => Config::parse(&text_of(&path, bytes)?),
-            Err(e) if e.is_not_found() => Ok(Config::default()),
-            Err(e) => Err(e),
+        match read_config_file(&path, OFlag::empty())? {
+            Some(text) => Config::parse(&text),
+            None => Ok(Config::default()),
         }
     }
 
