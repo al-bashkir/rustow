@@ -159,7 +159,7 @@ group = "root"
 
 Registers a source for copy deployment on every machine. You write this list by hand. `rustow file add` does not write it: it registers the source in the state file of one machine. `rustow file remove` removes an entry from both. See [file management](file-management.md#state-or-rustowtoml). A system file under `rustowroot/` that is not a template must be registered in one of them. See [system files](system-files.md).
 
-An entry can set `mode`, `owner` and `group`, with the same values and checks as a [`[[template_rules]]`](#template_rules) entry. All three are optional. Without `mode`, a new copy gets the mode of the source (0600 for an encrypted source), and an update keeps the mode of the destination. Without `owner` or `group`, the copy belongs to the user who writes it, and an update keeps the owner and group. A `rustow file add` registration sets no metadata. When `[[files]]` lists the source too, the entry wins.
+An entry can set `mode`, `owner` and `group`, with the same values and checks as a [`[[template_rules]]`](#template_rules) entry. All three are optional. Without `mode`, a new copy gets the mode of the source (0600 for an encrypted source), and an update keeps the mode of the destination. A new system file (`rustowroot/`) gets the mode of the source without write access for the group and others. Without `owner` or `group`, the copy belongs to the user who writes it, and an update keeps the owner and group. A new system file gets the group of the user who writes it, also in a setgid directory. A `rustow file add` registration sets no metadata. When `[[files]]` lists the source too, the entry wins.
 
 ## `[[template_rules]]`
 

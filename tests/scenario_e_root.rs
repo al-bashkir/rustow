@@ -476,6 +476,8 @@ fn a_group_writable_system_source_deploys_only_in_a_user_private_group() {
     if private {
         assert_eq!(out.code, 0, "{out:?}");
         assert_eq!(read(&fx.root_path("etc/g.conf")), "g\n");
+        // The private group may write the source, never the system copy.
+        assert_eq!(mode(&fx.root_path("etc/g.conf")), 0o644);
     } else {
         assert_eq!(out.code, 3, "{out:?}");
         assert!(
@@ -484,6 +486,33 @@ fn a_group_writable_system_source_deploys_only_in_a_user_private_group() {
         );
         assert!(!fx.root_path("etc/g.conf").exists());
     }
+}
+
+/// A new system file belongs to the user who writes it: in a setgid
+/// directory, it does not take the directory's group.
+#[test]
+fn a_new_system_file_does_not_take_the_group_of_a_setgid_directory() {
+    use nix::unistd::{getegid, getgroups};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/srv/proj/app.conf\"\n",
+    );
+    fx.write("rustowroot/srv/proj/app.conf", "a\n");
+    let egid = getegid();
+    let Some(other) = getgroups().unwrap().into_iter().find(|g| *g != egid) else {
+        eprintln!("SKIP: the test user has no supplementary group");
+        return;
+    };
+    let proj = fx.root_path("srv/proj");
+    fs::create_dir_all(&proj).unwrap();
+    std::os::unix::fs::chown(&proj, None, Some(other.as_raw())).unwrap();
+    fs::set_permissions(&proj, fs::Permissions::from_mode(0o2755)).unwrap();
+
+    fx.ok(&["apply"]);
+    let gid = fs::metadata(fx.root_path("srv/proj/app.conf")).unwrap().gid();
+    assert_eq!(gid, egid.as_raw(), "not group {other} of the setgid directory");
 }
 
 /// An ACL can let another user write a source whose mode bits look safe:

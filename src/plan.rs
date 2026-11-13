@@ -1145,6 +1145,12 @@ fn want_link(path: &Path, source_abs: &Path, record: Record) -> Want {
 fn want_file_copy(source: &Source, source_abs: PathBuf, meta: &Metadata) -> std::result::Result<Want, String> {
     let meta = resolve_meta(meta)?;
     let mode = fs::symlink_metadata(&source_abs).map_or(0o644, |m| m.permissions().mode() & 0o777);
+    // Group write was safe on the source only in the user's private group.
+    let mode = if source.scope == Scope::Root {
+        mode & !0o022
+    } else {
+        mode
+    };
     let (hash, len) = fsops::hash_file(&source_abs).map_err(|e| e.to_string())?;
     let record = Record {
         applied_hash: Some(hash.clone()),

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::error::{Error, Result};
 use crate::fsops::{self, Dir, DirId, FileMeta, Observed};
 use crate::hash::Hash;
-use crate::paths::RelPath;
+use crate::paths::{RelPath, Scope};
 use crate::plan::{CacheWrite, Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
 use crate::sudo::Job;
@@ -543,10 +543,13 @@ fn put(dir: &Dir, name: &OsStr, d: &Deploy, new: &mut NewFile, replace: bool) ->
     match &d.desired {
         Desired::Symlink(text) => dir.symlink(name, new.temp, text, replace),
         Desired::File { hash, meta } => {
+            // A new system file gets the writer's group, not the one of a
+            // setgid directory. Home files skip the chown: vfat refuses it.
+            let writer = (d.record.scope == Scope::Root).then(|| nix::unistd::getegid().as_raw());
             let meta = FileMeta {
                 mode: meta.mode.or(Some(d.file_mode)),
                 uid: d.file_owner.0,
-                gid: d.file_owner.1,
+                gid: d.file_owner.1.or(writer),
             };
             dir.write(name, new.temp, new.from, (hash, new.len), meta, replace)
         }
