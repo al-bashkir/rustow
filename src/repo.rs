@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{CONFIG_FILE, Config};
 use crate::error::{Error, Result};
+use crate::fsops::{Dir, Walked};
 use crate::hash::Hash;
 use crate::ignore::{IGNORE_FILE, Ignore, ROOT_DIR};
 use crate::paths::{RelPath, Scope, expand_tilde, normalize};
@@ -222,8 +223,8 @@ fn resolve_targets(
     home: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
     let target = |flag: &Option<PathBuf>, configured: &str, what: &str| match flag {
-        Some(p) => canonical_dir(&env.cwd.join(p), what),
-        None => canonical_dir(&root.join(expand_tilde(configured, home)), what),
+        Some(p) => target_dir(&env.cwd.join(p), what),
+        None => target_dir(&root.join(expand_tilde(configured, home)), what),
     };
     let home_target = target(&opts.target, &config.defaults.target, "target")?;
     let root_target = target(&opts.root_target, &config.defaults.root_target, "root target")?;
@@ -255,6 +256,18 @@ fn setup_notices(private_cache: Option<&Path>, root_target: &Path) -> Vec<String
         ));
     }
     notices
+}
+
+/// The real path of a target root, walked from `/` as the directories
+/// above a destination are: a symlink on the way must pass the trust rule.
+fn target_dir(path: &Path, what: &str) -> Result<PathBuf> {
+    let refused = |why: String| Err(Error::Usage(format!("{what} {}: {why}", path.display())));
+    match Dir::open(path, nix::unistd::geteuid().as_raw())? {
+        Walked::Ready(dir) => Ok(dir.path),
+        Walked::Missing { .. } => refused(nix::errno::Errno::ENOENT.desc().into()),
+        Walked::Blocked { path: at, reason } if at == path => refused(reason),
+        Walked::Blocked { path: at, reason } => refused(format!("{}: {reason}", at.display())),
+    }
 }
 
 fn canonical_dir(path: &Path, what: &str) -> Result<PathBuf> {
@@ -789,5 +802,39 @@ mod tests {
             ..Default::default()
         };
         assert!(open(&f, opts).is_err());
+    }
+
+    #[test]
+    fn a_target_is_walked_to_its_real_path_or_refused_with_the_cause() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let f = fx();
+        let refused = |p: &str| match target_dir(&f.base.join(p), "target") {
+            Err(Error::Usage(why)) => why,
+            other => panic!("{p}: {other:?}"),
+        };
+        assert_eq!(
+            target_dir(&f.base.join("root/../home/./dot"), "target").unwrap(),
+            f.base.join("home/dot")
+        );
+        symlink(f.base.join("home"), f.base.join("h")).unwrap();
+        assert_eq!(
+            target_dir(&f.base.join("h/dot"), "target").unwrap(),
+            f.base.join("home/dot")
+        );
+        let missing = refused("home/none");
+        assert!(
+            missing.starts_with("target ") && missing.ends_with("home/none: No such file or directory"),
+            "{missing}"
+        );
+        assert!(refused("home/dot/.bashrc").ends_with(".bashrc: not a directory"));
+        fs::create_dir(f.base.join("open")).unwrap();
+        fs::set_permissions(f.base.join("open"), fs::Permissions::from_mode(0o777)).unwrap();
+        symlink(f.base.join("open"), f.base.join("o")).unwrap();
+        let below = refused("o/x");
+        let at = f.base.join("o").display().to_string();
+        assert!(
+            below.contains(&format!("o/x: {at}: symlink target is not safe")),
+            "{below}"
+        );
     }
 }

@@ -457,3 +457,26 @@ fn changed_managed_link_is_modified() {
     assert_eq!(link_text(&fx.home_path(".bashrc")), std::path::PathBuf::from("other"));
     assert_eq!(read(&fx.home_path(".zshrc")), "mine\n");
 }
+
+/// A target reached through a symlink gets the check of a symlinked
+/// ancestor: a target directory that others can write stops the command,
+/// so a copy never lands where another user can read or replace it.
+#[test]
+fn a_target_behind_a_symlink_to_a_world_writable_directory_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n[[files]]\nsource = \".cfg\"\n");
+    fx.write(".cfg", "token\n");
+    let open = fx.base.join("open");
+    fs::create_dir(&open).unwrap();
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
+    let target = fx.base.join("tt");
+    std::os::unix::fs::symlink(&open, &target).unwrap();
+    let out = fx.run(&["--target", target.to_str().unwrap(), "apply"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr.contains("target") && out.stderr.contains("writable by others"),
+        "{out:?}"
+    );
+    assert!(!open.join(".cfg").exists());
+}

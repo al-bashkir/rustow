@@ -29,6 +29,8 @@ A destination can have a symlinked ancestor directory, for example `~/.config` t
 
 A walk follows at most 40 symlinks. A dangling symlink blocks the item: "symlink does not resolve".
 
+rustow walks the targets (`--target`, `--root-target`, `target` and `root_target`) in the same way. A target that fails the check stops every command with exit 2. The message names the target and the cause, for example "target /tmp/tt: symlink target is not safe: /tmp/open is writable by others".
+
 ## Error messages
 
 - Configuration (TOML) errors show only the file, the line, the column and the key path. They never show the source line or a value.
