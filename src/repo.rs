@@ -408,6 +408,15 @@ impl InternalDirs {
             },
             root,
         );
+        // Another environment would see such a directory as sources.
+        if config.defaults.state_dir.is_none() && state_dir.starts_with(root) {
+            return Err(Error::Usage(format!(
+                "the state directory {} (from XDG_STATE_HOME, else ~/.local/state) is inside the repository {}; \
+                 set XDG_STATE_HOME to a directory outside it, or set state_dir in {CONFIG_FILE}",
+                state_dir.display(),
+                root.display()
+            )));
+        }
         let inside = internal_dirs(root, &[("cache_dir", &cache_dir), ("state_dir", &state_dir)])?;
         let owner = std::fs::metadata(root).map_or(0, |m| std::os::unix::fs::MetadataExt::uid(&m));
         let (cache_dir, private) = cache_for_user(cache_dir, root, owner, nix::unistd::geteuid().as_raw(), &state_dir);

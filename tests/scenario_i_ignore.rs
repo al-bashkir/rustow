@@ -254,3 +254,20 @@ fn status_lists_ignored_on_request() {
     let summary = "1 ok, 1 skipped, 1 ignored, 0 need attention";
     assert_eq!(out.stdout.lines().last(), Some(summary), "{out:?}");
 }
+
+/// Only a configured `state_dir` may lie inside the repository: one from
+/// XDG_STATE_HOME changes with the environment, and a run with another
+/// value would deploy its files as sources.
+#[test]
+fn a_state_directory_from_the_environment_inside_the_repository_is_refused() {
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    let out = fx.run_env(&["apply"], &[("XDG_STATE_HOME", fx.repo.to_str().unwrap())]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr.contains("is inside the repository") && out.stderr.contains("XDG_STATE_HOME"),
+        "{out:?}"
+    );
+    assert!(!fx.repo.join("rustow").exists(), "nothing written there");
+    assert!(!fx.home_path(".bashrc").exists());
+}

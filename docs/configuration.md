@@ -94,6 +94,7 @@ rustow compares `cache_dir` and `state_dir` with the repository in canonical for
 
 - rustow never deploys a cache or state directory inside the repository.
 - A cache or state directory must not be the repository or one of its parents. Inside the repository, it must not be in `rustowroot` or `.git`. Otherwise every command stops with exit 2.
+- Only a `state_dir` in `rustow.toml` may be inside the repository. A state directory from `XDG_STATE_HOME` (or `~/.local/state`) inside the repository stops every command with exit 2: a run with another `XDG_STATE_HOME` would see its files as sources.
 - A configured in-repository `cache_dir` or `state_dir` may hold only rustow's names: `rendered/`, `decrypted/`, `edit/`, `backups/`, `cache/`, `<repo-id>.json`, `<repo-id>.lock`, `<repo-id>.pending` and temporary files that start with `.rustow-tmp-`. Any other name stops every command with exit 2. Thus `cache_dir = ".config"` cannot hide your `.config` sources.
 - The built-in `.rustowcache` is exempt from that content rule. It is reserved by name, so a file such as `.DS_Store` in it does no harm.
 - A symlink or a non-directory above an in-repository cache or state directory stops every command with exit 3.
