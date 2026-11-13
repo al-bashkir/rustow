@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
 use crate::fsops::{self, Dir, DirId, FileMeta, Observed};
+use crate::hash::Hash;
 use crate::paths::RelPath;
 use crate::plan::{CacheWrite, Conflict, Decision, Deploy, Desired, Plan, PlanItem, Removal, Step, Verdict};
 use crate::state::State;
@@ -241,7 +242,20 @@ fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Optio
     };
     match done {
         Ok(extra) => (action, extra.or(detail), sudo),
-        Err(e) => (Action::Fail, Some(crate::plan::with_privilege_hint(e)), false),
+        Err(e) => {
+            let (action, why) = failed(e);
+            (action, why, false)
+        }
+    }
+}
+
+/// The report of a change that did not happen: a conflict that only the
+/// change could see (`Error::Conflict`: content that the plan could not
+/// read), else an error.
+fn failed(e: Error) -> (Action, Option<String>) {
+    match e {
+        Error::Conflict(why) => (Action::Conflict, Some(why)),
+        e => (Action::Fail, Some(crate::plan::with_privilege_hint(e))),
     }
 }
 
@@ -264,7 +278,7 @@ fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mu
                 });
                 deploys.push((*index, item, &**d));
             }
-            Err(e) => sudo_report(&mut out[*index], Err(e.to_string()), || {}),
+            Err(e) => sudo_report(&mut out[*index], Err(e), || {}),
         }
     }
     let results = sudo_batch(&jobs, run.stop, state);
@@ -276,12 +290,9 @@ fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mu
 }
 
 /// Runs the jobs through one sudo helper call and applies the directories
-/// it created or removed to `state`. Each job has its own result.
-fn sudo_batch(
-    jobs: &[Job<&Deploy>],
-    stop: &AtomicBool,
-    state: &mut State,
-) -> Vec<std::result::Result<Option<String>, String>> {
+/// it created or removed to `state`. Each job has its own result; a
+/// conflict that the helper found comes back as `Error::Conflict`.
+fn sudo_batch(jobs: &[Job<&Deploy>], stop: &AtomicBool, state: &mut State) -> Vec<Result<Option<String>>> {
     crate::sudo::call(jobs, stop)
         .into_iter()
         .map(|d| {
@@ -289,19 +300,23 @@ fn sudo_batch(
             for dir in &d.removed_dirs {
                 state.created_dirs.remove(dir);
             }
-            d.result
+            let conflict = d.conflict;
+            d.result.map_err(|why| match conflict {
+                true => Error::Conflict(why),
+                false => Error::Failed(why),
+            })
         })
         .collect()
 }
 
 /// Puts one helper result into its report; `record` runs on success.
-fn sudo_report(report: &mut ItemReport, result: std::result::Result<Option<String>, String>, record: impl FnOnce()) {
+fn sudo_report(report: &mut ItemReport, result: Result<Option<String>>, record: impl FnOnce()) {
     match result {
         Ok(extra) => {
             record();
             report.detail = extra.or(report.detail.take());
         }
-        Err(why) => (report.action, report.detail) = (Action::Fail, Some(why)),
+        Err(e) => (report.action, report.detail) = failed(e),
     }
 }
 
@@ -335,21 +350,23 @@ pub struct NewFile<'a> {
 
 /// A temporary name for the change of `d` (`fsops::temp_name`), journaled
 /// in each directory where the change may create it: the destination's
-/// for a new file or a replaced object, and the backup's for a conflict
-/// that goes to `backup`.
+/// for a new file or a replaced object, and the backup's for a change
+/// that may go to `backup`: a conflict, or an update of a file that the
+/// plan could not read (its content may not be the recorded one).
 pub fn temp_for(d: &Deploy, policy: Policy, backup: &Path) -> Result<String> {
     let file = matches!(d.desired, Desired::File { .. });
     let replaces = matches!(d.decision, Decision::Create | Decision::Conflict(_));
     let here = d.decision == Decision::Update || (file && replaces);
-    temp_in(d.path.parent().filter(|_| here), d.decision, policy, backup)
+    let unverified = d.decision == Decision::Update && d.expect.is_some();
+    let away = policy == Policy::Backup && (unverified || matches!(d.decision, Decision::Conflict(_)));
+    temp_in(d.path.parent().filter(|_| here), away, backup)
 }
 
 /// A temporary name (`fsops::temp_name`), journaled in `dir`, and in the
-/// directory of `backup` when `decision` is a conflict that goes to a
-/// backup. That directory is made here, private and as the user: the sudo
-/// helper runs as root and makes none.
-fn temp_in(dir: Option<&Path>, decision: Decision, policy: Policy, backup: &Path) -> Result<String> {
-    let away = matches!(decision, Decision::Conflict(_)) && policy == Policy::Backup;
+/// directory of `backup` when the change goes `away` to a backup. That
+/// directory is made here, private and as the user: the sudo helper runs
+/// as root and makes none.
+fn temp_in(dir: Option<&Path>, away: bool, backup: &Path) -> Result<String> {
     let to = backup.parent().filter(|_| away);
     if let Some(to) = to {
         fsops::ensure_private_dir(to)?;
@@ -430,11 +447,12 @@ fn apply_cache(d: &Deploy, item: &PlanItem, run: &Run) -> Result<Option<String>>
     }
     let (parent, name) = fsops::split(&cache.path)?;
     let dir = fsops::private_tree(run.cache_dir, parent)?;
-    recheck(&dir, name, &cache.path, &cache.observed)?;
+    recheck(&dir, name, &cache.path, &cache.observed, None)?;
     let to = backup_path(run, item, true);
-    let temp = temp_in(Some(&dir.path), cache.decision, run.policy, &to)?;
+    let away = matches!(cache.decision, Decision::Conflict(_)) && run.policy == Policy::Backup;
+    let temp = temp_in(Some(&dir.path), away, &to)?;
     let mut detail = None;
-    if let (Decision::Conflict(_), Policy::Backup) = (cache.decision, run.policy) {
+    if away {
         detail = Some(backup(&dir, name, &to, &temp, me())?);
     }
     write_cache(&dir, name, &temp, cache).map(|()| detail)
@@ -463,21 +481,20 @@ fn apply_dest(
 ) -> Result<Option<String>> {
     match d.decision {
         Decision::Create => put(dir, name, d, new, false).map(|()| None),
-        Decision::Update => update(dir, name, d, new).map(|()| None),
-        Decision::Conflict(_) => replace_conflicting(dir, name, d, new, away, me),
+        Decision::Update => update(dir, name, d, new, away, me),
+        Decision::Conflict(_) => {
+            recheck(dir, name, &d.path, &d.observed, None)?;
+            replace(dir, name, d, new, away, me)
+        }
         Decision::FixMetadata => fix_metadata(dir, name, d).map(|()| None),
         Decision::UpToDate | Decision::Adopt => Ok(None),
     }
 }
 
-/// Replaces rustow's own unchanged object at the destination.
-fn update(dir: &Dir, name: &OsStr, d: &Deploy, new: &mut NewFile) -> Result<()> {
-    recheck(dir, name, &d.path, &d.observed)?;
-    put(dir, name, d, new, true)
-}
-
-/// Moves away (backup) or removes the conflicting object, then creates.
-fn replace_conflicting(
+/// Replaces rustow's own unchanged object at the destination. Content of
+/// a file that the plan could not read that is not the recorded one is a
+/// conflict, which `--force` and `--backup` resolve as a planned one.
+fn update(
     dir: &Dir,
     name: &OsStr,
     d: &Deploy,
@@ -485,7 +502,23 @@ fn replace_conflicting(
     away: (Policy, &Path),
     me: u32,
 ) -> Result<Option<String>> {
-    recheck(dir, name, &d.path, &d.observed)?;
+    match recheck(dir, name, &d.path, &d.observed, d.expect.as_ref()) {
+        Err(Error::Conflict(_)) if matches!(away.0, Policy::Overwrite | Policy::Backup) => {
+            replace(dir, name, d, new, away, me)
+        }
+        checked => checked.and_then(|()| put(dir, name, d, new, true)).map(|()| None),
+    }
+}
+
+/// Moves away (backup) or removes the conflicting object, then creates.
+fn replace(
+    dir: &Dir,
+    name: &OsStr,
+    d: &Deploy,
+    new: &mut NewFile,
+    away: (Policy, &Path),
+    me: u32,
+) -> Result<Option<String>> {
     let detail = clear_conflict(dir, name, away, new.temp, me)?;
     put(dir, name, d, new, false)?;
     Ok(detail)
@@ -508,7 +541,7 @@ fn put(dir: &Dir, name: &OsStr, d: &Deploy, new: &mut NewFile, replace: bool) ->
 }
 
 fn fix_metadata(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
-    recheck(dir, name, &d.path, &d.observed)?;
+    recheck(dir, name, &d.path, &d.observed, d.expect.as_ref())?;
     if let Desired::File { meta, .. } = &d.desired {
         dir.set_meta(name, *meta)?;
     }
@@ -542,20 +575,48 @@ fn backup_path(run: &Run, item: &PlanItem, cache: bool) -> PathBuf {
     run.backup_dir.join(scope).join(item.source.dest.as_path())
 }
 
-/// Fails when `name` (at `path`) changed since it was planned.
-fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed) -> Result<()> {
-    if dir.inspect(name)? != *planned {
+/// Fails when `name` (at `path`) changed since it was planned. A file that
+/// the plan could not read (`Observed::Unreadable`) must have the planned
+/// metadata, and the content `expect` when the state recorded one: other
+/// content is a conflict (`Error::Conflict`), and a run that cannot read
+/// it either (not root) fails.
+fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed, expect: Option<&Hash>) -> Result<()> {
+    let now = dir.inspect(name)?;
+    let unchanged = match (planned, &now) {
+        (
+            Observed::Unreadable { mode, uid, gid },
+            Observed::File {
+                mode: m,
+                uid: u,
+                gid: g,
+                ..
+            },
+        ) => (mode, uid, gid) == (m, u, g),
+        _ => now == *planned,
+    };
+    if !unchanged {
         return Err(Error::Failed(format!(
             "{} changed while rustow was running; left unchanged",
             path.display()
         )));
     }
-    Ok(())
+    match (expect, now) {
+        (Some(want), Observed::File { hash, .. }) if hash != *want => {
+            Err(Error::Conflict(Conflict::Modified.describe().into()))
+        }
+        (Some(_), Observed::Unreadable { .. }) => Err(Error::Io {
+            context: format!("cannot read {}", path.display()),
+            source: nix::errno::Errno::EACCES.into(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Confirms that the destination now is what was planned.
 fn verify(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
     let ok = match (&d.desired, dir.inspect(name)?) {
+        // Nothing was written to a file that the user cannot read: the plan compared it with the state.
+        (_, now @ Observed::Unreadable { .. }) => d.decision == Decision::UpToDate && now == d.observed,
         (Desired::Symlink(want), Observed::Symlink(have)) => *want == have,
         (
             Desired::File { hash, meta },
@@ -619,11 +680,16 @@ fn remove_item(
     }
     match &r.verdict {
         Verdict::Keep(why) => (Action::Conflict, Some(why.clone()), None),
+        Verdict::Fail(why) => (Action::Fail, Some(why.clone()), None),
         Verdict::Forget => {
             state.entries.remove(&r.dest);
             (Action::Forget, Some("already gone".into()), None)
         }
-        Verdict::Remove { observed, dir_id } if r.sudo => {
+        Verdict::Remove {
+            observed,
+            dir_id,
+            expect,
+        } if r.sudo => {
             let created_dirs = r
                 .path
                 .ancestors()
@@ -635,23 +701,31 @@ fn remove_item(
                 path: r.path.clone(),
                 dir_id: *dir_id,
                 observed: observed.clone(),
+                expect: expect.clone(),
                 created_dirs,
             };
             (Action::Remove, Some("via sudo".into()), Some(job))
         }
-        Verdict::Remove { observed, dir_id } => match remove_one(&r.path, *dir_id, observed, state) {
+        Verdict::Remove {
+            observed,
+            dir_id,
+            expect,
+        } => match remove_one(&r.path, *dir_id, (observed, expect.as_ref()), state) {
             Ok(()) => {
                 state.entries.remove(&r.dest);
                 (Action::Remove, None, None)
             }
-            Err(e) => (Action::Fail, Some(e.to_string()), None),
+            Err(e) => {
+                let (action, why) = failed(e);
+                (action, why, None)
+            }
         },
     }
 }
 
-fn remove_one(path: &Path, dir_id: DirId, observed: &Observed, state: &mut State) -> Result<()> {
+fn remove_one(path: &Path, dir_id: DirId, planned: (&Observed, Option<&Hash>), state: &mut State) -> Result<()> {
     let mut removed = Vec::new();
-    let done = remove_dest(path, dir_id, observed, &state.created_dirs, me(), &mut removed);
+    let done = remove_dest(path, dir_id, planned, &state.created_dirs, me(), &mut removed);
     for dir in &removed {
         state.created_dirs.remove(dir);
     }
@@ -665,14 +739,14 @@ fn remove_one(path: &Path, dir_id: DirId, observed: &Observed, state: &mut State
 pub fn remove_dest(
     path: &Path,
     dir_id: DirId,
-    observed: &Observed,
+    (observed, expect): (&Observed, Option<&Hash>),
     created: &BTreeSet<PathBuf>,
     me: u32,
     removed: &mut Vec<PathBuf>,
 ) -> Result<()> {
     let (parent, name) = fsops::split(path)?;
     let dir = fsops::open_planned(parent, dir_id, me)?;
-    recheck(&dir, name, path, observed)?;
+    recheck(&dir, name, path, observed, expect)?;
     dir.remove(name)?;
     let above = path.ancestors().skip(1).take_while(|d| created.contains(*d));
     removed.extend(fsops::remove_empty(above, me));
@@ -686,6 +760,7 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
         .map(|r| {
             let (action, detail) = match &r.verdict {
                 Verdict::Keep(why) => (Action::Conflict, Some(why.clone())),
+                Verdict::Fail(why) => (Action::Fail, Some(why.clone())),
                 Verdict::Forget => (Action::Forget, Some("already gone".into())),
                 Verdict::Remove { .. } => (Action::Remove, r.sudo.then(|| "via sudo".to_owned())),
             };
@@ -706,7 +781,7 @@ fn unfold(path: &Path, dir_id: DirId, observed: &Observed, item: &PlanItem, stat
     let (parent, name) = fsops::split(path)?;
     let me = me();
     let dir = fsops::open_planned(parent, dir_id, me)?;
-    recheck(&dir, name, path, observed)?;
+    recheck(&dir, name, path, observed, None)?;
     dir.remove(name)?;
     dir.mkdir(name, crate::plan::dir_mode(&item.source), me)?;
     state.created_dirs.insert(path.to_path_buf());
@@ -772,6 +847,7 @@ pub(crate) mod tests {
             desired,
             observed: Observed::Missing,
             decision: Decision::Create,
+            expect: None,
             content: content.map(|c| crate::plan::Content::Generated(zeroize::Zeroizing::new(c.to_vec()))),
             file_mode: 0o644,
             file_owner: (None, None),

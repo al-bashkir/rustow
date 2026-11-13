@@ -102,19 +102,21 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 ## Decisions
 
-| Destination                                                                                              | Action                                                                          |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Missing                                                                                                  | create                                                                          |
-| Own recorded symlink with old target                                                                     | update                                                                          |
-| Correct but not recorded                                                                                 | adopt (record it; no write). `status` shows UNMANAGED.                          |
-| Symlink in other text that reaches the same source (for example an absolute path)                        | update (rewrite it as rustow's link text)                                       |
-| Foreign file or symlink, not recorded (also a broken symlink)                                            | conflict                                                                        |
-| Managed copy unchanged, desired content changed                                                          | update                                                                          |
-| Destination changed since last apply                                                                     | MODIFIED conflict                                                               |
-| Cache entry behind rustow's link changed since last apply (also after a switch to a copy)                | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>` |
-| Several sources map to the destination                                                                   | conflict (collision)                                                            |
-| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target")                                              |
-| Directory of the destination is not writable                                                             | error, also in `--dry-run` and `status`; `diff` still shows the content         |
+| Destination                                                                                              | Action                                                                                         |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Missing                                                                                                  | create                                                                                         |
+| Own recorded symlink with old target                                                                     | update                                                                                         |
+| Correct but not recorded                                                                                 | adopt (record it; no write). `status` shows UNMANAGED.                                         |
+| Symlink in other text that reaches the same source (for example an absolute path)                        | update (rewrite it as rustow's link text)                                                      |
+| Foreign file or symlink, not recorded (also a broken symlink)                                            | conflict                                                                                       |
+| Managed copy unchanged, desired content changed                                                          | update                                                                                         |
+| Destination changed since last apply                                                                     | MODIFIED conflict                                                                              |
+| Cache entry behind rustow's link changed since last apply (also after a switch to a copy)                | conflict on the cache entry; `--backup` saves it under `backups/…/cache/<dest>`                |
+| Several sources map to the destination                                                                   | conflict (collision)                                                                           |
+| Symlink target fails the [trust rule](security.md#trust-rule) (home files only; system files are copies) | conflict ("untrusted link target")                                                             |
+| Directory of the destination is not writable                                                             | error, also in `--dry-run` and `status`; `diff` still shows the content                        |
+| File that you cannot read, recorded copy                                                                 | compared with the state; see [system files](system-files.md#destinations-that-you-cannot-read) |
+| File that you cannot read, not recorded                                                                  | conflict ("cannot read the destination; rustow has no record of it")                           |
 
 Two sources collide when they have the same destination, for example `x`, `x.age` and `x.tmpl`. On a case-insensitive target filesystem, names that differ only in case collide too. A root target of `/` always counts as case-sensitive (known limit).
 
@@ -146,7 +148,7 @@ MODIFIED means that the destination, or the cache entry behind rustow's link, ch
 
 `diff` reads the content of a file only when its hash differs from the wanted one. It shows content up to 1 MiB. When the current file or the wanted content is larger, it prints one line with both sizes instead, for example "~/.big: differ (0 → 2097152 bytes); too large to show". A missing file counts as 0 bytes.
 
-When the source and the destination both changed, `diff` prints "<dest>: conflict: source and destination both changed since rustow last applied it" before the content diff. When rustow cannot render or decrypt an item, it prints "rustow: <source>: cannot compute desired content: <message>" to stderr, and the exit code is 4.
+When the source and the destination both changed, `diff` prints "<dest>: conflict: source and destination both changed since rustow last applied it" before the content diff. When rustow cannot render or decrypt an item, it prints "rustow: <source>: cannot compute desired content: <message>" to stderr, and the exit code is 4. For a destination that you cannot read and that would change, it prints "rustow: <dest>: cannot read the destination (Permission denied); elevated privileges may be required" to stderr and goes on with the other items; the exit code is 4.
 
 `diff --json` and `file diff --json` print `{"items": [...], "warnings": [...]}`, with one object for each item that differs: `dest`, `source`, `mode`, `kind`, `detail`, `binary` and `diff`. `kind` is the status word in lower case (`missing`, `outdated`, `modified`, `conflict`, …), or `metadata` when only the metadata differs. A render or decrypt error has the kind `error`, with the message in `detail`. The `diff` field holds the content, so it can hold secrets. The exit codes are the same: 0, 1 or 4.
 
@@ -170,7 +172,7 @@ rustow writes each file through a temporary file (`.rustow-tmp-…`) in the same
 
 ## unlink and undeploy
 
-`unlink` removes link-mode records and folded directory links whose symlink still has the recorded text. `undeploy` removes all modes. It removes a copy only if the content hash is unchanged. Both accept sources that you removed from the repository. If you replaced a folded directory link yourself, they forget its record and leave what is there.
+`unlink` removes link-mode records and folded directory links whose symlink still has the recorded text. `undeploy` removes all modes. It removes a copy only if the content hash is unchanged. A system file that you cannot read goes through the sudo helper, which checks the hash as root. An item that fails does not stop the others. Both accept sources that you removed from the repository. If you replaced a folded directory link yourself, they forget its record and leave what is there.
 
 rustow also removes parent directories that it created, only when they are empty.
 

@@ -184,7 +184,7 @@ impl Dir {
     /// when `check_dir` accepts it and `name` is still that symlink.
     fn settle(&self, name: &OsStr, path: PathBuf, link: &FileStat, target: Dir, me: u32) -> Result<Next> {
         let st = sys(fstat(&target.fd)).ctx(|| format!("inspect {}", target.path.display()))?;
-        if let Err(why) = trusted(&target.path, &st, st.st_mode as u32 & 0o7777, me) {
+        if let Err(why) = trusted(&target.path, &st, perm(st.st_mode), me) {
             return Ok(Next::Blocked(path, format!("symlink target is not safe: {why}")));
         }
         match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
@@ -241,7 +241,7 @@ impl Dir {
         Ok(match kind(&st) {
             SFlag::S_IFLNK => Observed::Symlink(self.link_text(name)?.into()),
             SFlag::S_IFDIR => Observed::Dir,
-            SFlag::S_IFREG => self.observe_file(name)?,
+            SFlag::S_IFREG => self.observe_file(name, st)?,
             _ => Observed::Other,
         })
     }
@@ -261,9 +261,19 @@ impl Dir {
         sys(readlinkat(&self.fd, name)).ctx(|| format!("read symlink {}", self.entry(name).display()))
     }
 
-    /// Hash (streamed) and metadata of the regular file `name`.
-    fn observe_file(&self, name: &OsStr) -> Result<Observed> {
-        let (mut file, meta) = self.open_regular(name)?;
+    /// Hash (streamed) and metadata of the regular file `name`; only the
+    /// metadata (`st`) when the current user may not read it.
+    fn observe_file(&self, name: &OsStr, st: FileStat) -> Result<Observed> {
+        let (mut file, meta) = match self.open_regular(name) {
+            Err(Error::Io { source, .. }) if source.kind() == io::ErrorKind::PermissionDenied => {
+                return Ok(Observed::Unreadable {
+                    mode: perm(st.st_mode),
+                    uid: st.st_uid,
+                    gid: st.st_gid,
+                });
+            }
+            opened => opened?,
+        };
         let hash = Hash::copy(&mut file, meta.len(), &mut io::sink())
             .ctx(|| format!("read {}", self.entry(name).display()))?;
         Ok(Observed::File {
@@ -401,7 +411,7 @@ impl Dir {
         let path = self.entry(name);
         let dir = sys(self.child(name, SEARCH)).ctx(|| format!("create directory {}", path.display()))?;
         let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
-        trusted(&path, &st, st.st_mode as u32 & 0o7777, me).map_err(Error::Failed)?;
+        trusted(&path, &st, perm(st.st_mode), me).map_err(Error::Failed)?;
         Ok(dir)
     }
 
@@ -614,6 +624,12 @@ fn trusted(path: &Path, st: &FileStat, mode: u32, me: u32) -> std::result::Resul
 
 fn kind(st: &FileStat) -> SFlag {
     SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT
+}
+
+/// The permission bits of `st_mode`, special bits included (`mode_t` is
+/// `u16` on macOS).
+fn perm(st_mode: impl Into<u32>) -> u32 {
+    st_mode.into() & 0o7777
 }
 
 fn id_of(st: &FileStat) -> DirId {

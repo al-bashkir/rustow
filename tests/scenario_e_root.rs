@@ -247,8 +247,10 @@ fn commands_select_root_sources_as_copies() {
     assert!(!fx.root_path("etc/a.conf").exists() && !fx.root_path("etc/t.conf").exists());
 }
 
+/// A destination that you cannot read and that the state does not record
+/// is a conflict: rustow cannot tell what is in it.
 #[test]
-fn dry_run_reports_unreadable_destination_and_lists_the_rest() {
+fn dry_run_reports_an_unreadable_destination_as_a_conflict_and_lists_the_rest() {
     use std::os::unix::fs::PermissionsExt;
     if nix::unistd::geteuid().is_root() {
         eprintln!("SKIP: root can read everything");
@@ -261,9 +263,10 @@ fn dry_run_reports_unreadable_destination_and_lists_the_rest() {
     let locked = common::write_file(&fx.root_path("etc/locked.conf"), "theirs");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     let out = fx.run(&["apply", "--dry-run"]);
-    assert_eq!(out.code, 4, "{out:?}");
+    assert_eq!(out.code, 3, "{out:?}");
     assert!(
-        out.stdout.contains("Permission denied") && out.stdout.contains("privileges"),
+        out.stdout
+            .contains("cannot read the destination; rustow has no record of it"),
         "{out:?}"
     );
     assert!(out.stdout.contains("open.conf"), "{out:?}");

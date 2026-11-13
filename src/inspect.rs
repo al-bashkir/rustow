@@ -47,8 +47,11 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
         print_json(&shown, &printer.warnings);
     } else {
         for s in &shown {
-            match (s.kind.as_str(), s.detail.as_deref()) {
-                ("error", Some(msg)) => eprintln!(
+            match (s.kind.as_str(), s.detail.as_deref(), &s.item.step) {
+                ("error", Some(msg), Step::Deploy(_)) => {
+                    eprintln!("rustow: {}: {}", printer.path(&s.item.dest), report::shown(msg));
+                }
+                ("error", Some(msg), _) => eprintln!(
                     "rustow: {}: cannot compute desired content: {}",
                     report::shown(s.item.source.path.as_str()),
                     report::shown(msg)
@@ -62,7 +65,22 @@ pub fn diff(plan: &Plan, state: &State, printer: &Printer) -> Result<i32> {
 }
 
 /// What `diff` shows for one item; `None` when the item does not differ.
+/// A destination that the user cannot read and that would change is an
+/// error of that item only.
 fn show<'a>(item: &'a PlanItem, old: Option<&Record>, printer: &Printer) -> Result<Option<Shown<'a>>> {
+    if let Step::Deploy(d) = &item.step
+        && matches!(d.observed, Observed::Unreadable { .. })
+        && d.decision != Decision::UpToDate
+    {
+        let why = "cannot read the destination (Permission denied); elevated privileges may be required";
+        return Ok(Some(Shown {
+            item,
+            kind: "error".into(),
+            detail: Some(why.into()),
+            binary: false,
+            text: String::new(),
+        }));
+    }
     let (text, binary) = step_text(item, &printer.path(&item.dest), old)?;
     let (status, detail) = match &item.step {
         // `diff` only reads: a directory it cannot write does not hide the content.
@@ -203,6 +221,7 @@ fn what(observed: &Observed) -> String {
         Observed::Missing => "missing".into(),
         Observed::Symlink(t) => format!("links to {}", shown(&t.display().to_string())),
         Observed::File { .. } => "regular file".into(),
+        Observed::Unreadable { .. } => "regular file that you cannot read".into(),
         Observed::Dir => "directory".into(),
         Observed::Other => "special file".into(),
     }
@@ -388,7 +407,8 @@ fn classify_deploy(d: &Deploy, mode: &Mode, old: Option<&Record>) -> (&'static s
             "UNMANAGED",
             Some("already correct but not recorded; apply adopts it".into()),
         ),
-        _ => (deployed_status(mode), None),
+        // The detail of a destination that the plan compared with the state.
+        _ => (deployed_status(mode), d.detail.clone()),
     }
 }
 

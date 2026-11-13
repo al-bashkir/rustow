@@ -24,7 +24,15 @@ Run rustow as yourself. Your HOME, your state, your keys and your cache stay in 
 - The helper checks each job before it acts. It refuses a path that is not absolute or that has an empty, `.` or `..` part, a directory or temporary name that is not one name, and a mode with a setuid, setgid or sticky bit (as the configuration does). It writes nothing for such a job, and the item fails with "the sudo helper refuses this job: …". So an update through sudo of an existing file with such a bit fails too.
 - Anyone who may run `sudo rustow` may write any file as root: do not allow rustow in sudoers without a password unless you mean that.
 
-An unreadable destination is an error for that item, with a privilege hint. rustow does not use sudo to read it.
+### Destinations that you cannot read
+
+A system file can be unreadable for you, for example a `[[files]]` entry with `mode = "0640"`, `owner = "root"` and `group = "root"`. rustow plans as you, so it sees only the owner, the group and the mode of such a file. It compares the file with your state:
+
+- The state records the content that rustow wrote last. When the desired content is that content and the metadata is as desired, the item is clean. `status` shows it as ok. With `-v`, the detail is "not readable by you; compared with the state". `apply` does not run sudo for it.
+- When the desired content changed, the item is an update through sudo. The helper reads the file as root before it changes it. When the content is not the recorded one (someone changed it), the item is a MODIFIED conflict: "destination was modified since rustow last applied it", and the file stays. With `--force`, the helper replaces it. With `--backup`, it saves it first.
+- When the state has no record of the file, the item is a conflict: "cannot read the destination; rustow has no record of it". `--force` and `--backup` replace it through sudo.
+- `undeploy` removes such a file through the helper. The helper removes it only when its content is the recorded one. One item that fails never stops the other removals.
+- `diff` cannot show the content. For such an item that would change, it prints "rustow: <dest>: cannot read the destination (Permission denied); elevated privileges may be required" on stderr and goes on with the other items. The exit code is 4.
 
 Do not run rustow itself with `sudo`. Then HOME and the state directory are root's, so rustow would link your home files into `/root`. When rustow runs as root and `$SUDO_USER` names another user, every command except `completions` stops with exit 2: "do not run rustow with sudo: it would use root's home and root's state for the dotfiles of alice; run rustow as alice: it asks for sudo when a system file needs it (pass --target to deploy into root's home on purpose)". With an explicit `--target`, rustow runs. A real root login has no `$SUDO_USER`, so it is not affected.
 

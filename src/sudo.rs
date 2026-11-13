@@ -51,12 +51,14 @@ pub enum Job<D> {
         temp: String,
     },
     /// A recorded file that must still look like `observed` in its planned
-    /// directory `dir_id`, and the directories above it that rustow
-    /// created (removed when empty).
+    /// directory `dir_id` (and hold `expect` when the plan could not read
+    /// it), and the directories above it that rustow created (removed when
+    /// empty).
     Remove {
         path: PathBuf,
         dir_id: DirId,
         observed: Observed,
+        expect: Option<Hash>,
         created_dirs: BTreeSet<PathBuf>,
     },
 }
@@ -71,12 +73,14 @@ pub struct Header<J> {
 }
 
 /// The helper's result for one job. The directories it created or removed
-/// are listed also when the job failed later.
+/// are listed also when the job failed later. `conflict` says that the
+/// error is a conflict (`Error::Conflict`), not a failure.
 #[derive(Serialize, Deserialize)]
 pub struct Done {
     pub created_dirs: Vec<PathBuf>,
     pub removed_dirs: Vec<PathBuf>,
     pub result: std::result::Result<Option<String>, String>,
+    pub conflict: bool,
 }
 
 impl Done {
@@ -85,6 +89,7 @@ impl Done {
             created_dirs: Vec::new(),
             removed_dirs: Vec::new(),
             result: Err(why),
+            conflict: false,
         }
     }
 }
@@ -293,9 +298,14 @@ fn run(header: Header<Job<Deploy>>, body: &mut dyn Read) -> Done {
             path,
             dir_id,
             observed,
+            expect,
             created_dirs,
-        } => execute::remove_dest(&path, dir_id, &observed, &created_dirs, user, &mut done.removed_dirs).map(|()| None),
+        } => {
+            let planned = (&observed, expect.as_ref());
+            execute::remove_dest(&path, dir_id, planned, &created_dirs, user, &mut done.removed_dirs).map(|()| None)
+        }
     };
+    done.conflict = matches!(result, Err(Error::Conflict(_)));
     done.result = result.map_err(with_privilege_hint);
     done
 }
@@ -412,6 +422,7 @@ mod tests {
                 ino: parent.st_ino,
             },
             observed: fsops::inspect(path).unwrap(),
+            expect: None,
             created_dirs: BTreeSet::new(),
         }
     }
@@ -489,6 +500,75 @@ mod tests {
         assert!(done.result.is_err());
         assert!(!d.join("backups").exists(), "no directory made");
         assert_eq!(fs::read(d.join("f")).unwrap(), b"old");
+    }
+
+    /// The plan saw `path` as a file it cannot read: only its metadata.
+    fn unreadable(path: &Path) -> Observed {
+        match fsops::inspect(path).unwrap() {
+            Observed::File { mode, uid, gid, .. } => Observed::Unreadable { mode, uid, gid },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The plan could not read the destination; the helper (root) can. It
+    /// checks the content against the state's hash before it changes the
+    /// file: other content is a conflict and stays, unless the policy is
+    /// overwrite or backup (which saves it first). Here the test user
+    /// plays root: it can read the file that the plan could not.
+    #[test]
+    fn the_helper_checks_an_unreadable_destination_against_the_state() {
+        let (_t, d) = tmp();
+        let f = d.join("f");
+        fs::create_dir(d.join("bk")).unwrap();
+        let update = |expect: &[u8]| {
+            fs::write(&f, "old").unwrap();
+            let file = Desired::File {
+                hash: Hash::of(b"new"),
+                meta: FileMeta::default(),
+            };
+            let mut deploy = crate::execute::tests::create(&f, file, Some(b"new"));
+            (deploy.observed, deploy.decision) = (unreadable(&f), crate::plan::Decision::Update);
+            deploy.expect = Some(Hash::of(expect));
+            deploy
+        };
+        let write = |deploy, policy, backup: &str| Job::Write {
+            deploy,
+            policy,
+            backup: d.join(backup),
+            temp: format!("{TEMP_PREFIX}test"),
+        };
+        let same = update(b"old");
+        assert!(serve_all(&[write(&same, Policy::Abort, "bk/1")])[0].result.is_ok());
+        assert_eq!(fs::read(&f).unwrap(), b"new");
+
+        let other = update(b"other");
+        let done = &serve_all(&[write(&other, Policy::Skip, "bk/2")])[0];
+        let why = done.result.as_ref().unwrap_err();
+        assert!(
+            done.conflict && why == "destination was modified since rustow last applied it",
+            "{why}"
+        );
+        assert_eq!(fs::read(&f).unwrap(), b"old", "left as it is");
+
+        let other = update(b"other");
+        assert!(serve_all(&[write(&other, Policy::Overwrite, "bk/3")])[0].result.is_ok());
+        assert_eq!(fs::read(&f).unwrap(), b"new");
+        let other = update(b"other");
+        assert!(serve_all(&[write(&other, Policy::Backup, "bk/4")])[0].result.is_ok());
+        assert_eq!(fs::read(&f).unwrap(), b"new");
+        assert_eq!(fs::read(d.join("bk/4")).unwrap(), b"old", "saved first");
+
+        let mut gone = remove(&f);
+        if let Job::Remove { observed, expect, .. } = &mut gone {
+            (*observed, *expect) = (unreadable(&f), Some(Hash::of(b"changed")));
+        }
+        let done = &serve_all(&[gone])[0];
+        assert!(done.conflict && f.exists(), "{:?}", done.result);
+        let mut gone = remove(&f);
+        if let Job::Remove { observed, expect, .. } = &mut gone {
+            (*observed, *expect) = (unreadable(&f), Some(Hash::of(b"new")));
+        }
+        assert!(serve_all(&[gone])[0].result.is_ok() && !f.exists());
     }
 
     /// The results of `jobs`, served as one input.

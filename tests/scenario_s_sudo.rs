@@ -382,3 +382,123 @@ fn sudo_from_the_current_directory_never_runs() {
     assert!(out.stdout.contains("fake-sudo: not found in PATH"), "{out:?}");
     assert_eq!(s.calls(), 0, "{out:?}");
 }
+
+/// A system file that you cannot read (for example mode 0640, owner root)
+/// is compared with the state. Here the test user owns it with mode 0000,
+/// so the fake helper cannot read it either: it is root's view of the
+/// plan, without root.
+fn unreadable(s: &Sudo, rel: &str) -> PathBuf {
+    let path = s.fx.root_path(rel);
+    set_mode(&path, 0o000);
+    path
+}
+
+#[test]
+fn a_system_file_you_cannot_read_is_compared_with_the_state() {
+    let s = Sudo::new(FAKE);
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let app = unreadable(&s, "etc/app.conf");
+
+    let status = s.run(&["status", "-v"]);
+    assert_eq!(status.code, 0, "{status:?}");
+    let line = status
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/app.conf"))
+        .unwrap_or_default();
+    assert!(
+        line.contains("COPIED") && line.contains("not readable by you; compared with the state"),
+        "{status:?}"
+    );
+    let again = s.run(&["apply"]);
+    assert_eq!(again.code, 0, "{again:?}");
+    assert_eq!(s.calls(), 1, "nothing to change, no sudo");
+
+    s.fx.write("rustowroot/etc/app.conf", "b\n");
+    s.fx.write(
+        "rustow.toml",
+        &read(&s.fx.repo.join("rustow.toml")).replace("v = \"t\"", "v = \"u\""),
+    );
+    let dry = s.run(&["-n", "apply"]);
+    assert_eq!(dry.code, 0, "{dry:?}");
+    let line = dry
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/app.conf"))
+        .unwrap_or_default();
+    assert!(line.contains("update") && line.contains("via sudo"), "{dry:?}");
+
+    let diff = s.run(&["diff"]);
+    assert_eq!(diff.code, 4, "{diff:?}");
+    let why = format!(
+        "{}: cannot read the destination (Permission denied); elevated privileges may be required",
+        app.display()
+    );
+    assert!(diff.stderr.contains(&why), "{diff:?}");
+    assert!(diff.stdout.contains("+u"), "the other items go on: {diff:?}");
+
+    // The fake helper runs as the user: it cannot check the old content
+    // against the state, so it writes nothing.
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert_eq!(s.calls(), 2, "{out:?}");
+    let line = out
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/app.conf"))
+        .unwrap_or_default();
+    assert!(line.contains("cannot read"), "{out:?}");
+    assert_eq!(read(&s.fx.root_path("etc/t.conf")), "u\n");
+    set_mode(&app, 0o644);
+    assert_eq!(read(&app), "a\n");
+}
+
+#[test]
+fn an_unreadable_system_file_without_a_record_is_a_conflict() {
+    let s = Sudo::new(FAKE);
+    set_mode(&s.etc, 0o755);
+    fs::write(s.etc.join("app.conf"), "theirs\n").unwrap();
+    set_mode(&s.etc, 0o555);
+    let app = unreadable(&s, "etc/app.conf");
+
+    let out = s.run(&["apply", "rustowroot/etc/app.conf"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("cannot read the destination"), "{out:?}");
+    assert_eq!(s.calls(), 0);
+    let forced = s.run(&["-n", "apply", "--force", "rustowroot/etc/app.conf"]);
+    assert_eq!(forced.code, 0, "{forced:?}");
+    let line = forced
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/app.conf"))
+        .unwrap_or_default();
+    assert!(line.contains("replace") && line.contains("via sudo"), "{forced:?}");
+    set_mode(&app, 0o644);
+    assert_eq!(read(&app), "theirs\n");
+}
+
+/// One item that rustow cannot read never stops `undeploy`: the other
+/// items go, and that item goes through the helper, which checks it.
+#[test]
+fn undeploy_goes_on_after_an_unreadable_system_file() {
+    let s = Sudo::new(FAKE);
+    s.fx.write(".homeconf", "h\n");
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let app = unreadable(&s, "etc/app.conf");
+
+    let dry = s.run(&["-n", "undeploy"]);
+    assert_eq!(dry.code, 0, "{dry:?}");
+    let line = dry
+        .stdout
+        .lines()
+        .find(|l| l.contains("etc/app.conf"))
+        .unwrap_or_default();
+    assert!(line.contains("remove") && line.contains("via sudo"), "{dry:?}");
+
+    let out = s.run(&["undeploy", "--yes"]);
+    assert_eq!(out.code, 4, "the fake helper cannot read it: {out:?}");
+    assert!(!s.fx.home_path(".homeconf").exists(), "{out:?}");
+    assert!(!s.fx.root_path("etc/t.conf").exists(), "{out:?}");
+    set_mode(&app, 0o644);
+    assert_eq!(read(&app), "a\n", "kept");
+}

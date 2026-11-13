@@ -65,6 +65,8 @@ pub enum Conflict {
     /// A system file would come from a source that someone other than
     /// root or the user can change.
     UntrustedSource,
+    /// The user cannot read the destination, and the state has no record of it.
+    Unreadable,
     /// A folded directory holds files that are not sources.
     FoldedStrays,
 }
@@ -82,13 +84,17 @@ impl Conflict {
             Conflict::NoParent => "parent directory is missing and create_directories = false",
             Conflict::Untrusted => "untrusted link target",
             Conflict::UntrustedSource => "untrusted source",
+            Conflict::Unreadable => "cannot read the destination; rustow has no record of it",
             Conflict::FoldedStrays => "cannot unfold the folded directory",
         }
     }
 
     /// Conflicts that `--backup` / `--force` may resolve.
     pub fn resolvable(self) -> bool {
-        matches!(self, Conflict::Unmanaged | Conflict::Modified | Conflict::FileToSymlink)
+        matches!(
+            self,
+            Conflict::Unmanaged | Conflict::Modified | Conflict::FileToSymlink | Conflict::Unreadable
+        )
     }
 }
 
@@ -113,6 +119,7 @@ pub fn decide(desired: &Desired, observed: &Observed, recorded: Recorded) -> Dec
         (_, Observed::Missing) => Decision::Create,
         (_, Observed::Dir) => Decision::Conflict(Conflict::Directory),
         (_, Observed::Other) => Decision::Conflict(Conflict::Special),
+        (_, Observed::Unreadable { mode, uid, gid }) => decide_unreadable(desired, (*mode, *uid, *gid), recorded),
         (Desired::Symlink(want), _) => decide_symlink(want, observed, recorded),
         (Desired::File { hash, meta }, _) => decide_file(hash, meta, observed, recorded),
     }
@@ -162,6 +169,20 @@ fn decide_file(want: &Hash, meta: &FileMeta, observed: &Observed, recorded: Reco
         Observed::File { hash, .. } => file_other_content(hash, recorded),
         // `decide` handles the other kinds before it gets here.
         _ => Decision::Conflict(Conflict::Special),
+    }
+}
+
+/// Rules for a regular file that the user cannot read: only the state
+/// tells what is in it. It holds rustow's last copy when the state
+/// records one; the change checks that before it writes (`Deploy::expect`).
+fn decide_unreadable(desired: &Desired, (mode, uid, gid): (u32, u32, u32), recorded: Recorded) -> Decision {
+    match (desired, recorded) {
+        (_, Recorded::None) => Decision::Conflict(Conflict::Unreadable),
+        (Desired::File { hash, meta }, Recorded::Copy(ours)) if ours == hash => {
+            file_same_content(hash, meta.matches(mode, uid, gid), recorded)
+        }
+        (Desired::File { .. }, Recorded::Copy(_)) => Decision::Update,
+        _ => Decision::Conflict(Conflict::Modified),
     }
 }
 
@@ -264,6 +285,11 @@ pub struct Deploy {
     pub desired: Desired,
     pub observed: Observed,
     pub decision: Decision,
+    /// For a destination that the plan could not read
+    /// (`Observed::Unreadable`): the content hash that the state recorded.
+    /// The change reads the file first (the sudo helper as root), and other
+    /// content is a conflict.
+    pub expect: Option<Hash>,
     /// Content for a regular-file destination. The sudo helper gets it
     /// after the JSON of the job, as raw bytes.
     #[serde(skip)]
@@ -745,17 +771,22 @@ fn dir_write_error(dir: &Path) -> Option<nix::errno::Errno> {
     faccessat(nix::fcntl::AT_FDCWD, dir, access, nix::fcntl::AtFlags::AT_EACCESS).err()
 }
 
-/// True when a system file must go and removing it, and the directories
-/// above it that rustow created (they go too when they are empty), needs a
-/// directory that the user cannot write. A home file never needs sudo.
+/// True when a system file must go and the user cannot read it (the helper
+/// checks it as root), or removing it, and the directories above it that
+/// rustow created (they go too when they are empty), needs a directory
+/// that the user cannot write. A home file never needs sudo.
 fn removal_needs_sudo(
     scope: Scope,
     verdict: &Verdict,
     path: &Path,
     created: &std::collections::BTreeSet<PathBuf>,
 ) -> bool {
-    if scope != Scope::Root || !matches!(verdict, Verdict::Remove { .. }) {
-        return false;
+    let observed = match verdict {
+        Verdict::Remove { observed, .. } if scope == Scope::Root => observed,
+        _ => return false,
+    };
+    if matches!(observed, Observed::Unreadable { .. }) {
+        return true;
     }
     for dir in path.ancestors().skip(1) {
         if dir_write_error(dir).is_some() {
@@ -771,13 +802,15 @@ fn removal_needs_sudo(
 /// The sudo rule: a system file that must change goes through the sudo
 /// helper when the user cannot write its directory, or when it must belong
 /// to another user or to a group that the user is not a member of (an
-/// owner may give its file any of its own groups). A home file never does:
-/// it keeps `unwritable`.
+/// owner may give its file any of its own groups), or when the user cannot
+/// read it (`unreadable`: the helper checks it as root). A home file never
+/// does: it keeps `unwritable`.
 fn needs_sudo(
     scope: Scope,
     decision: Decision,
     unwritable: Option<String>,
     owner: (Option<u32>, Option<u32>),
+    unreadable: bool,
 ) -> (Option<String>, bool) {
     let changes = match decision {
         Decision::Create | Decision::Update | Decision::FixMetadata => true,
@@ -786,7 +819,7 @@ fn needs_sudo(
     };
     let foreign = owner.0.is_some_and(|u| u != geteuid().as_raw()) || owner.1.is_some_and(|g| !my_group(g));
     match scope {
-        Scope::Root if changes && (unwritable.is_some() || foreign) => (None, true),
+        Scope::Root if changes && (unwritable.is_some() || foreign || unreadable) => (None, true),
         _ => (unwritable, false),
     }
 }
@@ -826,7 +859,7 @@ fn inspect_dest(
 /// of /etc/app.conf must not turn root:app into root:root).
 fn kept_owner(observed: &Observed, desired: &Desired) -> (Option<u32>, Option<u32>) {
     match (observed, desired) {
-        (Observed::File { uid, gid, .. }, Desired::File { meta, .. }) => {
+        (Observed::File { uid, gid, .. } | Observed::Unreadable { uid, gid, .. }, Desired::File { meta, .. }) => {
             (meta.uid.or(Some(*uid)), meta.gid.or(Some(*gid)))
         }
         (_, Desired::File { meta, .. }) => (meta.uid, meta.gid),
@@ -836,7 +869,11 @@ fn kept_owner(observed: &Observed, desired: &Desired) -> (Option<u32>, Option<u3
 
 fn file_mode_for(observed: &Observed, want: &Want) -> u32 {
     match (observed, &want.desired) {
-        (Observed::File { mode, .. }, Desired::File { meta, .. }) if meta.mode.is_none() => *mode,
+        (Observed::File { mode, .. } | Observed::Unreadable { mode, .. }, Desired::File { meta, .. })
+            if meta.mode.is_none() =>
+        {
+            *mode
+        }
         _ => want.file_mode,
     }
 }
@@ -890,7 +927,8 @@ fn deploy_step(
         }
         decision => decision,
     };
-    let detail = broken_link_detail(&path, &observed, decision);
+    let expect = expected(&observed, record);
+    let detail = broken_link_detail(&path, &observed, decision).or_else(|| expect.as_ref().map(|_| COMPARED.into()));
     let file_mode = file_mode_for(&observed, &want);
     let file_owner = kept_owner(&observed, &want.desired);
     let (unwritable, sudo) = needs_sudo(
@@ -898,6 +936,7 @@ fn deploy_step(
         decision,
         unwritable(&path, &missing_dirs, decision),
         file_owner,
+        matches!(observed, Observed::Unreadable { .. }),
     );
     let cache = match want
         .cache
@@ -914,6 +953,7 @@ fn deploy_step(
         desired: want.desired,
         observed,
         decision,
+        expect,
         content: want.content,
         file_mode,
         file_owner,
@@ -923,6 +963,18 @@ fn deploy_step(
         unwritable,
         sudo,
     })))
+}
+
+/// The detail of a destination that the plan could not read.
+const COMPARED: &str = "not readable by you; compared with the state";
+
+/// The hash that the state recorded for a destination that the plan could
+/// not read (`Deploy::expect`); `None` for any other destination.
+fn expected(observed: &Observed, record: Option<&Record>) -> Option<Hash> {
+    match (observed, recorded(record)) {
+        (Observed::Unreadable { .. }, Recorded::Copy(hash)) => Some(hash.clone()),
+        _ => None,
+    }
 }
 
 /// The exact mode of each directory that rustow creates for `source`
@@ -1198,12 +1250,19 @@ pub struct Removal {
 #[derive(Debug)]
 pub enum Verdict {
     /// Remove the object, which must still look like `observed`, from its
-    /// directory `dir_id` (as at planning).
-    Remove { observed: Observed, dir_id: DirId },
+    /// directory `dir_id` (as at planning). A file that the plan could not
+    /// read must hold `expect`, the recorded content (`Deploy::expect`).
+    Remove {
+        observed: Observed,
+        dir_id: DirId,
+        expect: Option<Hash>,
+    },
     /// Already gone: only forget the record.
     Forget,
     /// Changed since rustow created it: left in place.
     Keep(String),
+    /// rustow could not look at it: this item fails, the others go on.
+    Fail(String),
 }
 
 /// Plans removal of recorded destinations whose source matches `args`
@@ -1220,8 +1279,10 @@ pub fn plan_removal(ctx: &Context, args: &[String], selector: Selector, state: &
         if !wanted || !selector.includes_label(&record.mode) {
             continue;
         }
-        let (path, found) = observe_recorded(ctx, record, dest, rel)?;
-        let verdict = removal_verdict(found, record);
+        let (path, verdict) = match observe_recorded(ctx, record, dest, rel) {
+            Ok((path, found)) => (path, removal_verdict(found, record)),
+            Err(e) => (dest.clone(), Verdict::Fail(with_privilege_hint(e))),
+        };
         let sudo = removal_needs_sudo(record.scope, &verdict, &path, &state.created_dirs);
         out.push(Removal {
             source: record.source.clone(),
@@ -1263,10 +1324,16 @@ fn removal_verdict(found: Option<(DirId, Observed)>, record: &Record) -> Verdict
     let Some((dir_id, observed)) = found else {
         return Verdict::Forget;
     };
+    let remove = |observed, expect| Verdict::Remove {
+        observed,
+        dir_id,
+        expect,
+    };
     match (&observed, recorded(Some(record))) {
         (Observed::Missing, _) => Verdict::Forget,
-        (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => Verdict::Remove { observed, dir_id },
-        (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => Verdict::Remove { observed, dir_id },
+        (Observed::Symlink(t), Recorded::Link(ours)) if t == ours => remove(observed, None),
+        (Observed::File { hash, .. }, Recorded::Copy(ours)) if hash == ours => remove(observed, None),
+        (Observed::Unreadable { .. }, Recorded::Copy(ours)) => remove(observed, Some(ours.clone())),
         // The user replaced rustow's folded link: nothing there is rustow's any more.
         _ if record.folded_dir => Verdict::Forget,
         _ => Verdict::Keep("destination changed since rustow deployed it; left in place".into()),
@@ -1325,21 +1392,31 @@ mod tests {
         let other = (Some(me.0.unwrap() + 1), me.1);
         let not_mine = (me.1.unwrap() + 1..).find(|g| !my_group(*g));
         let other_group = (me.0, not_mine);
-        assert_eq!(needs_sudo(Scope::Root, Create, why(), (None, None)), (None, true));
-        assert_eq!(needs_sudo(Scope::Root, Update, None, other), (None, true));
-        assert_eq!(needs_sudo(Scope::Root, FixMetadata, None, other_group), (None, true));
-        let replace = Conflict(super::Conflict::Modified);
-        assert_eq!(needs_sudo(Scope::Root, replace, why(), me), (None, true));
-        assert_eq!(needs_sudo(Scope::Root, Create, None, me), (None, false));
-        assert_eq!(needs_sudo(Scope::Root, UpToDate, why(), other), (why(), false));
-        assert_eq!(needs_sudo(Scope::Root, Adopt, None, other), (None, false));
-        let blocked = Conflict(super::Conflict::Directory);
-        assert_eq!(needs_sudo(Scope::Root, blocked, why(), other), (why(), false));
         assert_eq!(
-            needs_sudo(Scope::Home, Create, why(), other),
+            needs_sudo(Scope::Root, Create, why(), (None, None), false),
+            (None, true)
+        );
+        assert_eq!(needs_sudo(Scope::Root, Update, None, other, false), (None, true));
+        assert_eq!(
+            needs_sudo(Scope::Root, FixMetadata, None, other_group, false),
+            (None, true)
+        );
+        let replace = Conflict(super::Conflict::Modified);
+        assert_eq!(needs_sudo(Scope::Root, replace, why(), me, false), (None, true));
+        assert_eq!(needs_sudo(Scope::Root, Create, None, me, false), (None, false));
+        assert_eq!(needs_sudo(Scope::Root, UpToDate, why(), other, false), (why(), false));
+        assert_eq!(needs_sudo(Scope::Root, Adopt, None, other, false), (None, false));
+        let blocked = Conflict(super::Conflict::Directory);
+        assert_eq!(needs_sudo(Scope::Root, blocked, why(), other, false), (why(), false));
+        assert_eq!(
+            needs_sudo(Scope::Home, Create, why(), other, false),
             (why(), false),
             "home never"
         );
+        // Only root may read it: the helper checks it.
+        assert_eq!(needs_sudo(Scope::Root, Update, None, me, true), (None, true));
+        assert_eq!(needs_sudo(Scope::Root, UpToDate, None, me, true), (None, false));
+        assert_eq!(needs_sudo(Scope::Home, Update, None, me, true), (None, false));
     }
 
     fn h(s: &str) -> Hash {

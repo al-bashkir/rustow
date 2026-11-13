@@ -51,6 +51,14 @@ pub enum Observed {
         uid: u32,
         gid: u32,
     },
+    /// A regular file that the current user cannot read: only its
+    /// metadata. The plan compares it with the state; the sudo helper
+    /// reads it as root.
+    Unreadable {
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
     Dir,
     /// FIFO, socket or device.
     Other,

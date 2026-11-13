@@ -86,7 +86,7 @@ rustow checks every symlink (see the [trust rule](security.md#trust-rule)). Only
 
 ## Permission errors for system files
 
-Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file that you cannot write (see [system files](system-files.md#privileges)). "sudo failed": sudo did not get your password, or there was no terminal. Run the command again in a terminal. An unreadable destination gives a per-item error with a hint; rustow does not use sudo to read it.
+Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file that you cannot write (see [system files](system-files.md#privileges)). "sudo failed": sudo did not get your password, or there was no terminal. Run the command again in a terminal. A system file that you cannot read is compared with the state, and its changes go through sudo; see [destinations that you cannot read](system-files.md#destinations-that-you-cannot-read).
 
 ## age
 
