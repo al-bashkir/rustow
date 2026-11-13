@@ -402,7 +402,7 @@ fn write_refused(d: &Deploy, backup: &Path, temp: &str) -> Option<String> {
 }
 
 /// The message for the first of `paths` that is not absolute or has an
-/// empty, `.` or `..` part.
+/// empty, `.` or `..` part, or a part with a NUL byte.
 fn abnormal<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Option<String> {
     let normal = |p: &Path| match p.as_os_str().as_bytes().split_first() {
         Some((b'/', rest)) => rest.split(|&b| b == b'/').all(one_name),
@@ -412,9 +412,9 @@ fn abnormal<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Option<String> {
     Some(format!("{} is not an absolute path of names only", bad.display()))
 }
 
-/// True for one name: not empty, `.` or `..`, and without a `/`.
+/// True for one name: not empty, `.` or `..`, and without a `/` or a NUL byte.
 fn one_name(name: &[u8]) -> bool {
-    !matches!(name, b"" | b"." | b"..") && !name.contains(&b'/')
+    !matches!(name, b"" | b"." | b"..") && !name.contains(&b'/') && !name.contains(&0)
 }
 
 #[cfg(test)]
@@ -799,6 +799,20 @@ mod tests {
             ),
             (
                 Deploy {
+                    missing_dirs: Some((d.join("sub"), vec!["a\0b".into()])),
+                    ..make()
+                },
+                "a\\0b",
+            ),
+            (
+                Deploy {
+                    path: d.join("sub/f\0g"),
+                    ..make()
+                },
+                "sub/f\0g",
+            ),
+            (
+                Deploy {
                     file_mode: 0o4755,
                     ..make()
                 },
@@ -826,12 +840,12 @@ mod tests {
             ),
         ];
         let mut jobs: Vec<Job<&Deploy>> = bad.iter().map(|(deploy, _)| write(deploy)).collect();
-        for (backup, temp) in [("bk/../f", ""), ("bk/f", "x/")] {
+        for (backup, before, after) in [("bk/../f", "", ""), ("bk/f", "x/", ""), ("bk/f", "", "\0")] {
             jobs.push(Job::Write {
                 deploy: &good,
                 policy: Policy::Abort,
                 backup: d.join(backup),
-                temp: format!("{temp}{TEMP_PREFIX}test"),
+                temp: format!("{before}{TEMP_PREFIX}test{after}"),
             });
         }
         fs::write(d.join("sub/r"), "r").unwrap();
@@ -841,7 +855,7 @@ mod tests {
         }
         jobs.push(gone);
         let mut shown: Vec<&str> = bad.iter().map(|(_, why)| *why).collect();
-        shown.extend(["bk/../f", "x/.rustow-tmp-test", "sub/./r"]);
+        shown.extend(["bk/../f", "x/.rustow-tmp-test", ".rustow-tmp-test\\0", "sub/./r"]);
         let done = serve_all(&jobs);
         assert_eq!(done.len(), jobs.len());
         for (done, want) in done.iter().zip(shown) {
