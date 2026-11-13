@@ -337,29 +337,37 @@ impl Dir {
         unlinkat(&self.fd, name, UnlinkatFlags::RemoveDir).is_ok()
     }
 
-    /// The directory `name`, created with `mode` when it is missing (true
-    /// in the result). An existing one must be a real directory that
-    /// `check_dir` accepts for `me`, such as one an earlier item created.
+    /// The directory `name`, created with exactly `mode` when it is missing
+    /// (true in the result): `fchmod` after `mkdirat`, so the umask and an
+    /// inherited setgid bit do not count. An existing one must be a real
+    /// directory that `check_dir` accepts for `me`, such as one an earlier
+    /// item created.
     pub fn mkdir(&self, name: &OsStr, mode: u32, me: u32) -> Result<(Dir, bool)> {
         let path = self.entry(name);
+        let what = || format!("create directory {}", path.display());
         if Path::new(name).components().ne([Component::Normal(name)]) {
             return Err(Error::Failed(format!("{}: not a directory name", path.display())));
         }
-        let made = match mkdirat(&self.fd, name, Mode::from_bits_truncate(mode)) {
-            Ok(()) => true,
-            Err(Errno::EEXIST) => false,
-            Err(e) => return Err(io::Error::from(e)).ctx(|| format!("create directory {}", path.display())),
-        };
-        let dir = sys(self.child(name, SEARCH)).ctx(|| format!("create directory {}", path.display()))?;
-        if !made {
-            let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
-            trusted(&path, &st, st.st_mode as u32 & 0o7777, me).map_err(Error::Failed)?;
+        let bits = Mode::from_bits_truncate(mode as nix::libc::mode_t);
+        match mkdirat(&self.fd, name, bits) {
+            Ok(()) => {
+                let dir = sys(self.child(name, OFlag::O_RDONLY)).ctx(what)?;
+                sys(fchmod(&dir.fd, bits)).ctx(what)?;
+                Ok((dir, true))
+            }
+            Err(Errno::EEXIST) => {
+                let dir = sys(self.child(name, SEARCH)).ctx(what)?;
+                let st = sys(fstat(&dir.fd)).ctx(|| format!("inspect {}", path.display()))?;
+                trusted(&path, &st, st.st_mode as u32 & 0o7777, me).map_err(Error::Failed)?;
+                Ok((dir, false))
+            }
+            Err(e) => Err(io::Error::from(e)).ctx(what),
         }
-        Ok((dir, made))
     }
 
     /// The private directory `name`: created with mode 0700, or an existing
-    /// real directory that `me` owns, with group and other access removed.
+    /// real directory that `me` owns. Only its owner bits stay, so a new
+    /// one is exactly 0700 under a setgid parent too.
     pub(super) fn private(&self, name: &OsStr, me: u32) -> Result<Dir> {
         let path = self.entry(name);
         match mkdirat(&self.fd, name, Mode::from_bits_truncate(0o700)) {
@@ -382,8 +390,11 @@ impl Dir {
                 st.st_uid
             )));
         }
-        if st.st_mode & 0o077 != 0 {
-            sys(fchmod(&dir.fd, Mode::from_bits_truncate(0o700))).ctx(|| format!("restrict {}", path.display()))?;
+        // Group and other access, setgid (inherited from a parent) and the
+        // other special bits go; the owner bits stay as they are.
+        let owner = st.st_mode & 0o700;
+        if st.st_mode & 0o7777 != owner {
+            sys(fchmod(&dir.fd, Mode::from_bits_truncate(owner))).ctx(|| format!("restrict {}", path.display()))?;
         }
         Ok(dir)
     }

@@ -235,9 +235,7 @@ fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Optio
         }
         Step::Deploy(d) if d.sudo => (apply_cache(d, item, run), true),
         Step::Deploy(d) => (apply(d, item, run, state), false),
-        Step::Unfold { path, dir_id, observed } => {
-            (unfold(path, *dir_id, observed, &item.dest, state).map(|()| None), false)
-        }
+        Step::Unfold { path, dir_id, observed } => (unfold(path, *dir_id, observed, item, state).map(|()| None), false),
         Step::Blocked { .. } | Step::Failed(_) => return (action, detail, false),
     };
     match done {
@@ -598,15 +596,15 @@ pub fn predict_removal(removals: &[Removal]) -> Vec<ItemReport> {
 
 /// Replaces rustow's folded directory symlink by a real directory, through
 /// its planned parent directory.
-fn unfold(path: &Path, dir_id: DirId, observed: &Observed, dest: &Path, state: &mut State) -> Result<()> {
+fn unfold(path: &Path, dir_id: DirId, observed: &Observed, item: &PlanItem, state: &mut State) -> Result<()> {
     let (parent, name) = fsops::split(path)?;
     let me = me();
     let dir = fsops::open_planned(parent, dir_id, me)?;
     recheck(&dir, name, path, observed)?;
     dir.remove(name)?;
-    dir.mkdir(name, 0o777, me)?;
+    dir.mkdir(name, crate::plan::dir_mode(&item.source), me)?;
     state.created_dirs.insert(path.to_path_buf());
-    state.entries.remove(dest);
+    state.entries.remove(&item.dest);
     Ok(())
 }
 
@@ -653,7 +651,7 @@ mod tests {
                 ino: parent.st_ino,
             },
             missing_dirs: None,
-            dir_mode: 0o777,
+            dir_mode: 0o755,
             desired,
             observed: Observed::Missing,
             decision: Decision::Create,

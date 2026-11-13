@@ -82,7 +82,7 @@ fn private_dir(name: &'static str, dir: &Path, uid: u32) -> Check {
             name,
             format!("{shown} is owned by uid {}, not uid {uid}", m.uid()),
         ),
-        Ok(m) if m.permissions().mode() & 0o077 != 0 => check(
+        Ok(m) if m.permissions().mode() & 0o7077 != 0 => check(
             "warn",
             name,
             format!(
@@ -90,7 +90,7 @@ fn private_dir(name: &'static str, dir: &Path, uid: u32) -> Check {
                 m.permissions().mode() & 0o7777
             ),
         ),
-        Ok(_) => check("ok", name, format!("{shown} (0700)")),
+        Ok(m) => check("ok", name, format!("{shown} ({:04o})", m.permissions().mode() & 0o7777)),
     }
 }
 

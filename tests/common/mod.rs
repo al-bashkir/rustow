@@ -163,6 +163,20 @@ impl Fixture {
         to_out(child.wait_with_output().unwrap())
     }
 
+    /// Like `run`, with the umask of rustow set to `mask`.
+    pub fn run_umask(&self, mask: nix::sys::stat::Mode, args: &[&str]) -> Out {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = self.command(args, &[]);
+        // SAFETY: umask is async-signal-safe; nothing else runs between fork and exec.
+        unsafe {
+            cmd.pre_exec(move || {
+                nix::sys::stat::umask(mask);
+                Ok(())
+            });
+        }
+        output(cmd)
+    }
+
     /// Runs and asserts the exit code.
     pub fn ok(&self, args: &[&str]) -> Out {
         let out = self.run(args);

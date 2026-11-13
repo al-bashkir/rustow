@@ -9,7 +9,8 @@
 - It deploys system files (`rustowroot/`) only as copies. A symlink into a private cache is unusable for other programs. A symlink into a user-writable repository or cache is unsafe.
 - It checks every symlink before it plans it, and every symlinked ancestor of a destination before it follows it. See [Trust rule](#trust-rule).
 - It never changes a destination that resolves inside the repository or the cache.
-- It creates private cache (0700/0600) and state (0700/0600) directories. It refuses a cache root or state directory that you do not own. Below the cache root, each directory must be a real directory that you own: rustow refuses a symlink there (for example `.rustowcache/rendered -> /etc`), so cache content cannot be written outside the cache.
+- It creates the directories of a destination with an exact mode, whatever the umask: 0755, or 0700 for `~/.ssh`, `~/.gnupg` and everything below them, and for an encrypted home source. A system directory (`rustowroot/`) is always 0755, also for an encrypted file: the file's own mode protects it, and the programs that read it must reach it. A setgid bit that a new directory inherits is removed.
+- It creates private cache (0700/0600) and state (0700/0600) directories. It removes every bit beyond the owner's from them, also a setgid bit that they inherit. It refuses a cache root or state directory that you do not own. Below the cache root, each directory must be a real directory that you own: rustow refuses a symlink there (for example `.rustowcache/rendered -> /etc`), so cache content cannot be written outside the cache.
 - It checks identity files (owner, mode, location) and the GnuPG home.
 - It never prints decrypted content, except in `diff` (explicit command) and in the editor workspace of `enc edit`.
 

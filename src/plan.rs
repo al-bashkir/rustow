@@ -207,6 +207,7 @@ pub struct Deploy {
     pub dir_id: DirId,
     /// Deepest existing ancestor and the directories to create below it.
     pub missing_dirs: Option<(PathBuf, Vec<String>)>,
+    /// Exact mode of the directories to create (`dir_mode`).
     pub dir_mode: u32,
     pub desired: Desired,
     pub observed: Observed,
@@ -819,7 +820,7 @@ fn deploy_step(
         path,
         dir_id,
         missing_dirs,
-        dir_mode: if source.mode.backend().is_some() { 0o700 } else { 0o777 },
+        dir_mode: dir_mode(source),
         desired: want.desired,
         observed,
         decision,
@@ -832,6 +833,18 @@ fn deploy_step(
         unwritable,
         sudo,
     })))
+}
+
+/// The exact mode of each directory that rustow creates for `source`
+/// (the umask does not count): 0700 for an encrypted home source and in
+/// `~/.ssh` and `~/.gnupg`, else 0755. A system directory stays readable
+/// for the programs that read its files; each file's own mode protects it.
+pub fn dir_mode(source: &Source) -> u32 {
+    let private_home = matches!(source.dest.components().next(), Some(".ssh" | ".gnupg"));
+    match source.scope {
+        Scope::Home if private_home || source.mode.backend().is_some() => 0o700,
+        _ => 0o755,
+    }
 }
 
 /// Decision for a cache entry. An entry that backs a symlink (`links`) or
@@ -1178,6 +1191,24 @@ fn observe_recorded(
 mod tests {
     use super::*;
     use Decision::*;
+
+    #[test]
+    fn new_directories_are_private_only_for_home_secrets() {
+        let source = |scope, dest: &str, mode| Source {
+            path: RelPath::parse(dest).unwrap(),
+            scope,
+            dest: RelPath::parse(dest).unwrap(),
+            mode,
+        };
+        let age = || Mode::DecryptLink(Backend::Age);
+        assert_eq!(dir_mode(&source(Scope::Home, ".config/a/x", Mode::Link)), 0o755);
+        assert_eq!(dir_mode(&source(Scope::Home, ".config/a/x", age())), 0o700);
+        assert_eq!(dir_mode(&source(Scope::Home, ".ssh/config", Mode::Link)), 0o700);
+        assert_eq!(dir_mode(&source(Scope::Home, ".gnupg/a/b", Mode::Link)), 0o700);
+        assert_eq!(dir_mode(&source(Scope::Home, "x/.ssh/y", Mode::Link)), 0o755);
+        assert_eq!(dir_mode(&source(Scope::Root, "etc/a/x", age())), 0o755);
+        assert_eq!(dir_mode(&source(Scope::Root, ".ssh/x", Mode::Link)), 0o755);
+    }
 
     #[test]
     fn only_a_changing_system_file_needs_sudo() {
