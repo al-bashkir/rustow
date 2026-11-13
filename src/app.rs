@@ -294,9 +294,8 @@ fn prepare(
     if explicit_link(selector, paths) && ctx.config.defaults.mode == DefaultMode::Copy {
         // Only a real deploy saves the state; a dry run or a blocked run registers nothing.
         // A registered copy never gets here: it is not a link source (`nothing_deployed`).
-        for s in &sources {
-            state.registrations.insert(s.path.clone(), Registration::Link);
-        }
+        let links = sources.iter().map(|s| (s.path.clone(), Registration::Link));
+        state.registrations.extend(links);
     }
     let plan = plan::build(&ctx, &discovery, &sources, &state)?;
     Ok(Prepared {

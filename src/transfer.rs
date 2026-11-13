@@ -108,6 +108,37 @@ fn check_paths(ctx: &Context, state: &State, regs: &Registrations) -> Result<()>
 /// as this repository's state, and keeps the old file as
 /// `backups/<old-id>/state-adopted.json`. `apply` then updates the links.
 pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Result<i32> {
+    let (old, old_id) = adoptable(ctx, old)?;
+    let mut state = State::load(&ctx.state_dir, &old_id, &old)?;
+    state.repo = ctx.root.clone();
+    for record in state.entries.values_mut() {
+        let moved = |p: PathBuf| moved_cache_path(ctx, &p, &old_id).unwrap_or(p);
+        record.cache_path = record.cache_path.take().map(moved);
+    }
+    if !dry_run {
+        move_cache(ctx, &old_id)?;
+        state.save(&ctx.state_dir, &ctx.repo_id)?;
+        let (file, backups) = (
+            State::file(&ctx.state_dir, &old_id),
+            ctx.state_dir.join("backups").join(&old_id),
+        );
+        fsops::ensure_private_dir(&backups)?;
+        let kept = backups.join("state-adopted.json");
+        fs::rename(&file, &kept).ctx(|| format!("move {} to {}", file.display(), kept.display()))?;
+    }
+    let detail = format!("{} records", state.entries.len());
+    printer.changes(
+        None,
+        &[Change::new(&old.display().to_string(), "adopt", Some(detail))],
+        dry_run,
+    );
+    Ok(0)
+}
+
+/// `old` in the form that the state records, and its repository id, when
+/// `adopt` may take its state over: `old` does not exist, its state file
+/// does, and this repository has none.
+fn adoptable(ctx: &Context, old: &Path) -> Result<(PathBuf, String)> {
     let bad = |why: String| Error::Usage(format!("{}: {why}", old.display()));
     let old: PathBuf = std::path::absolute(old)
         .map_err(|e| bad(e.to_string()))?
@@ -119,8 +150,7 @@ pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Res
         ));
     }
     let old_id = Hash::of(old.as_os_str().as_encoded_bytes()).short().to_owned();
-    let file = State::file(&ctx.state_dir, &old_id);
-    if fs::symlink_metadata(&file).is_err() {
+    if fs::symlink_metadata(State::file(&ctx.state_dir, &old_id)).is_err() {
         let dir = ctx.state_dir.display();
         return Err(Error::Usage(format!(
             "no state of a repository at {} in {dir}",
@@ -134,32 +164,7 @@ pub fn adopt(ctx: &Context, printer: &Printer, old: &Path, dry_run: bool) -> Res
             ours.display()
         )));
     }
-    let mut state = State::load(&ctx.state_dir, &old_id, &old)?;
-    state.repo = ctx.root.clone();
-    for record in state.entries.values_mut() {
-        if let Some(path) = record
-            .cache_path
-            .as_deref()
-            .and_then(|p| moved_cache_path(ctx, p, &old_id))
-        {
-            record.cache_path = Some(path);
-        }
-    }
-    if !dry_run {
-        move_cache(ctx, &old_id)?;
-        state.save(&ctx.state_dir, &ctx.repo_id)?;
-        let backups = ctx.state_dir.join("backups").join(&old_id);
-        fsops::ensure_private_dir(&backups)?;
-        let kept = backups.join("state-adopted.json");
-        fs::rename(&file, &kept).ctx(|| format!("move {} to {}", file.display(), kept.display()))?;
-    }
-    let detail = format!("{} records", state.entries.len());
-    printer.changes(
-        None,
-        &[Change::new(&old.display().to_string(), "adopt", Some(detail))],
-        dry_run,
-    );
-    Ok(0)
+    Ok((old, old_id))
 }
 
 /// `path` of a cache entry below `<kind>/<old_id>` in the old cache, below

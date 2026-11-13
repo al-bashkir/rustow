@@ -83,18 +83,7 @@ impl Context {
         let mut notices = Vec::new();
         let home = canonical_dir(&env.home, "HOME")?;
         let root = find_root(opts, env, &mut notices, false)?;
-        if root.parent().is_none() {
-            return Err(Error::Usage(
-                "refusing to use the filesystem root as the repository".into(),
-            ));
-        }
-        // The state file records the root as text.
-        if root.to_str().is_none() {
-            let shown = root.display();
-            return Err(Error::Config(format!(
-                "repository path '{shown}' is not valid UTF-8; rename it"
-            )));
-        }
+        check_root(&root)?;
         let host = Host::current();
         let mut config = Config::load(&root)?;
         config.apply_host(&host);
@@ -112,14 +101,7 @@ impl Context {
             &root_target,
         ));
         let repo_id = Hash::of(root.as_os_str().as_encoded_bytes()).short().to_owned();
-        if std::fs::symlink_metadata(State::file(&state_dir, &repo_id)).is_err() {
-            notices.extend(crate::state::moved_roots(&state_dir).iter().map(|old| {
-                let old = old.display();
-                format!(
-                    "the state of a moved repository was found: {old}; run `rustow state adopt {old}` to take it over"
-                )
-            }));
-        }
+        notices.extend(moved_notices(&state_dir, &repo_id));
         Ok(Context {
             root,
             config,
@@ -253,6 +235,39 @@ fn resolve_targets(
         }
     }
     Ok((home_target, root_target))
+}
+
+/// The repository root must not be `/`, and it must be UTF-8: the state
+/// file records it as text.
+fn check_root(root: &Path) -> Result<()> {
+    if root.parent().is_none() {
+        return Err(Error::Usage(
+            "refusing to use the filesystem root as the repository".into(),
+        ));
+    }
+    match root.to_str() {
+        Some(_) => Ok(()),
+        None => Err(Error::Config(format!(
+            "repository path '{}' is not valid UTF-8; rename it",
+            root.display()
+        ))),
+    }
+}
+
+/// When this repository has no state file: a notice for each state of a
+/// moved repository (`state::moved_roots`), which `state adopt` takes over.
+fn moved_notices(state_dir: &Path, repo_id: &str) -> Vec<String> {
+    if std::fs::symlink_metadata(State::file(state_dir, repo_id)).is_ok() {
+        return Vec::new();
+    }
+    let roots = crate::state::moved_roots(state_dir);
+    roots
+        .iter()
+        .map(|old| {
+            let old = old.display();
+            format!("the state of a moved repository was found: {old}; run `rustow state adopt {old}` to take it over")
+        })
+        .collect()
 }
 
 /// Notices about a private cache and a non-default root target.
