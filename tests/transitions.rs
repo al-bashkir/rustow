@@ -55,24 +55,32 @@ fn template_link_to_copy_keeps_an_edit_made_through_the_link() {
     assert_eq!(read(&fx.home_path(".t")), "rendered\n");
 }
 
-/// A cache entry that only feeds a copy is not guarded: a change made to
-/// it outside rustow is refreshed, not reported as a user edit.
+/// A template+copy or decrypt+copy writes no cache entry: no plaintext
+/// stays in the cache, and `cache clean` leaves nothing for the next run
+/// to rewrite.
 #[test]
-fn copied_template_refreshes_a_changed_cache_entry() {
+fn a_copy_writes_no_cache_entry() {
     let fx = Fixture::new();
-    fx.write(
-        "rustow.toml",
-        "version = 1\n[[template_rules]]\nsource = \".t.tmpl\"\nmode = \"0644\"\n",
-    );
+    let key = fx.age_key("main");
+    let rule = "[[template_rules]]\nsource = \".t.tmpl\"\nmode = \"0644\"\n";
+    fx.age_config(&[&key], &[&key], rule);
     fx.write(".t.tmpl", "rendered\n");
+    fx.age_encrypt("x.age", "secret\n", &[&key]);
+    fx.ok(&["file", "add", "x.age"]);
     fx.ok(&["apply"]);
-    let cache = files_below(&fx.repo.join(".rustowcache/rendered"));
-    assert_eq!(cache.len(), 1, "{cache:?}");
-    fs::write(&cache[0], "stale\n").unwrap();
+    assert_eq!(
+        files_below(&fx.repo.join(".rustowcache")),
+        Vec::<std::path::PathBuf>::new()
+    );
+    fx.ok(&["cache", "clean"]);
+    let copies = [fx.home_path(".t"), fx.home_path("x")];
+    let before: Vec<_> = copies.iter().map(|p| mtime(p)).collect();
+    let status = fx.run(&["status"]);
+    assert_eq!(status.code, 0, "{status:?}");
     let out = fx.ok(&["apply"]);
-    assert!(out.stdout.contains("1 changed"), "{out:?}");
-    assert_eq!(read(&cache[0]), "rendered\n");
-    assert_eq!(read(&fx.home_path(".t")), "rendered\n");
+    assert!(out.stdout.contains("0 changed"), "{out:?}");
+    assert_eq!(copies.iter().map(|p| mtime(p)).collect::<Vec<_>>(), before);
+    assert_eq!(read(&copies[1]), "secret\n");
 }
 
 #[test]

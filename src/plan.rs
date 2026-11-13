@@ -267,7 +267,7 @@ pub struct CacheWrite {
 }
 
 /// Everything the executor needs to deploy one source. A `sudo` deploy
-/// goes to the sudo helper as JSON, without its cache write.
+/// goes to the sudo helper as JSON.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Deploy {
     /// Real destination path (ancestor symlinks resolved).
@@ -294,7 +294,8 @@ pub struct Deploy {
     pub file_mode: u32,
     /// Owner and group for a regular-file destination (see `kept_owner`).
     pub file_owner: (Option<u32>, Option<u32>),
-    /// Written by the user's own process, also for a `sudo` deploy.
+    /// The cache entry behind a link, or behind the recorded link of a
+    /// copy. A system file never links, so a `sudo` deploy has none.
     #[serde(skip)]
     pub cache: Option<CacheWrite>,
     pub record: Record,
@@ -939,9 +940,13 @@ fn deploy_step(
         file_owner,
         matches!(observed, Observed::Unreadable { .. }),
     );
+    // A copy writes its cache entry only while the recorded link uses it:
+    // an edit made through that link is then a conflict, not lost.
+    let linked = |p: &PathBuf| record.is_some_and(|r| r.link_target.is_some() && r.cache_path.as_ref() == Some(p));
     let cache = match want
         .cache
-        .map(|(cache_path, bytes)| plan_cache(cache_path, bytes, record, !source.mode.is_copy()))
+        .filter(|(cache_path, _)| !source.mode.is_copy() || linked(cache_path))
+        .map(|(cache_path, bytes)| plan_cache(cache_path, bytes, record))
     {
         Some(Err(e)) => return Ok(Step::Failed(with_privilege_hint(e))),
         other => other.transpose()?,
@@ -990,24 +995,18 @@ pub fn dir_mode(source: &Source) -> u32 {
     }
 }
 
-/// Decision for a cache entry. An entry that backs a symlink (`links`) or
-/// that backed the recorded symlink is guarded: a change rustow did not
-/// make is a user edit (conflict). An entry that only feeds a copy may
-/// simply be refreshed.
-fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>, links: bool) -> Result<CacheWrite> {
+/// Decision for a cache entry behind a symlink, or behind the recorded
+/// symlink: a change rustow did not make is a user edit (conflict).
+fn plan_cache(path: PathBuf, bytes: Zeroizing<Vec<u8>>, record: Option<&Record>) -> Result<CacheWrite> {
     let observed = fsops::inspect(&path)?;
     let hash = Hash::of(&bytes);
     let desired = Desired::File {
         hash: hash.clone(),
         meta: FileMeta::default(),
     };
-    let linked = record.is_some_and(|r| r.link_target.is_some() && r.cache_path.as_ref() == Some(&path));
-    let previous = match (&observed, links || linked) {
-        (Observed::File { hash, .. }, false) => Recorded::Copy(hash),
-        _ => record
-            .and_then(|r| r.applied_hash.as_ref())
-            .map_or(Recorded::None, Recorded::Copy),
-    };
+    let previous = record
+        .and_then(|r| r.applied_hash.as_ref())
+        .map_or(Recorded::None, Recorded::Copy);
     let decision = decide(&desired, &observed, previous);
     Ok(CacheWrite {
         path,
@@ -1147,8 +1146,10 @@ fn want_template(
     transformed(ctx, source, path, Zeroizing::new(rendered.into_bytes()), record)
 }
 
-/// Desired state for content that goes through the cache: a symlink to
-/// the cache entry, or a copy of it with explicit metadata.
+/// Desired state for rendered or decrypted content: a symlink to the
+/// cache entry, or a copy with explicit metadata. A copy records no cache
+/// entry; `cache` names it only to guard an edit made through an old link
+/// (`deploy_step`).
 fn transformed(
     ctx: &Context,
     source: &Source,
@@ -1160,7 +1161,6 @@ fn transformed(
     let hash = Hash::of(&content);
     let record = Record {
         applied_hash: Some(hash.clone()),
-        cache_path: Some(cache_path.clone()),
         ..record
     };
     if let Some(meta) = source.mode.metadata() {
@@ -1182,6 +1182,7 @@ fn transformed(
         let text = link_text(path, &cache_path);
         let record = Record {
             link_target: Some(text.clone()),
+            cache_path: Some(cache_path.clone()),
             ..record
         };
         let cache = Some((cache_path, content));

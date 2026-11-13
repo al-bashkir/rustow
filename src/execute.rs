@@ -223,8 +223,8 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
     out
 }
 
-/// Executes one item. For a `sudo` deploy it writes only the cache entry;
-/// the bool says that the destination waits for the sudo helper.
+/// Executes one item. For a `sudo` deploy it writes nothing; the bool says
+/// that the destination waits for the sudo helper.
 fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Option<String>, bool) {
     let (action, detail) = predict(item, run.policy);
     if run.stop.load(Ordering::SeqCst) {
@@ -235,7 +235,7 @@ fn execute_item(item: &PlanItem, run: &Run, state: &mut State) -> (Action, Optio
         Step::Deploy(_) if matches!(action, Action::Conflict | Action::Skip | Action::Fail) => {
             return (action, detail, false);
         }
-        Step::Deploy(d) if d.sudo => (apply_cache(d, item, run), true),
+        Step::Deploy(d) if d.sudo => (Ok(None), true),
         Step::Deploy(d) => (apply(d, item, run, state), false),
         Step::Unfold { path, dir_id, observed } => (unfold(path, *dir_id, observed, item, state).map(|()| None), false),
         Step::Blocked { .. } | Step::Failed(_) => return (action, detail, false),

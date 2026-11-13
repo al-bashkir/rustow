@@ -86,7 +86,7 @@ Every temporary name comes from `fsops::temp_name(dirs)`, and the caller passes 
 
 ## Cache
 
-Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<scope-id>/<dest>`. Directories are 0700 and files 0600. Before it writes, rustow creates the cache root, or sets its mode to 0700 without a message. It refuses a cache root that is not a directory (it never follows a symlink there) or that another user owns (`fsops::ensure_private_dir`). Entries that feed copies are refreshed.
+Default `<repo>/.rustowcache`. Layout: `<cache>/rendered|decrypted/<repo-id>/<scope-id>/<dest>`. Directories are 0700 and files 0600. Before it writes, rustow creates the cache root, or sets its mode to 0700 without a message. It refuses a cache root that is not a directory (it never follows a symlink there) or that another user owns (`fsops::ensure_private_dir`). Only a link uses the cache: a copy (template+copy, decrypt+copy) writes the rendered or decrypted bytes straight to the destination, and its record has no `cache_path`. One exception: when the recorded link of a source used a cache entry and the source is now a copy, the plan checks that entry once (`plan::deploy_step`), so an edit made through the old link is a conflict and not lost.
 
 ## State
 
