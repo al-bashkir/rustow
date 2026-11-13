@@ -37,17 +37,20 @@ pub fn encrypt(plaintext: &[u8], recipients: &[x25519::Recipient]) -> Result<Vec
 }
 
 /// Decrypts and authenticates the whole input (binary or armored) before
-/// returning anything.
-pub fn decrypt(ciphertext: &[u8], identities: &[Box<dyn Identity>]) -> Result<Zeroizing<Vec<u8>>, Failure> {
-    let decryptor = age::Decryptor::new_buffered(ArmoredReader::new(ciphertext)).map_err(failure)?;
+/// returning anything. `interactive` says whether a passphrase prompt was allowed.
+pub fn decrypt(
+    ciphertext: &[u8],
+    identities: &[Box<dyn Identity>],
+    interactive: bool,
+) -> Result<Zeroizing<Vec<u8>>, Failure> {
+    let fail = |e| failure(e, interactive);
+    let decryptor = age::Decryptor::new_buffered(ArmoredReader::new(ciphertext)).map_err(fail)?;
     if decryptor.is_scrypt() {
         return Err(Failure::Corrupt(
             "passphrase-only (scrypt) age files are not supported; encrypt to recipients".into(),
         ));
     }
-    let mut reader = decryptor
-        .decrypt(identities.iter().map(|i| i.as_ref()))
-        .map_err(failure)?;
+    let mut reader = decryptor.decrypt(identities.iter().map(|i| i.as_ref())).map_err(fail)?;
     let mut plaintext = Zeroizing::new(Vec::with_capacity(ciphertext.len()));
     reader
         .read_to_end(&mut plaintext)
@@ -55,14 +58,18 @@ pub fn decrypt(ciphertext: &[u8], identities: &[Box<dyn Identity>]) -> Result<Ze
     Ok(plaintext)
 }
 
-fn failure(e: DecryptError) -> Failure {
+fn failure(e: DecryptError, interactive: bool) -> Failure {
     match e {
         DecryptError::NoMatchingKeys => Failure::NoKey("no configured age identity can decrypt it".into()),
         // An encrypted identity file without a passphrase, or with a wrong one.
-        DecryptError::KeyDecryptionFailed => Failure::Locked(
-            "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)"
-                .into(),
-        ),
+        // With --interactive, no passphrase means that there was no terminal to ask on.
+        DecryptError::KeyDecryptionFailed => Failure::Locked(format!(
+            "could not unlock a passphrase-protected identity file (wrong passphrase, or {})",
+            match interactive {
+                true => "no terminal: --interactive asks for the passphrase on the terminal",
+                false => "rerun with --interactive",
+            }
+        )),
         other => Failure::Corrupt(format!("not valid age ciphertext: {other}")),
     }
 }
@@ -184,8 +191,8 @@ mod tests {
         let ct = encrypt(b"secret\n", &[ra, rb]).unwrap();
         assert!(ct.starts_with(b"age-encryption.org/v1"));
         assert_eq!(stanza_count(&ct), 2);
-        assert_eq!(&*decrypt(&ct, &[a]).unwrap(), b"secret\n");
-        assert_eq!(&*decrypt(&ct, &[b]).unwrap(), b"secret\n");
+        assert_eq!(&*decrypt(&ct, &[a], false).unwrap(), b"secret\n");
+        assert_eq!(&*decrypt(&ct, &[b], false).unwrap(), b"secret\n");
     }
 
     #[test]
@@ -193,12 +200,18 @@ mod tests {
         let (_, ra, _) = keypair();
         let (other, _, _) = keypair();
         let ct = encrypt(b"secret", &[ra]).unwrap();
-        assert!(matches!(decrypt(&ct, &[other]), Err(Failure::NoKey(_))));
+        assert!(matches!(decrypt(&ct, &[other], false), Err(Failure::NoKey(_))));
         let (a, ra, _) = keypair();
         let ct = encrypt(&vec![7u8; 200_000], &[ra]).unwrap();
-        assert!(matches!(decrypt(&ct[..ct.len() - 10], &[a]), Err(Failure::Corrupt(_))));
+        assert!(matches!(
+            decrypt(&ct[..ct.len() - 10], &[a], false),
+            Err(Failure::Corrupt(_))
+        ));
         let (a, _, _) = keypair();
-        assert!(matches!(decrypt(b"\x85\x02not age", &[a]), Err(Failure::Corrupt(_))));
+        assert!(matches!(
+            decrypt(b"\x85\x02not age", &[a], false),
+            Err(Failure::Corrupt(_))
+        ));
     }
 
     #[test]
@@ -207,7 +220,7 @@ mod tests {
         let mut ct = encrypt(b"secret value", &[ra]).unwrap();
         let last = ct.len() - 1;
         ct[last] ^= 1;
-        assert!(matches!(decrypt(&ct, &[a]), Err(Failure::Corrupt(_))));
+        assert!(matches!(decrypt(&ct, &[a], false), Err(Failure::Corrupt(_))));
     }
 
     #[test]
@@ -246,7 +259,7 @@ mod tests {
         std::fs::write(&path, format!("# created by test\n{text}\n")).unwrap();
         let ids = load_identities(&[&path], false).unwrap();
         let ct = encrypt(b"x", &[r]).unwrap();
-        assert_eq!(&*decrypt(&ct, &ids).unwrap(), b"x");
+        assert_eq!(&*decrypt(&ct, &ids, false).unwrap(), b"x");
     }
 
     #[test]
@@ -262,6 +275,23 @@ mod tests {
         std::fs::write(&path, wrapped).unwrap();
         let ids = load_identities(&[&path], false).unwrap();
         let ct = encrypt(b"x", &[r]).unwrap();
-        assert!(matches!(decrypt(&ct, &ids), Err(Failure::Locked(m)) if m.contains("--interactive")));
+        assert!(matches!(decrypt(&ct, &ids, false), Err(Failure::Locked(m)) if m.contains("--interactive")));
+    }
+
+    /// With --interactive, the prompt got no passphrase: there was no terminal.
+    #[test]
+    fn a_locked_identity_under_interactive_names_the_terminal() {
+        let message = |interactive| failure(DecryptError::KeyDecryptionFailed, interactive).message();
+        assert!(
+            message(false).ends_with("(wrong passphrase, or rerun with --interactive)"),
+            "{}",
+            message(false)
+        );
+        assert!(
+            message(true)
+                .ends_with("(wrong passphrase, or no terminal: --interactive asks for the passphrase on the terminal)"),
+            "{}",
+            message(true)
+        );
     }
 }

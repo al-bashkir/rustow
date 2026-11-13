@@ -98,7 +98,7 @@ Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file t
 - "no configured age identity can decrypt it": add the right identity file to `identity_files`.
 - "not valid age ciphertext": the file is damaged or is not age.
 - Identity file refused: run `chmod 600` on it. It must be yours, outside the repository and the cache.
-- Passphrase-protected identity: use `--interactive`. This is also necessary for `enc edit`.
+- Passphrase-protected identity: use `--interactive` in a terminal. This is also necessary for `enc edit`. Without a terminal, `--interactive` cannot ask: the message says "no terminal".
 
 ## GnuPG
 

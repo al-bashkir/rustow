@@ -131,7 +131,11 @@ pub fn decrypt(
 /// Authenticates and decrypts `ciphertext` with the keys of this run.
 fn open(backend: Backend, ciphertext: &[u8], ctx: &Context) -> std::result::Result<Zeroizing<Vec<u8>>, Failure> {
     match backend {
-        Backend::Age => age::decrypt(ciphertext, age_identities(ctx).map_err(Failure::NoKey)?),
+        Backend::Age => age::decrypt(
+            ciphertext,
+            age_identities(ctx).map_err(Failure::NoKey)?,
+            ctx.interactive,
+        ),
         Backend::Gpg => gpg(ctx).map_err(Failure::Corrupt)?.decrypt(ciphertext),
     }
 }
