@@ -79,3 +79,16 @@ fn the_cache_is_0700_under_a_setgid_parent() {
     let doctor = fx.ok(&["doctor"]);
     assert!(doctor.stdout.contains(".rustowcache (0700)"), "{doctor:?}");
 }
+
+/// The missing directories above the state directory (`~/.local`,
+/// `~/.local/state`) do not keep the setgid bit of a setgid home.
+#[test]
+fn the_state_directory_and_its_new_parents_are_0700_under_a_setgid_parent() {
+    let fx = Fixture::new();
+    fs::set_permissions(&fx.base, fs::Permissions::from_mode(0o2755)).unwrap();
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    assert_eq!(mode(&fx.state), 0o700, "made for the state");
+    assert_eq!(mode(&fx.state.join("rustow")), 0o700);
+    assert_eq!(mode(&fx.base) & 0o7777, 0o2755, "an existing directory stays as it is");
+}

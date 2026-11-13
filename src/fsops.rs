@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use nix::fcntl::OFlag;
@@ -217,20 +217,21 @@ pub fn remove_empty<'a>(dirs: impl IntoIterator<Item = &'a Path>, me: u32) -> Ve
 
 /// Creates `dir` and missing parents with mode 0700. The final directory
 /// must be a real directory that the current user owns; group and other
-/// access is removed (`Dir::private`).
+/// access is removed (`Dir::private`). So is the setgid bit that a new
+/// parent inherits.
 pub fn ensure_private_dir(dir: &Path) -> Result<()> {
     private_dir(dir).map(drop)
 }
 
 fn private_dir(dir: &Path) -> Result<Dir> {
     let (parent, name) = split(dir)?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)
-        .ctx(|| format!("create {}", parent.display()))?;
     let me = geteuid().as_raw();
-    open_ready(parent, me)?.private(name, me)
+    let base = (parent.ancestors().find(|a| fs::symlink_metadata(a).is_ok())).unwrap_or(parent);
+    let mut cur = open_ready(base, me)?;
+    for part in parent.strip_prefix(base).unwrap_or(Path::new("")).components() {
+        cur = cur.private(part.as_os_str(), me)?;
+    }
+    cur.private(name, me)
 }
 
 /// The directory `dir` below the private directory `root`, open. Each
