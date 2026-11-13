@@ -23,7 +23,9 @@ pub struct GlobalOpts {
 /// Process environment, captured once so that tests can supply their own.
 #[derive(Debug, Clone)]
 pub struct Env {
-    pub cwd: PathBuf,
+    /// The working directory, or why rustow cannot get it (it was deleted,
+    /// say). Only a relative path needs it (`Env::current_dir`).
+    pub cwd: std::result::Result<PathBuf, String>,
     pub home: PathBuf,
     /// `RUSTOW_REPO`.
     pub repo: Option<PathBuf>,
@@ -35,7 +37,7 @@ pub struct Env {
 
 impl Env {
     pub fn from_process() -> Result<Env> {
-        let cwd = std::env::current_dir().map_err(|e| Error::Failed(format!("current directory: {e}")))?;
+        let cwd = std::env::current_dir().map_err(|e| e.to_string());
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|h| h.is_absolute())
@@ -51,6 +53,19 @@ impl Env {
             xdg_state_home: var("XDG_STATE_HOME"),
             sudo_user,
         })
+    }
+
+    /// The working directory; an error when rustow cannot get it.
+    pub fn current_dir(&self) -> Result<&Path> {
+        (self.cwd.as_deref()).map_err(|e| Error::Failed(format!("current directory: {e}")))
+    }
+
+    /// `path` from the working directory, which only a relative path needs.
+    pub fn absolute(&self, path: &Path) -> Result<PathBuf> {
+        match path.is_absolute() {
+            true => Ok(path.to_path_buf()),
+            false => Ok(self.current_dir()?.join(path)),
+        }
     }
 }
 
@@ -231,7 +246,7 @@ fn resolve_targets(
     home: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
     let target = |flag: &Option<PathBuf>, configured: &str, what: &str| match flag {
-        Some(p) => target_dir(&env.cwd.join(p), what),
+        Some(p) => target_dir(&env.absolute(p)?, what),
         None => target_dir(&root.join(expand_tilde(configured, home)), what),
     };
     let home_target = target(&opts.target, &config.defaults.target, "target")?;
@@ -342,12 +357,12 @@ pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_re
 /// only, the working directory.
 fn locate_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_repo: bool) -> Result<PathBuf> {
     if let Some(p) = &opts.repo {
-        return canonical_dir(&env.cwd.join(p), "--repo");
+        return canonical_dir(&env.absolute(p)?, "--repo");
     }
     if let Some(p) = &env.repo {
-        return canonical_dir(&env.cwd.join(p), "RUSTOW_REPO");
+        return canonical_dir(&env.absolute(p)?, "RUSTOW_REPO");
     }
-    let cwd = canonical_dir(&env.cwd, "current directory")?;
+    let cwd = canonical_dir(env.current_dir()?, "current directory")?;
     let markers = [CONFIG_FILE, IGNORE_FILE]
         .into_iter()
         .chain(OLD_NAMES.map(|(old, _)| old));
@@ -545,7 +560,7 @@ mod tests {
         fs::write(base.join("home/dot/.bashrc"), "x").unwrap();
         fs::write(base.join("home/dot/.config/nvim/init.lua"), "x").unwrap();
         let env = Env {
-            cwd: base.join("home/dot"),
+            cwd: Ok(base.join("home/dot")),
             home: base.join("home"),
             repo: None,
             xdg_state_home: None,
@@ -565,7 +580,7 @@ mod tests {
     #[test]
     fn discovers_root_from_subdir_by_marker() {
         let mut f = fx();
-        f.env.cwd = f.base.join("home/dot/.config/nvim");
+        f.env.cwd = Ok(f.base.join("home/dot/.config/nvim"));
         let ctx = open(&f, GlobalOpts::default()).unwrap();
         assert_eq!(ctx.root, f.base.join("home/dot"));
         assert_eq!(ctx.home_target, f.base.join("home"));
@@ -579,7 +594,7 @@ mod tests {
         let mut f = fx();
         fs::create_dir_all(f.base.join("other/sub")).unwrap();
         fs::write(f.base.join("other/.rustowignore"), "").unwrap();
-        f.env.cwd = f.base.join("other/sub");
+        f.env.cwd = Ok(f.base.join("other/sub"));
         assert_eq!(open(&f, GlobalOpts::default()).unwrap().root, f.base.join("other"));
     }
 
@@ -604,10 +619,40 @@ mod tests {
     }
 
     #[test]
+    fn a_deleted_working_directory_matters_only_for_relative_paths() {
+        let mut f = fx();
+        f.env.cwd = Err("No such file or directory (os error 2)".into());
+        let absolute = GlobalOpts {
+            repo: Some(f.base.join("home/dot")),
+            target: Some(f.base.join("root")),
+            ..Default::default()
+        };
+        assert!(open(&f, absolute).is_ok());
+        f.env.repo = Some(f.base.join("home/dot"));
+        assert!(open(&f, GlobalOpts::default()).is_ok(), "an absolute RUSTOW_REPO");
+        let relative = GlobalOpts {
+            target: Some("root".into()),
+            ..Default::default()
+        };
+        let e = open(&f, relative).err().unwrap();
+        assert_eq!(
+            e.to_string(),
+            "current directory: No such file or directory (os error 2)"
+        );
+        assert_eq!(e.exit_code(), 4);
+        f.env.repo = None;
+        let e = open(&f, GlobalOpts::default()).err().unwrap().to_string();
+        assert!(
+            e.starts_with("current directory: "),
+            "the search for the repository: {e}"
+        );
+    }
+
+    #[test]
     fn no_marker_and_no_flag_is_an_error() {
         let mut f = fx();
         fs::create_dir_all(f.base.join("plain")).unwrap();
-        f.env.cwd = f.base.join("plain");
+        f.env.cwd = Ok(f.base.join("plain"));
         let e = open(&f, GlobalOpts::default()).err().unwrap().to_string();
         assert!(e.contains("no rustow repository") && e.contains("--repo"), "{e}");
     }
@@ -661,7 +706,7 @@ mod tests {
             "version = 1\n[defaults]\ncache_dir = \"var/c\"\n",
         )
         .unwrap();
-        f.env.cwd = f.base.join("home/dot/.config");
+        f.env.cwd = Ok(f.base.join("home/dot/.config"));
         let ctx = open(&f, GlobalOpts::default()).unwrap();
         assert_eq!(ctx.cache_dir, f.base.join("home/dot/var/c"));
         // The configured cache is excluded, and so is the default one.

@@ -27,6 +27,8 @@ Without a command, rustow runs `apply`.
 | `-h`, `--help`           | Help.                                                                                                                                                                                                                        |
 | `-V`, `--version`        | Version.                                                                                                                                                                                                                     |
 
+A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts at the working directory. rustow needs the working directory only for such a path and to find the repository. When the working directory was deleted, an absolute path still works. Else rustow stops with exit 4: "current directory: No such file or directory".
+
 ## Commands
 
 | Command                         | Purpose                                                                                                                                |
