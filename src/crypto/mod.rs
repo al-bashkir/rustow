@@ -21,6 +21,34 @@ use crate::repo::Context;
 
 type AgeIdentities = Vec<Box<dyn ::age::Identity>>;
 
+/// Why decryption failed. Messages never contain plaintext.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// No private key here matches a recipient of the file.
+    NoKey(String),
+    /// A matching key is here, but it stays locked: no passphrase, or a wrong one.
+    Locked(String),
+    /// Not valid ciphertext, damaged, or another error.
+    Corrupt(String),
+}
+
+impl Failure {
+    pub fn message(self) -> String {
+        match self {
+            Failure::NoKey(m) | Failure::Locked(m) | Failure::Corrupt(m) => m,
+        }
+    }
+
+    /// The same kind of failure, with the message that `f` makes of this one.
+    pub fn map(self, f: impl FnOnce(String) -> String) -> Failure {
+        match self {
+            Failure::NoKey(m) => Failure::NoKey(f(m)),
+            Failure::Locked(m) => Failure::Locked(f(m)),
+            Failure::Corrupt(m) => Failure::Corrupt(f(m)),
+        }
+    }
+}
+
 /// Private keys and the gpg handle, loaded at most once per run.
 #[derive(Default)]
 pub struct Keys {
@@ -97,17 +125,14 @@ pub fn decrypt(
     ciphertext: &[u8],
     ctx: &Context,
 ) -> std::result::Result<Zeroizing<Vec<u8>>, String> {
+    open(backend, ciphertext, ctx).map_err(|f| format!("{source}: {}", f.message()))
+}
+
+/// Authenticates and decrypts `ciphertext` with the keys of this run.
+fn open(backend: Backend, ciphertext: &[u8], ctx: &Context) -> std::result::Result<Zeroizing<Vec<u8>>, Failure> {
     match backend {
-        Backend::Age => {
-            let identities = age_identities(ctx).map_err(|e| format!("{source}: {e}"))?;
-            age::decrypt(ciphertext, identities).map_err(|f| match f {
-                age::Failure::NoMatchingKey => format!("{source}: no configured age identity can decrypt it"),
-                age::Failure::Corrupt(why) => format!("{source}: {why}"),
-            })
-        }
-        Backend::Gpg => gpg(ctx)
-            .and_then(|g| g.decrypt(ciphertext))
-            .map_err(|e| format!("{source}: {e}")),
+        Backend::Age => age::decrypt(ciphertext, age_identities(ctx).map_err(Failure::NoKey)?),
+        Backend::Gpg => gpg(ctx).map_err(Failure::Corrupt)?.decrypt(ciphertext),
     }
 }
 
@@ -159,38 +184,19 @@ fn gpg_recipients(ctx: &Context) -> Result<Vec<(String, Vec<String>)>> {
         .collect()
 }
 
-/// Decrypts fresh ciphertext and compares it with `plaintext` when a
-/// matching private key is available. `Ok(false)`: nothing to verify with.
-pub fn verify(backend: Backend, ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<bool> {
-    match backend {
-        Backend::Age => verify_age(ciphertext, plaintext, ctx),
-        Backend::Gpg => verify_gpg(ciphertext, plaintext, ctx),
-    }
-}
-
-fn mismatch() -> Error {
-    Error::Failed("new ciphertext does not decrypt to the input; nothing changed".into())
-}
-
-fn verify_age(ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<bool> {
-    let Ok(ids) = age_identities(ctx) else {
-        return Ok(false);
-    };
-    match age::decrypt(ciphertext, ids) {
-        Ok(p) if *p == *plaintext => Ok(true),
-        Ok(_) => Err(mismatch()),
-        Err(age::Failure::NoMatchingKey) => Ok(false),
-        Err(age::Failure::Corrupt(why)) => Err(Error::Failed(format!("new ciphertext failed verification: {why}"))),
-    }
-}
-
-/// A locked or absent secret key only means "not verified"; the
-/// status records already confirmed encryption completed.
-fn verify_gpg(ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<bool> {
-    match gpg(ctx).and_then(|g| g.decrypt(ciphertext)) {
-        Ok(p) if *p == *plaintext => Ok(true),
-        Ok(_) => Err(mismatch()),
-        Err(_) => Ok(false),
+/// Decrypts fresh ciphertext and compares it with `plaintext`.
+/// `Ok(None)`: verified. `Ok(Some(why))`: no key here could check it.
+/// `Err`: the ciphertext is broken or decrypts to other bytes.
+pub fn verify(backend: Backend, ciphertext: &[u8], plaintext: &[u8], ctx: &Context) -> Result<Option<&'static str>> {
+    match open(backend, ciphertext, ctx) {
+        Ok(p) if *p == *plaintext => Ok(None),
+        Ok(_) => Err(Error::Failed(
+            "new ciphertext does not decrypt to the input; nothing changed".into(),
+        )),
+        Err(Failure::NoKey(_)) => Ok(Some("no matching private key available here")),
+        Err(Failure::Locked(_)) if ctx.interactive => Ok(Some("the identity or key could not be unlocked")),
+        Err(Failure::Locked(_)) => Ok(Some("the identity or key is locked; run with --interactive to verify")),
+        Err(Failure::Corrupt(why)) => Err(Error::Failed(format!("new ciphertext failed verification: {why}"))),
     }
 }
 

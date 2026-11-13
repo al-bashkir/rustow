@@ -30,7 +30,8 @@ fn enc_backend_flag_creates_gpg_that_plain_gpg_decrypts() {
     assert_eq!(home.decrypt(&ct), "gpg secret\n");
 }
 
-/// A locked key encrypts, but unattended it cannot verify: the output says so.
+/// A locked key encrypts, but unattended it cannot verify: the output says
+/// that the key is locked, not that it is missing.
 #[test]
 fn enc_with_a_locked_key_is_not_verified() {
     if !require_gpg() {
@@ -41,8 +42,91 @@ fn enc_with_a_locked_key_is_not_verified() {
     fx.gpg_config(&home, &[&home.fpr], "");
     fx.write("p", "plain\n");
     let out = fx.ok(&["enc", "--backend", "gpg", "p"]);
-    assert!(out.stdout.contains("not verified"), "{out:?}");
+    assert!(
+        out.stdout
+            .contains("not verified: the identity or key is locked; run with --interactive to verify"),
+        "{out:?}"
+    );
     assert_eq!(home.decrypt(&fx.repo.join("p.gpg")), "plain\n");
+}
+
+/// With --interactive, a wrong passphrase leaves the key locked: `enc`
+/// keeps the new ciphertext and says that it could not unlock the key.
+#[test]
+fn enc_with_a_wrong_passphrase_is_not_verified() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    home.stub_pinentry_answering("wrong");
+    fx.gpg_config(&home, &[&home.fpr], "");
+    fx.write("p", "plain\n");
+    let out = fx.run(&["--interactive", "enc", "--backend", "gpg", "p"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("not verified: the identity or key could not be unlocked"),
+        "{out:?}"
+    );
+    assert_eq!(home.decrypt(&fx.repo.join("p.gpg")), "plain\n");
+}
+
+/// An edit that re-encrypts to a key whose secret part is not here says
+/// so, as `enc` does: the next edit here cannot decrypt it.
+#[test]
+fn edit_to_a_recipient_without_a_secret_key_here_is_not_verified() {
+    let Some((fx, home)) = setup("") else { return };
+    let ct = fx.gpg_encrypt("s.gpg", "v1\n", &home);
+    let foreign = home.add_key("foreign");
+    let deleted = home
+        .gpg()
+        .args(["--yes", "--delete-secret-keys", &foreign])
+        .output()
+        .unwrap();
+    assert!(deleted.status.success(), "{}", String::from_utf8_lossy(&deleted.stderr));
+    fx.gpg_config(&home, &[&foreign], "");
+    let editor = fx.editor("ed", "printf 'v2\\n' > \"$1\"");
+    let out = fx.run_env(&["enc", "edit", "s.gpg"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("re-encrypted; deployed files change on the next `rustow apply`; not verified: no matching private key available here"),
+        "{out:?}"
+    );
+    assert_eq!(home.enc_to(&ct).len(), 1);
+    assert!(fx.workspaces().is_empty());
+}
+
+/// When the new ciphertext does not decrypt here, `enc` fails and keeps
+/// the plaintext: it cannot tell a broken file from a missing key.
+#[test]
+fn enc_fails_when_its_new_ciphertext_does_not_decrypt() {
+    let Some((fx, _home)) = setup("") else { return };
+    fx.write("p", "plain\n");
+    let path = gpg_wrapper(&fx, "*\" --decrypt \"*) echo 'gpg: broken' >&2; exit 2;;");
+    let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("PATH", &path)]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stderr.contains("new ciphertext failed verification"), "{out:?}");
+    assert_eq!(read(&fx.repo.join("p")), "plain\n");
+    assert!(!fx.repo.join("p.gpg").exists());
+}
+
+/// A PATH whose first `gpg` runs the shell `case` branch `arm` on its
+/// arguments, then the real gpg.
+fn gpg_wrapper(fx: &Fixture, arm: &str) -> String {
+    let real = Command::new("sh")
+        .args(["-c", "command -v gpg"])
+        .output()
+        .unwrap()
+        .stdout;
+    let real = String::from_utf8(real).unwrap();
+    let wrapper = fx.editor(
+        "gpg",
+        &format!("case \" $* \" in {arm} esac\nexec {} \"$@\"", real.trim()),
+    );
+    let bin = std::path::Path::new(&wrapper).parent().unwrap().display().to_string();
+    format!("{bin}:{}", std::env::var("PATH").unwrap())
 }
 
 /// Without encryption.gpg.homedir, $GNUPGHOME selects the keyring.
@@ -193,24 +277,8 @@ fn source_changed_during_enc_rolls_back_the_registration() {
     let src = fx.write("p", "plain\n");
     fx.ok(&["file", "add", "p"]);
     let config = read(&fx.repo.join("rustow.toml"));
-    let real_gpg = String::from_utf8(
-        Command::new("sh")
-            .args(["-c", "command -v gpg"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let wrapper = fx.editor(
-        "gpg",
-        &format!(
-            "case \" $* \" in *\" --encrypt \"*) printf 'late\\n' >> '{}';; esac\nexec {} \"$@\"",
-            src.display(),
-            real_gpg.trim()
-        ),
-    );
-    let bin = std::path::Path::new(&wrapper).parent().unwrap().display().to_string();
-    let path = format!("{bin}:{}", std::env::var("PATH").unwrap());
+    let arm = format!("*\" --encrypt \"*) printf 'late\\n' >> '{}';;", src.display());
+    let path = gpg_wrapper(&fx, &arm);
     let out = fx.run_env(&["enc", "--backend", "gpg", "p"], &[("PATH", &path)]);
     assert_eq!(out.code, 3, "{out:?}");
     assert!(out.stderr.contains("changed while it was being encrypted"), "{out:?}");

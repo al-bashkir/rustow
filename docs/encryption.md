@@ -67,7 +67,7 @@ By default rustow never asks for a passphrase, so it can run from scripts and ti
 
 - GnuPG: rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once, with the hint "if the key is passphrase-protected, unlock it in gpg-agent or rerun with --interactive".
 - age: a passphrase-protected identity file fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)".
-- The failed item is an error. `apply`, `diff` and `enc edit` exit with 4. `status` shows ERROR.
+- The failed item is an error. `apply`, `diff` and `enc edit` exit with 4. `status` shows ERROR. `enc` needs no private key: it writes the encrypted file and prints "not verified" with the reason.
 - With the global `--interactive` flag, rustow runs gpg with `--pinentry-mode ask`, so `gpg-agent` starts its pinentry. For age, rustow asks for the identity passphrase on the terminal.
 - The rule is the same for every command. `enc edit` does not imply `--interactive`. Without it, a locked key fails with exit 4 before the editor starts. The editor itself always runs on your terminal.
 
@@ -93,7 +93,13 @@ rustow enc .ssh/secret.conf               # default backend
 rustow enc --backend gpg .ssh/secret.conf
 ```
 
-`enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies by decrypting when a private key is available. Otherwise it prints "not verified". It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
+`enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies the new file: it decrypts it and compares the result with the plaintext. The result is one of these:
+
+- Verified.
+- Not verified: rustow prints "not verified" and the reason, and exits with 0. The reason is "no matching private key available here", or "the identity or key is locked; run with --interactive to verify". With `--interactive`, a wrong passphrase gives "the identity or key could not be unlocked".
+- Failed: the new file does not decrypt, or it decrypts to other bytes. rustow exits with 4 and keeps the plaintext.
+
+It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.
 
 `enc` prints a notice: Git history, backups and deployed files keep the old plaintext. rustow does not erase them.
 
@@ -113,7 +119,8 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - rustow decrypts into `<cache>/edit/edit-XXXX/` (mode 0700) as a 0600 file with the logical name.
 - The editor is `$VISUAL`, else `$EDITOR`, else `vi`. rustow splits the command on whitespace. It does not use a shell. A program name without a `/` is looked up in the absolute directories of `PATH` only.
 - If the editor fails, the ciphertext stays unchanged and rustow removes the workspace.
-- If the encryption fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
+- After the edit, rustow verifies the new ciphertext as `enc` does. When no key here can check it, rustow writes it and prints "not verified" with the reason. For example, after you set the recipients to another person's key only, the next `enc edit` on this machine cannot decrypt the file.
+- If the encryption or the verification fails after the edit (for example, the gpg run fails), rustow exits with 4. The ciphertext stays unchanged and rustow keeps your edited plaintext in the workspace. It prints the path.
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.
 - If content and recipients are unchanged, rustow does not rewrite the file.
 - rustow finds a recipient change from the last encryption that the state file records for this ciphertext. Without such a record, GnuPG compares the key ids in the ciphertext with the configured keys, so rustow encrypts again also when you replace one key with another. age shows only the number of recipients, so rustow finds only a changed count. After you replace an age recipient, use `--reencrypt`. `--reencrypt` always forces a rewrite.

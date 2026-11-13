@@ -58,6 +58,45 @@ fn enc_with_only_a_non_matching_identity_is_not_verified() {
     assert_eq!(fx.age_decrypt(&fx.repo.join("token.age"), &key), "t0k3n\n");
 }
 
+/// Without --interactive a passphrase-protected identity stays locked: the
+/// new ciphertext is fine, so `enc` keeps it and says why it is not verified.
+#[test]
+fn enc_with_a_locked_identity_is_not_verified() {
+    let fx = Fixture::new();
+    let key = fx.age_key("main");
+    fx.age_config(&[&key], &[&fx.age_key_locked(&key)], "");
+    fx.write("token", "t0k3n\n");
+    let out = fx.run(&["enc", "token"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("not verified: the identity or key is locked; run with --interactive to verify"),
+        "{out:?}"
+    );
+    assert!(!fx.repo.join("token").exists());
+    assert_eq!(fx.age_decrypt(&fx.repo.join("token.age"), &key), "t0k3n\n");
+}
+
+/// An edit that re-encrypts to recipients that no identity here matches
+/// says so, as `enc` does: the next edit here cannot decrypt it.
+#[test]
+fn edit_to_recipients_without_an_identity_here_is_not_verified() {
+    let (fx, key) = keyed();
+    let ct = fx.age_encrypt("s.age", "v1\n", &[&key]);
+    let other = fx.age_key("other");
+    fx.age_config(&[&other], &[&key], "");
+    let editor = fx.editor("ed", "printf 'v2\\n' > \"$1\"");
+    let out = fx.run_env(&["enc", "edit", "s.age"], &[("VISUAL", &editor)]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("re-encrypted; deployed files change on the next `rustow apply`; not verified: no matching private key available here"),
+        "{out:?}"
+    );
+    assert_eq!(fx.age_decrypt(&ct, &other), "v2\n");
+    assert!(fx.workspaces().is_empty());
+}
+
 #[test]
 fn enc_migrates_registration_and_template_rule() {
     let (fx, key) = keyed();

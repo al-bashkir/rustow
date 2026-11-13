@@ -11,6 +11,8 @@ use std::process::{Command, Stdio};
 
 use zeroize::Zeroizing;
 
+use super::Failure;
+
 /// A located `gpg` and the keyring it uses.
 #[derive(Debug, Clone)]
 pub struct Gpg {
@@ -65,26 +67,46 @@ fn has(recs: &[Record], keyword: &str) -> bool {
 /// Decryption succeeded only with a zero exit status, public-key
 /// encryption, integrity protection (MDC or AEAD), DECRYPTION_OKAY and
 /// END_DECRYPTION, and no failure record.
-pub fn check_decrypt_status(lines: &[String], exit_ok: bool) -> Result<(), String> {
+pub fn check_decrypt_status(lines: &[String], exit_ok: bool) -> Result<(), Failure> {
     let recs = records(lines);
+    check_public_key_data(&recs).map_err(Failure::Corrupt)?;
     check_decrypt_keys(&recs)?;
-    check_integrity(&recs)?;
+    check_integrity(&recs).map_err(Failure::Corrupt)?;
     if !(has(&recs, "BEGIN_DECRYPTION") && has(&recs, "DECRYPTION_OKAY") && has(&recs, "END_DECRYPTION")) || !exit_ok {
-        return Err("decryption did not complete successfully".into());
+        return Err(Failure::Corrupt("decryption did not complete successfully".into()));
     }
     Ok(())
 }
 
-/// Public-key data, a usable secret key, and no failure record.
-fn check_decrypt_keys(recs: &[Record]) -> Result<(), String> {
-    check_public_key_data(recs)?;
+/// A usable secret key, and no failure record.
+fn check_decrypt_keys(recs: &[Record]) -> Result<(), Failure> {
     if has(recs, "NO_SECKEY") && !has(recs, "DECRYPTION_OKAY") {
-        return Err("no usable secret key for any recipient in the keyring".into());
+        let why = "no usable secret key for any recipient in the keyring".to_owned();
+        return Err(match unlock_error(recs) {
+            Some(_) => Failure::Locked(why),
+            None => Failure::NoKey(why),
+        });
     }
     if has(recs, "DECRYPTION_FAILED") || has(recs, "FAILURE") || has(recs, "ERROR") {
-        return Err("decryption failed".into());
+        return Err(Failure::Corrupt("decryption failed".into()));
     }
     Ok(())
+}
+
+/// gpg-agent error codes of a secret key that is here but stays locked.
+const BAD_PASSPHRASE: u32 = 11;
+const NO_PINENTRY: u32 = 85;
+
+/// The error code when gpg-agent has a secret key for a recipient but
+/// could not unlock it. A locked key also gives NO_SECKEY, so only the code
+/// of `ERROR pkdecrypt_failed <code>` tells it apart (its low 16 bits; the
+/// high bits name the part of GnuPG).
+fn unlock_error(recs: &[Record]) -> Option<u32> {
+    recs.iter()
+        .filter(|(w, args)| *w == "ERROR" && args.first() == Some(&"pkdecrypt_failed"))
+        .filter_map(|(_, args)| args.get(1)?.parse::<u32>().ok())
+        .map(|code| code & 0xFFFF)
+        .find(|code| matches!(*code, BAD_PASSPHRASE | NO_PINENTRY))
 }
 
 /// The status must show public-key encrypted OpenPGP data. Each refusal
@@ -230,9 +252,9 @@ impl Gpg {
     }
 
     /// Decrypts and fully verifies before returning plaintext.
-    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
-        let run = self.run(&["--decrypt"], ciphertext)?;
-        check_decrypt_status(&run.status, run.success).map_err(|e| self.explain(e, &run))?;
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Failure> {
+        let run = self.run(&["--decrypt"], ciphertext).map_err(Failure::Corrupt)?;
+        check_decrypt_status(&run.status, run.success).map_err(|f| f.map(|e| self.explain(e, &run)))?;
         Ok(run.stdout)
     }
 
@@ -415,11 +437,12 @@ mod tests {
             &lines(&GOOD.replace("DECRYPTION_INFO 2 9 0", "DECRYPTION_INFO 0 9 0")),
             true,
         );
-        assert!(e.unwrap_err().contains("integrity"));
+        assert!(e.unwrap_err().message().contains("integrity"));
         let none = GOOD.replace("[GNUPG:] DECRYPTION_INFO 2 9 0\n", "");
         assert!(
             check_decrypt_status(&lines(&none), true)
                 .unwrap_err()
+                .message()
                 .contains("integrity")
         );
     }
@@ -431,25 +454,44 @@ mod tests {
         assert!(
             check_decrypt_status(&lines(sym), true)
                 .unwrap_err()
+                .message()
                 .contains("public-key")
         );
         let failed = format!("{GOOD}\n[GNUPG:] DECRYPTION_FAILED");
         assert!(check_decrypt_status(&lines(&failed), true).is_err());
-        let nokey = "[GNUPG:] ENC_TO AAAA 18 0\n[GNUPG:] NO_SECKEY AAAA\n[GNUPG:] BEGIN_DECRYPTION\n\
-            [GNUPG:] DECRYPTION_FAILED\n[GNUPG:] END_DECRYPTION";
+    }
+
+    /// Status records of gpg 2.4 for a key that is missing, locked without
+    /// a pinentry, or given a bad passphrase: the ERROR code tells them apart.
+    #[test]
+    fn decrypt_status_tells_a_locked_key_from_a_missing_one() {
+        let status = |code: &str| {
+            lines(&format!(
+                "[GNUPG:] ENC_TO 5CEEF7B599FFEAA0 18 0\n[GNUPG:] NO_SECKEY 5CEEF7B599FFEAA0\n\
+                 [GNUPG:] ERROR pkdecrypt_failed {code}\n[GNUPG:] BEGIN_DECRYPTION\n\
+                 [GNUPG:] DECRYPTION_FAILED\n[GNUPG:] END_DECRYPTION\n[GNUPG:] FAILURE gpg-exit 33554433"
+            ))
+        };
+        let missing = check_decrypt_status(&status("33554449"), false).unwrap_err();
         assert!(
-            check_decrypt_status(&lines(nokey), false)
-                .unwrap_err()
-                .contains("secret key")
+            matches!(&missing, Failure::NoKey(m) if m.contains("secret key")),
+            "{missing:?}"
         );
+        for locked in ["67108949", "67108875"] {
+            let e = check_decrypt_status(&status(locked), false).unwrap_err();
+            assert!(matches!(e, Failure::Locked(_)), "{locked}: {e:?}");
+        }
     }
 
     #[test]
     fn decrypt_status_names_missing_status_and_non_openpgp_data() {
         let none = check_decrypt_status(&[], false).unwrap_err();
-        assert!(none.contains("no status") && !none.contains("symmetric"), "{none}");
+        assert!(
+            matches!(&none, Failure::Corrupt(m) if m.contains("no status") && !m.contains("symmetric")),
+            "{none:?}"
+        );
         let junk = "[GNUPG:] NODATA 1\n[GNUPG:] NODATA 2\n[GNUPG:] FAILURE decrypt 4294967295";
-        let junk = check_decrypt_status(&lines(junk), false).unwrap_err();
+        let junk = check_decrypt_status(&lines(junk), false).unwrap_err().message();
         assert!(
             junk.contains("not OpenPGP data") && !junk.contains("symmetric"),
             "{junk}"
@@ -489,7 +531,7 @@ mod tests {
     fn decrypt_status_rejects_one_failure_or_error_record() {
         for extra in ["[GNUPG:] FAILURE decrypt 1", "[GNUPG:] ERROR keylist 1"] {
             let e = check_decrypt_status(&lines(&format!("{GOOD}\n{extra}")), true).unwrap_err();
-            assert_eq!(e, "decryption failed", "{extra}");
+            assert_eq!(e, Failure::Corrupt("decryption failed".into()), "{extra}");
         }
     }
 

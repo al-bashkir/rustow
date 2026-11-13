@@ -9,14 +9,7 @@ use age::secrecy::SecretString;
 use age::{Callbacks, DecryptError, Identity, Recipient, x25519};
 use zeroize::Zeroizing;
 
-/// Why decryption failed. Messages never contain plaintext.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Failure {
-    /// None of the identities matches a recipient of the file.
-    NoMatchingKey,
-    /// Not age ciphertext, damaged, truncated or unsupported.
-    Corrupt(String),
-}
+use super::Failure;
 
 pub fn parse_recipients(list: &[String]) -> Result<Vec<x25519::Recipient>, String> {
     if list.is_empty() {
@@ -62,8 +55,9 @@ pub fn decrypt(ciphertext: &[u8], identities: &[Box<dyn Identity>]) -> Result<Ze
 
 fn failure(e: DecryptError) -> Failure {
     match e {
-        DecryptError::NoMatchingKeys => Failure::NoMatchingKey,
-        DecryptError::KeyDecryptionFailed => Failure::Corrupt(
+        DecryptError::NoMatchingKeys => Failure::NoKey("no configured age identity can decrypt it".into()),
+        // An encrypted identity file without a passphrase, or with a wrong one.
+        DecryptError::KeyDecryptionFailed => Failure::Locked(
             "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)"
                 .into(),
         ),
@@ -196,7 +190,7 @@ mod tests {
         let (_, ra, _) = keypair();
         let (other, _, _) = keypair();
         let ct = encrypt(b"secret", &[ra]).unwrap();
-        assert_eq!(decrypt(&ct, &[other]).unwrap_err(), Failure::NoMatchingKey);
+        assert!(matches!(decrypt(&ct, &[other]), Err(Failure::NoKey(_))));
         let (a, ra, _) = keypair();
         let ct = encrypt(&vec![7u8; 200_000], &[ra]).unwrap();
         assert!(matches!(decrypt(&ct[..ct.len() - 10], &[a]), Err(Failure::Corrupt(_))));
@@ -265,6 +259,6 @@ mod tests {
         std::fs::write(&path, wrapped).unwrap();
         let ids = load_identities(&[&path], false).unwrap();
         let ct = encrypt(b"x", &[r]).unwrap();
-        assert!(matches!(decrypt(&ct, &ids), Err(Failure::Corrupt(m)) if m.contains("--interactive")));
+        assert!(matches!(decrypt(&ct, &ids), Err(Failure::Locked(m)) if m.contains("--interactive")));
     }
 }

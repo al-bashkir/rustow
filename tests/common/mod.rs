@@ -264,6 +264,23 @@ impl Fixture {
         }
     }
 
+    /// A copy of the identity of `key`, protected by the passphrase "pw" (as `age -p` makes it).
+    pub fn age_key_locked(&self, key: &AgeKey) -> AgeKey {
+        use std::io::Write;
+        let enc = age::Encryptor::with_user_passphrase(age::secrecy::SecretString::from("pw".to_owned()));
+        let mut wrapped = Vec::new();
+        let mut w = enc.wrap_output(&mut wrapped).unwrap();
+        w.write_all(&fs::read(&key.identity).unwrap()).unwrap();
+        w.finish().unwrap();
+        let identity = key.identity.with_extension("locked");
+        fs::write(&identity, wrapped).unwrap();
+        fs::set_permissions(&identity, fs::Permissions::from_mode(0o600)).unwrap();
+        AgeKey {
+            identity,
+            recipient: key.recipient.clone(),
+        }
+    }
+
     /// `rustow.toml` with age recipients, identity files and `extra` TOML.
     pub fn age_config(&self, recipients: &[&AgeKey], identities: &[&AgeKey], extra: &str) {
         let list = |items: Vec<String>| items.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
@@ -510,11 +527,16 @@ impl GpgHome {
     /// Makes the agent use a stub pinentry that answers "pw". Each call
     /// appends a line to the returned log file.
     pub fn stub_pinentry(&self) -> PathBuf {
+        self.stub_pinentry_answering("pw")
+    }
+
+    /// Like `stub_pinentry`, with `pin` as the answer.
+    pub fn stub_pinentry_answering(&self, pin: &str) -> PathBuf {
         let log = self.dir.join("pinentry.log");
         let script = write_file(
             &self.dir.join("pinentry-stub"),
             &format!(
-                "#!/bin/sh\necho called >> '{}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  case \"$cmd\" in\n    GETPIN) echo 'D pw'; echo OK ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
+                "#!/bin/sh\necho called >> '{}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  case \"$cmd\" in\n    GETPIN) echo 'D {pin}'; echo OK ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
                 log.display()
             ),
         );

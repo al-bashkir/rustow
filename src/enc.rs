@@ -33,8 +33,8 @@ struct Sealed {
     out: PathBuf,
     plaintext: Zeroizing<Vec<u8>>,
     ciphertext: Vec<u8>,
-    /// Whether a private key here could decrypt the result.
-    verified: bool,
+    /// Why no private key here could check the result (`crypto::verify`).
+    unverified: Option<&'static str>,
     mode: u32,
 }
 
@@ -100,7 +100,7 @@ fn seal_source(ctx: &Context, rel: &RelPath, abs: &Path, backend: Option<Backend
     }
     let plaintext = Zeroizing::new(fsops::read_file(abs)?);
     let ciphertext = crypto::encrypt(backend, &plaintext, ctx)?;
-    let verified = crypto::verify(backend, &ciphertext, &plaintext, ctx)?;
+    let unverified = crypto::verify(backend, &ciphertext, &plaintext, ctx)?;
     let mode = file_mode(abs, rel)?;
     Ok(Sealed {
         backend,
@@ -108,7 +108,7 @@ fn seal_source(ctx: &Context, rel: &RelPath, abs: &Path, backend: Option<Backend
         out,
         plaintext,
         ciphertext,
-        verified,
+        unverified,
         mode,
     })
 }
@@ -176,11 +176,14 @@ fn report_encrypted(rel: &RelPath, sealed: &Sealed, migrated: bool, printer: &Pr
     if migrated {
         detail.push_str("; registrations moved");
     }
-    if !sealed.verified {
-        detail.push_str("; not verified: no matching private key available here");
-    }
+    detail.push_str(&not_verified(sealed.unverified));
     printer.changes(None, &[Change::new(rel.as_str(), "encrypt", Some(detail))], false);
     printer.notice(HISTORY_NOTE);
+}
+
+/// The note for a result that no private key here could check.
+fn not_verified(why: Option<&str>) -> String {
+    why.map(|why| format!("; not verified: {why}")).unwrap_or_default()
 }
 
 /// Checks each parent directory of `rel` as discovery does, so that no
@@ -255,9 +258,12 @@ pub fn edit_source(ctx: &Context, state: &mut State, arg: &str, reencrypt: bool,
         printer.changes(None, &[Change::new(src.rel.as_str(), "ok", detail)], false);
         return Ok(0);
     }
-    let ciphertext = encrypt_edited(ctx, &src, &edited, workspace)?;
+    let (ciphertext, unverified) = encrypt_edited(ctx, &src, &edited, workspace)?;
     write_back(state, &src, &ciphertext, recipients)?;
-    let detail = "re-encrypted; deployed files change on the next `rustow apply`".to_owned();
+    let detail = format!(
+        "re-encrypted; deployed files change on the next `rustow apply`{}",
+        not_verified(unverified)
+    );
     printer.changes(None, &[Change::new(src.rel.as_str(), "update", Some(detail))], false);
     Ok(0)
 }
@@ -322,11 +328,18 @@ fn recipients_changed(ctx: &Context, state: &State, src: &Opened, recipients: &H
     }
 }
 
-/// Encrypts the edit. On failure or a concurrent change, the workspace is kept.
-fn encrypt_edited(ctx: &Context, src: &Opened, edited: &[u8], workspace: Workspace) -> Result<Vec<u8>> {
-    let encrypted = crypto::encrypt(src.backend, edited, ctx).and_then(|c| verified(src.backend, c, edited, ctx));
-    let ciphertext = match encrypted {
-        Ok(c) => c,
+/// Encrypts and verifies the edit (with the reason it is not verified).
+/// On failure or a concurrent change, the workspace is kept.
+fn encrypt_edited(
+    ctx: &Context,
+    src: &Opened,
+    edited: &[u8],
+    workspace: Workspace,
+) -> Result<(Vec<u8>, Option<&'static str>)> {
+    let encrypted = crypto::encrypt(src.backend, edited, ctx)
+        .and_then(|c| crypto::verify(src.backend, &c, edited, ctx).map(|why| (c, why)));
+    let sealed = match encrypted {
+        Ok(sealed) => sealed,
         Err(e) => {
             let kept = workspace.keep();
             return Err(Error::Failed(format!(
@@ -339,7 +352,7 @@ fn encrypt_edited(ctx: &Context, src: &Opened, edited: &[u8], workspace: Workspa
     if !src.unchanged() {
         return Err(conflict(&src.rel, workspace.keep()));
     }
-    Ok(ciphertext)
+    Ok(sealed)
 }
 
 /// Replaces the encrypted source and records the new ciphertext.
@@ -354,11 +367,6 @@ fn write_back(state: &mut State, src: &Opened, ciphertext: &[u8], recipients: Ha
         },
     );
     Ok(())
-}
-
-fn verified(backend: Backend, ciphertext: Vec<u8>, plaintext: &[u8], ctx: &Context) -> Result<Vec<u8>> {
-    crypto::verify(backend, &ciphertext, plaintext, ctx)?;
-    Ok(ciphertext)
 }
 
 fn conflict(rel: &RelPath, kept: PathBuf) -> Error {
