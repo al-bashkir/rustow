@@ -167,6 +167,10 @@ impl Fixture {
     pub fn run_limit(&self, res: nix::sys::resource::Resource, limit: u64, args: &[&str], env: &[(&str, &str)]) -> Out {
         use std::os::unix::process::CommandExt;
         let mut cmd = self.command(args, env);
+        // A file size limit would cut the coverage profile, and a cut profile
+        // fails the whole coverage merge: such a run writes its profile into
+        // the working directory, which the fixture deletes.
+        cmd.env_remove("LLVM_PROFILE_FILE");
         // SAFETY: setrlimit is async-signal-safe; nothing else runs between fork and exec.
         unsafe {
             cmd.pre_exec(move || Ok(nix::sys::resource::setrlimit(res, limit, limit)?));
