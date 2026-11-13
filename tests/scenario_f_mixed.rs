@@ -512,3 +512,26 @@ fn unrecorded_folded_link_in_other_text_is_rewritten() {
     assert_eq!(link_text(&dir), std::path::Path::new("../dotfiles/.config/nvim"));
     assert_eq!(fold_record(&fx)["folded_dir"], true, "{:?}", fx.state_json());
 }
+
+/// An unrecorded link to the repository directory is not taken over when
+/// its parent resolves through an unsafe symlink: each file below it is a
+/// conflict, as before, and nothing is recorded.
+#[test]
+fn unrecorded_folded_link_below_an_unsafe_parent_is_not_adopted() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = nvim(FOLD);
+    fx.ok(&["apply"]);
+    fs::remove_dir_all(fx.state.join("rustow")).unwrap();
+    let open = fx.base.join("open");
+    fs::rename(fx.home_path(".config"), &open).unwrap();
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
+    std::os::unix::fs::symlink(&open, fx.home_path(".config")).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(
+        !out.stdout.contains("<- .config/nvim (link)"),
+        "not planned as a fold: {out:?}"
+    );
+    assert!(out.stdout.contains("<- .config/nvim/init.lua (link)"), "{out:?}");
+    assert_eq!(fold_record(&fx), serde_json::Value::Null, "{:?}", fx.state_json());
+}
