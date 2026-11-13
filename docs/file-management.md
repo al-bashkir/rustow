@@ -38,7 +38,7 @@ A registration whose file no longer exists gives a warning, for example "warning
 
 ## list
 
-`file list` shows the sources of both lists, each with its destination and mode. The text output shortens the home directory to `~`. `file list --json` gives `{"files": [{"source", "dest", "mode"}]}` with the absolute destination, as all JSON output does. `dest` is null for a registration that cannot deploy.
+`file list` shows the sources of both lists, each with its destination and mode. The text output shortens the home directory to `~`. `file list --json` gives `{"files": [{"source", "dest", "mode"}]}` with the absolute destination, as all JSON output does. A registration cannot deploy when its source is missing, is a directory, is ignored, or is a [skipped source](cli.md#skipped-sources). It then has no destination: `dest` is null, and `mode` is "invalid: " and the reason. The text line shows the source and the reason only, for example `gone (invalid: rustow.toml [[files]] entry does not exist …)`.
 
 ## Copy rules
 

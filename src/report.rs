@@ -333,8 +333,8 @@ impl Printer {
             return;
         }
         for r in rows {
-            let dest = r.dest.as_deref().map(|d| self.path(d)).unwrap_or_default();
-            outln!("{} -> {dest} ({})", shown(&r.source), shown(&r.mode));
+            let dest = (r.dest.as_deref()).map_or_else(String::new, |d| format!(" -> {}", self.path(d)));
+            outln!("{}{dest} ({})", shown(&r.source), shown(&r.mode));
         }
     }
 }

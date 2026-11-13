@@ -126,6 +126,42 @@ fn file_list_shows_registrations() {
     assert_eq!(v["files"][0]["dest"], dest.as_str(), "JSON has absolute paths");
 }
 
+/// A registration that cannot deploy (no file, a directory, an ignored or
+/// a skipped file) has no destination: null in JSON, only the reason in text.
+#[test]
+fn file_list_shows_no_destination_for_a_registration_that_cannot_deploy() {
+    let fx = Fixture::new();
+    let entries =
+        ["gone", "d", "skip.me", "x.age.gpg", "rule.x", "ok"].map(|s| format!("[[files]]\nsource = \"{s}\"\n"));
+    let rule = "[[global_rules]]\nfamily = \"unix\"\nignore = [\"rule.x\"]\n";
+    fx.write("rustow.toml", &format!("version = 1\n{}{rule}", entries.concat()));
+    fx.write(".rustowignore", "skip.me\n");
+    for f in ["d/f", "skip.me", "x.age.gpg", "rule.x", "ok"] {
+        fx.write(f, "x");
+    }
+    let v: serde_json::Value = serde_json::from_str(&fx.ok(&["file", "list", "--json"]).stdout).unwrap();
+    let rows = v["files"].as_array().unwrap();
+    assert_eq!(rows.len(), 6, "{v}");
+    for row in rows {
+        let deploys = row["source"] == "ok";
+        assert_eq!(row["dest"].is_null(), !deploys, "{row}");
+        assert_eq!(row["mode"] == "copy", deploys, "{row}");
+    }
+    let text = fx.ok(&["file", "list"]).stdout;
+    let entry = "(invalid: rustow.toml [[files]] entry";
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        [
+            &format!("d {entry} is a directory, not a file)"),
+            &format!("gone {entry} does not exist (remove the entry, e.g. with `rustow file remove`))"),
+            "ok -> ~/ok (copy)",
+            "rule.x (invalid: ignored by [[global_rules]] #1 (family == \"unix\"))",
+            &format!("skip.me {entry} is ignored by .rustowignore)"),
+            "x.age.gpg (invalid: nested encryption suffixes are not supported)",
+        ]
+    );
+}
+
 #[test]
 fn file_remove_keeps_deployed_copy() {
     let fx = registered();

@@ -13,7 +13,7 @@ use crate::fsops;
 use crate::paths::RelPath;
 use crate::repo::Context;
 use crate::report::{Change, Listed, Printer};
-use crate::source::{Discovery, classify, discover};
+use crate::source::{Discovery, discover};
 use crate::state::{Registration, State};
 
 pub fn add(ctx: &mut Context, printer: &Printer, paths: &[String], dry_run: bool) -> Result<i32> {
@@ -125,15 +125,21 @@ fn unregister(text: &mut String, state: &mut State, arg: &str) -> Result<Change>
     ))
 }
 
+/// Each registration with its destination and mode. One that is not a
+/// source of the discovery cannot deploy: no destination, and the reason.
 pub fn list(ctx: &mut Context, printer: &Printer) -> Result<i32> {
     ctx.load_state()?;
+    let discovery = ctx.discover()?;
     let paths: std::collections::BTreeSet<&RelPath> = ctx.config.files.keys().chain(&ctx.config.added_files).collect();
     let rows: Vec<Listed> = paths
         .into_iter()
         .map(|path| {
-            let (dest, mode) = match classify(path, &ctx.config) {
-                Ok(s) => (Some(ctx.dest_path(&s)), s.mode.shown_label()),
-                Err(e) => (None, format!("invalid: {e}")),
+            let source = (discovery.index().sources.get(path.as_str()).first())
+                .map(|&i| &discovery.sources[i])
+                .filter(|s| &s.path == path);
+            let (dest, mode) = match source {
+                Some(s) => (Some(ctx.dest_path(s)), s.mode.shown_label()),
+                None => (None, format!("invalid: {}", why_not(ctx, &discovery, path))),
             };
             Listed {
                 source: path.to_string(),
@@ -144,6 +150,19 @@ pub fn list(ctx: &mut Context, printer: &Printer) -> Result<i32> {
         .collect();
     printer.list("files", &rows);
     Ok(0)
+}
+
+/// Why a registration is not a source: the reason of the skipped path at
+/// or above it. Discovery skips each other one, except one that a
+/// `[[global_rules]]` entry ignores (`check_registrations`).
+fn why_not(ctx: &Context, discovery: &Discovery, path: &RelPath) -> String {
+    match discovery.skipped.iter().find(|s| path.starts_with(&s.path)) {
+        Some(s) => s.reason.clone(),
+        None => format!(
+            "ignored by {}",
+            ctx.ignore.ignoring_rule(path, false).unwrap_or("[[global_rules]]")
+        ),
+    }
 }
 
 /// Current configuration text ("" when absent) and its file mode.
