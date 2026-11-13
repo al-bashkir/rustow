@@ -39,7 +39,7 @@ The state records a destination whose source is gone. `status` and the deploy co
 - "another rustow process": a second run holds the lock. Wait for it.
 - Render error: the message gives the template and line. Check for undefined variables. Use `is defined`.
 - Decrypt error: see below.
-- "cannot write to directory X: Permission denied …; elevated privileges may be required": you cannot write the directory of a home destination. Change the directory. Under the default policy nothing was written.
+- "cannot write to directory X: Permission denied …; elevated privileges may be required": you cannot write the directory of a home destination. Change the directory. Under the default policy, rustow wrote the other items. With `--on-conflict abort`, it wrote nothing.
 - State file error after the report: rustow wrote the items in the report, but it could not save the state. Fix the state directory, then run `rustow apply` again. It adopts correct destinations.
 - Interrupted: rustow stopped between items. Run again.
 

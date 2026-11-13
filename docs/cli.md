@@ -88,7 +88,7 @@ warning: gone.json: rustow.toml [[files]] entry does not exist (remove the entry
 
 `-q` hides these lines. With `--json`, the output has a `warnings` array. Each object has `source` and `reason`. Warnings do not change the exit code. `status` shows a skipped source as SKIPPED. `check` prints the warnings, but they are not problems. `unlink` and `undeploy` read only the state, so they do not look at skipped sources.
 
-Problems that are not about one source still stop every command with exit 2. Examples: TOML syntax, an unknown key, an unsupported `version`, a bad `mode` string, a bad cache or state directory, a repository path that is not UTF-8.
+Problems that are not about one source still stop every command with exit 2. Examples: TOML syntax, an unknown key, an unsupported `version`, a bad `mode` string, a repository path that is not UTF-8, a cache or state directory that is the repository or one of its parents, or an in-repository cache or state directory that holds files that are not rustow's. Some problems with these directories have other exit codes: a state directory that you do not own, or that is not a real directory, exits 4. A symlink or a non-directory above an in-repository cache or state directory exits 3. See [cache and state directories](configuration.md#cache-and-state-directories).
 
 ## Conflict policies
 
@@ -117,9 +117,9 @@ Problems that are not about one source still stop every command with exit 2. Exa
 
 Two sources collide when they have the same destination, for example `x`, `x.age` and `x.tmpl`. On a case-insensitive target filesystem, names that differ only in case collide too. A root target of `/` always counts as case-sensitive (known limit).
 
-A home destination in a directory that you cannot write is an error already in the plan: "cannot write to directory X: Permission denied …; elevated privileges may be required". So the dry run, `status` (ERROR) and the real run show it. `apply` exits with 4, also with `--dry-run`. Under the default policy, rustow then writes nothing. `diff` only reads, so it still shows the desired content of such an item. A system file that you cannot write goes through sudo instead ("via sudo"). See [system files](system-files.md#privileges).
+A home destination in a directory that you cannot write is an error already in the plan: "cannot write to directory X: Permission denied …; elevated privileges may be required". So the dry run, `status` (ERROR) and the real run show it. `apply` exits with 4, also with `--dry-run`. Under the default policy, rustow writes the other items and reports this item as an error. With `--on-conflict abort`, rustow writes nothing. `diff` only reads, so it still shows the desired content of such an item. A system file that you cannot write goes through sudo instead ("via sudo"). See [system files](system-files.md#privileges).
 
-Before it replaces an object, rustow checks the object again. If it changed, the item fails. rustow creates a new destination only if nothing appeared at that path in the meantime. After it writes, rustow verifies. rustow updates the state for each successful item. There is no global rollback. SIGINT, SIGTERM and SIGHUP stop rustow between items. A second signal exits at once.
+Before it replaces an object, rustow checks the object again. If it changed, the item fails. rustow creates a new destination only if nothing appeared at that path in the meantime. After it writes, rustow verifies. There is no global rollback. SIGINT, SIGTERM and SIGHUP stop rustow between items. A second signal exits at once. rustow saves the state file once, at the end of the run. It also saves it when a first signal stops the run. After SIGKILL or a second signal, rustow saves no record of this run. Then the next `apply` adopts the destinations that are correct.
 
 ## Deploy output
 

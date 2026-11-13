@@ -73,13 +73,13 @@ rustow takes the symlink model of GNU Stow and the templates, copies, encryption
 | Templates          | No                                        | Go `text/template`                                           | MiniJinja, rendered into a repository-local cache, then linked; copied when the template has mode, owner or group, or is a system file |
 | Encryption         | No                                        | age, GPG and others                                          | age (built in) and GPG (installed `gpg`), decrypted into a private cache                                                               |
 | System files       | A separate stow directory with target `/` | Not the main use                                             | `rustowroot/`, copies only; run as yourself, sudo only for files you cannot write                                                      |
-| Conflicts          | Stop                                      | Prompt by default                                            | Stop and change nothing by default; `skip`, `backup` or `overwrite` on request                                                         |
+| Conflicts          | Stop                                      | Prompt by default                                            | Leave each conflict and deploy the rest by default; `abort`, `backup` or `overwrite` on request                                        |
 | State              | None; the links are the state             | Persistent state                                             | Persistent state, plus a check of the real filesystem before every change                                                              |
 | Directory folding  | On by default                             | No                                                           | On by default, never directly under `~` or `~/.local`; per file or directory with `[[file_rules]]`                                     |
 
 ## Limits
 
-- rustow has no global rollback. It records state for each successful item.
+- rustow has no global rollback. It saves the state file once, at the end of the run. After SIGKILL, the next `apply` adopts the destinations that are correct.
 - rustow does not erase data securely. Removed plaintext can stay in Git history, backups and deployed files.
 - The template language is MiniJinja. It is not fully compatible with Go templates.
 

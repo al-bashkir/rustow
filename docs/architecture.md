@@ -10,7 +10,7 @@ rustow has one planner and one executor. Every command that changes files builds
 4. `source` discovers files and classifies each into a `Mode`. A file or configuration entry that cannot deploy goes to `Discovery::skipped`, with the reason. It also finds collisions and applies the selector.
 5. `plan` decides an action for each destination, with the decision table. It integrates `fold`. It also plans removals.
 6. `execute` predicts and executes the plan, or removes. `fsops` does the file operations. A system file that the user cannot write (`Deploy::sudo`, `Removal::sudo`) waits until the end of the run. Then `sudo::call` sends all of them to one `sudo rustow __sudo-helper`. The helper runs `execute::write_dest` or `execute::remove_dest`, the same code as a normal run, as root.
-7. `state` records each successful item. `report` prints the result.
+7. `execute` records each successful item in the `State` in memory. `app::finish` saves the state file once, at the end of the run. `report` prints the result.
 
 ## Modules
 

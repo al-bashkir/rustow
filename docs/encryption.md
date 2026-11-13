@@ -83,7 +83,7 @@ One repository can hold `.age` and `.gpg` sources together.
 - The outer suffix selects the backend for deployment, `diff`, `status` and `enc edit`. rustow never tries the other backend.
 - `encryption.backend` and `rustow enc --backend` choose only the backend for new encryption.
 - Each backend has its own configuration: `recipients` and `identity_files` for age, `[encryption.gpg]` for GnuPG. Configure each backend that you use.
-- rustow loads age identities and runs `gpg` only for selected, non-ignored sources of that backend. On a machine without `gpg`, ignore the `.gpg` sources, or give paths to other sources. Otherwise the `.gpg` items fail, and under the default policy rustow writes nothing.
+- rustow loads age identities and runs `gpg` only for selected, non-ignored sources of that backend. On a machine without `gpg`, ignore the `.gpg` sources, or give paths to other sources. Otherwise each `.gpg` item is an error. Under the default policy, rustow deploys the other items and exits with 4. With `--on-conflict abort`, it writes nothing.
 - `x.age` and `x.gpg` deploy to the same destination `x`. This is a collision: `check` reports it, and both items are conflicts (exit 3). A plaintext `x` next to `x.age` collides too. Keep one source for each destination.
 
 ## Encrypt a file
@@ -128,4 +128,4 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - Changing between plain and encrypted retargets rustow's own link automatically.
 - `--dry-run` decrypts in memory only. Missing keys make the plan incomplete (exit 4).
 - Ignored sources are never decrypted.
-- Plaintext lifetime: `apply` writes each decrypted item into the cache as plaintext (mode 0600), under `.rustowcache/decrypted/` or, for an encrypted template, `.rustowcache/rendered/`. This is also true for `decrypt+copy`. The entry stays after `apply` and after `undeploy`. `rustow cache clean` removes each entry that no deployed link uses. An entry behind a deployed link stays as long as the link. The next `apply` writes the entries of copies again. So run `rustow cache clean` after `apply` or `undeploy` to keep plaintext only where a deployed link needs it.
+- Plaintext lifetime: `apply` writes each decrypted item into the cache as plaintext (mode 0600), under `.rustowcache/decrypted/` or, for an encrypted template, `.rustowcache/rendered/`. This is also true for `decrypt+copy`. The entry stays after `apply` and after `undeploy`. `rustow cache clean` removes each entry that no deployed link uses. An entry behind a deployed link stays as long as the link. The next `apply` writes the entries of copies again. So run `rustow cache clean` after `apply` or `undeploy` to keep plaintext only where a deployed link needs it. `--backup` keeps each file that it replaces under `<state_dir>/backups/`. Such a file can be decrypted plaintext. `rustow cache clean` does not remove backups. Remove them yourself.
