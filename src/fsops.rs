@@ -656,11 +656,39 @@ mod tests {
             ..Default::default()
         };
         fs::write(d.join("f"), b"x").unwrap();
-        dir.set_meta(name("f"), mode(0o600)).unwrap();
+        dir.set_meta(name("f"), mode(0o600), |_| Ok(())).unwrap();
         assert_eq!(mode_of(&d.join("f")), 0o600);
         symlink(d.join("f"), d.join("l")).unwrap();
-        assert!(dir.set_meta(name("l"), mode(0o644)).is_err());
+        assert!(dir.set_meta(name("l"), mode(0o644), |_| Ok(())).is_err());
         assert_eq!(mode_of(&d.join("f")), 0o600);
+        let refused = dir.set_meta(name("f"), mode(0o640), |_| Err(Error::Failed("no".into())));
+        assert!(refused.is_err());
+        assert_eq!(mode_of(&d.join("f")), 0o600, "a refused check changes nothing");
+    }
+
+    /// The check sees the open file, and the change reaches that file, also
+    /// when another file takes its name after the check (a hardlink swap).
+    #[test]
+    fn set_meta_changes_the_file_that_its_check_saw() {
+        let (_t, d) = tmp();
+        let dir = open(&d);
+        fs::write(d.join("f"), b"mine").unwrap();
+        fs::hard_link(d.join("f"), d.join("kept")).unwrap();
+        fs::write(d.join("other"), b"theirs").unwrap();
+        fs::set_permissions(d.join("other"), fs::Permissions::from_mode(0o644)).unwrap();
+        let meta = FileMeta {
+            mode: Some(0o600),
+            ..Default::default()
+        };
+        let mut seen = None;
+        dir.set_meta(name("f"), meta, |now| {
+            seen = Some(now);
+            fs::rename(d.join("other"), d.join("f")).map_err(|e| Error::Failed(e.to_string()))
+        })
+        .unwrap();
+        assert!(matches!(seen, Some(Observed::File { hash, .. }) if hash == Hash::of(b"mine")));
+        assert_eq!(mode_of(&d.join("f")), 0o644, "the swapped-in file is not changed");
+        assert_eq!(mode_of(&d.join("kept")), 0o600, "the checked file is");
     }
 
     #[test]

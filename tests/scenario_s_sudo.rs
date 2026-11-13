@@ -752,6 +752,28 @@ fn diff_shows_the_metadata_of_an_unreadable_system_file() {
     assert!(!diff.stderr.contains("app.conf"), "{diff:?}");
 }
 
+/// A metadata update through the helper judges the file that it opens:
+/// when root changed the file after the plan, the helper leaves it.
+#[test]
+fn a_metadata_update_leaves_a_system_file_that_changed_after_the_plan() {
+    let s = Sudo::new(FAKE);
+    assert_eq!(s.run(&["apply"]).code, 0);
+    let app = unreadable(&s, "etc/app.conf");
+    let config = read(&s.fx.repo.join("rustow.toml"));
+    s.fx.write(
+        "rustow.toml",
+        &config.replace("app.conf\"\n", "app.conf\"\nmode = \"0640\"\n"),
+    );
+    // "root" changes the mode after the plan, before the helper runs
+    let late = format!("chmod 400 '{}'\n\"$@\"\n", app.display());
+    fs::write(&s.script, FAKE.replacen("\"$@\"\n", &late, 1)).unwrap();
+
+    let out = s.run(&["apply", "--force"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(out.stdout.contains("changed while rustow was running"), "{out:?}");
+    assert_eq!(mode(&app), 0o400);
+}
+
 #[test]
 fn an_unreadable_system_file_without_a_record_is_a_conflict() {
     let s = Sudo::new(FAKE);

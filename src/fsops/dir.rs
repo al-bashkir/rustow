@@ -289,8 +289,13 @@ impl Dir {
             }
             opened => opened?,
         };
-        let hash = Hash::copy(&mut file, meta.len(), &mut io::sink())
-            .ctx(|| format!("read {}", self.entry(name).display()))?;
+        self.observed(name, &mut file, &meta)
+    }
+
+    /// Hash (streamed) and metadata of `file`, the open regular file `name`.
+    fn observed(&self, name: &OsStr, file: &mut File, meta: &fs::Metadata) -> Result<Observed> {
+        let hash =
+            Hash::copy(file, meta.len(), &mut io::sink()).ctx(|| format!("read {}", self.entry(name).display()))?;
         Ok(Observed::File {
             hash,
             mode: meta.mode() & 0o7777,
@@ -375,8 +380,11 @@ impl Dir {
     }
 
     /// Changes owner and mode of the regular file `name`; refuses a symlink.
-    pub fn set_meta(&self, name: &OsStr, meta: FileMeta) -> Result<()> {
-        let (file, _) = self.open_regular(name)?;
+    /// `check` judges what the open file is, and the change reaches that
+    /// file, also when another one takes the name in the meantime.
+    pub fn set_meta(&self, name: &OsStr, meta: FileMeta, check: impl FnOnce(Observed) -> Result<()>) -> Result<()> {
+        let (mut file, stat) = self.open_regular(name)?;
+        check(self.observed(name, &mut file, &stat)?)?;
         chown_chmod(&file, &self.entry(name), (meta.uid, meta.gid), meta.mode)
     }
 

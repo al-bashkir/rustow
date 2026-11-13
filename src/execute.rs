@@ -556,12 +556,14 @@ fn put(dir: &Dir, name: &OsStr, d: &Deploy, new: &mut NewFile, replace: bool) ->
     }
 }
 
+/// The check and the change see one open file: another file that takes
+/// the name in the meantime is never changed.
 fn fix_metadata(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
-    recheck(dir, name, &d.path, &d.observed, d.expect.as_ref())?;
-    if let Desired::File { meta, .. } = &d.desired {
-        dir.set_meta(name, *meta)?;
+    let judge_now = |now| judge(&d.path, &d.observed, now, d.expect.as_ref());
+    match &d.desired {
+        Desired::File { meta, .. } => dir.set_meta(name, *meta, |now| judge_now(now).map(drop)),
+        Desired::Symlink(_) => judge_now(dir.inspect(name)?).map(drop),
     }
-    Ok(())
 }
 
 /// Moves the conflicting destination to the backup path `to` (its
@@ -598,7 +600,11 @@ fn backup_path(run: &Run, item: &PlanItem, cache: bool) -> PathBuf {
 /// that cannot read it either (not root) fails. For a destination that the
 /// plan could not see, see `found_hidden`.
 fn recheck(dir: &Dir, name: &OsStr, path: &Path, planned: &Observed, expect: Option<&Hash>) -> Result<Observed> {
-    let now = dir.inspect(name)?;
+    judge(path, planned, dir.inspect(name)?, expect)
+}
+
+/// `recheck` of what `path` is now (`now`).
+fn judge(path: &Path, planned: &Observed, now: Observed, expect: Option<&Hash>) -> Result<Observed> {
     if *planned == Observed::Hidden {
         return found_hidden(path, now, expect);
     }
