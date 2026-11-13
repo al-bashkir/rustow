@@ -66,7 +66,7 @@ homedir = "~/.gnupg"
 
 By default rustow never asks for a passphrase, so it can run from scripts and timers.
 
-- GnuPG: rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once with "the secret key is locked (unlock it in gpg-agent or rerun with --interactive)". With `--interactive`, a wrong passphrase fails with "bad passphrase for the secret key". A missing key fails with "no usable secret key for any recipient in the keyring". rustow reads these cases from the gpg status output. It adds the first line that gpg prints, after "; gpg: ".
+- GnuPG: rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once with "the secret key is locked (unlock it in gpg-agent or rerun with --interactive)". With `--interactive`, a wrong passphrase fails with "bad passphrase for the secret key". A pinentry that is cancelled or cannot ask (for example, no terminal, or a window that is too small) fails with "the passphrase entry failed or was cancelled". A missing key fails with "no usable secret key for any recipient in the keyring". rustow reads these cases from the gpg status output. It adds the first line that gpg prints, after "; gpg: ".
 - age: a passphrase-protected identity file fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)".
 - The failed item is an error. `apply`, `diff` and `enc edit` exit with 4. `status` shows ERROR. `enc` needs no private key: it writes the encrypted file and prints "not verified" with the reason.
 - With the global `--interactive` flag, rustow runs gpg with `--pinentry-mode ask`, so `gpg-agent` starts its pinentry. For age, rustow asks for the identity passphrase on the terminal.
@@ -97,7 +97,7 @@ rustow enc --backend gpg .ssh/secret.conf
 `enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies the new file: it decrypts it and compares the result with the plaintext. The result is one of these:
 
 - Verified.
-- Not verified: rustow prints "not verified" and the reason, and exits with 0. The reason is "no matching private key available here", or "the identity or key is locked; run with --interactive to verify". With `--interactive`, a wrong passphrase gives "the identity or key could not be unlocked".
+- Not verified: rustow prints "not verified" and the reason, and exits with 0. The reason is "no matching private key available here", or "the identity or key is locked; run with --interactive to verify". With `--interactive`, a wrong passphrase, or a passphrase entry that failed or was cancelled, gives "the identity or key could not be unlocked".
 - Failed: the new file does not decrypt, or it decrypts to other bytes. rustow exits with 4 and keeps the plaintext.
 
 It moves `[[files]]` and `[[template_rules]]` entries, and the `file add` and copy-mode `link` registrations in the state, to the new name. It keeps the comments around `source` and CRLF line endings in `rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.

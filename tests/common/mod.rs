@@ -550,11 +550,16 @@ impl GpgHome {
 
     /// Like `stub_pinentry`, with `pin` as the answer.
     pub fn stub_pinentry_answering(&self, pin: &str) -> PathBuf {
+        self.stub_pinentry_replying(&format!("echo 'D {pin}'; echo OK"))
+    }
+
+    /// Like `stub_pinentry`; the shell commands `reply` answer GETPIN.
+    pub fn stub_pinentry_replying(&self, reply: &str) -> PathBuf {
         let log = self.dir.join("pinentry.log");
         let script = write_file(
             &self.dir.join("pinentry-stub"),
             &format!(
-                "#!/bin/sh\necho called >> '{}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  case \"$cmd\" in\n    GETPIN) echo 'D {pin}'; echo OK ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
+                "#!/bin/sh\necho called >> '{}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  case \"$cmd\" in\n    GETPIN) {reply} ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
                 log.display()
             ),
         );

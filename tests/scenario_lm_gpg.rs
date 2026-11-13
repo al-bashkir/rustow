@@ -135,6 +135,36 @@ fn wrong_passphrase_is_named() {
     assert!(!fx.home_path("s").exists());
 }
 
+/// A pinentry that is cancelled or fails (no terminal, a window too
+/// small) leaves the key locked: the message says so, not "no key".
+#[test]
+fn cancelled_passphrase_entry_is_named() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    home.stub_pinentry_replying("echo 'ERR 83886179 Operation cancelled <Pinentry>'");
+    fx.gpg_config(&home, &[&home.fpr], "");
+    fx.gpg_encrypt("s.gpg", "locked secret\n", &home);
+    let out = fx.run(&["--interactive", "apply"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("s.gpg: the passphrase entry failed or was cancelled; gpg: "),
+        "{out:?}"
+    );
+    assert!(!out.stdout.contains("no usable secret key"), "{out:?}");
+    fx.write("p", "plain\n");
+    let enc = fx.run(&["--interactive", "enc", "--backend", "gpg", "p"]);
+    assert_eq!(enc.code, 0, "{enc:?}");
+    assert!(
+        enc.stdout
+            .contains("not verified: the identity or key could not be unlocked"),
+        "{enc:?}"
+    );
+}
+
 /// An edit that re-encrypts to a key whose secret part is not here says
 /// so, as `enc` does: the next edit here cannot decrypt it.
 #[test]

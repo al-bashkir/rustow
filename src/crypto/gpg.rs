@@ -81,11 +81,7 @@ pub fn check_decrypt_status(lines: &[String], exit_ok: bool) -> Result<(), Failu
 /// A usable secret key, and no failure record.
 fn check_decrypt_keys(recs: &[Record]) -> Result<(), Failure> {
     if has(recs, "NO_SECKEY") && !has(recs, "DECRYPTION_OKAY") {
-        return Err(match unlock_error(recs) {
-            Some(BAD_PASSPHRASE) => Failure::Locked("bad passphrase for the secret key".into()),
-            Some(_) => Failure::Locked("the secret key is locked".into()),
-            None => Failure::NoKey("no usable secret key for any recipient in the keyring".into()),
-        });
+        return Err(missing_or_locked(unlock_error(recs)));
     }
     if has(recs, "DECRYPTION_FAILED") || has(recs, "FAILURE") || has(recs, "ERROR") {
         return Err(Failure::Corrupt("decryption failed".into()));
@@ -93,20 +89,37 @@ fn check_decrypt_keys(recs: &[Record]) -> Result<(), Failure> {
     Ok(())
 }
 
+/// The failure of a NO_SECKEY record, from the code of `unlock_error`.
+fn missing_or_locked(code: Option<u32>) -> Failure {
+    match code {
+        Some(BAD_PASSPHRASE) => Failure::Locked("bad passphrase for the secret key".into()),
+        Some(CANCELED) => Failure::Locked("the passphrase entry failed or was cancelled".into()),
+        Some(_) => Failure::Locked("the secret key is locked".into()),
+        None => Failure::NoKey("no usable secret key for any recipient in the keyring".into()),
+    }
+}
+
 /// gpg-agent error codes of a secret key that is here but stays locked.
 const BAD_PASSPHRASE: u32 = 11;
 const NO_PINENTRY: u32 = 85;
+const CANCELED: u32 = 99;
+/// The part of GnuPG that made an error (bits 24-30 of a code): the
+/// pinentry, which was cancelled or failed (no terminal, a window too small).
+const SOURCE_PINENTRY: u32 = 5;
 
 /// The error code when gpg-agent has a secret key for a recipient but
 /// could not unlock it. A locked key also gives NO_SECKEY, so only the code
 /// of `ERROR pkdecrypt_failed <code>` tells it apart (its low 16 bits; the
-/// high bits name the part of GnuPG).
+/// high bits name the part of GnuPG). Each pinentry error counts as `CANCELED`.
 fn unlock_error(recs: &[Record]) -> Option<u32> {
     recs.iter()
         .filter(|(w, args)| *w == "ERROR" && args.first() == Some(&"pkdecrypt_failed"))
         .filter_map(|(_, args)| args.get(1)?.parse::<u32>().ok())
-        .map(|code| code & 0xFFFF)
-        .find(|code| matches!(*code, BAD_PASSPHRASE | NO_PINENTRY))
+        .map(|code| match (code >> 24) & 0x7F {
+            SOURCE_PINENTRY => CANCELED,
+            _ => code & 0xFFFF,
+        })
+        .find(|code| matches!(*code, BAD_PASSPHRASE | NO_PINENTRY | CANCELED))
 }
 
 /// The status must show public-key encrypted OpenPGP data. Each refusal
@@ -463,7 +476,8 @@ mod tests {
     }
 
     /// Status records of gpg 2.4 for a key that is missing, locked without
-    /// a pinentry, or given a bad passphrase: the ERROR code tells them apart.
+    /// a pinentry, given a bad passphrase, or whose pinentry was cancelled,
+    /// timed out or had a window too small: the ERROR code tells them apart.
     #[test]
     fn decrypt_status_tells_a_locked_key_from_a_missing_one() {
         let status = |code: &str| {
@@ -481,6 +495,10 @@ mod tests {
         for (code, why) in [
             ("67108949", "the secret key is locked"),
             ("67108875", "bad passphrase for the secret key"),
+            ("83886179", "the passphrase entry failed or was cancelled"),
+            ("83886142", "the passphrase entry failed or was cancelled"),
+            ("83886381", "the passphrase entry failed or was cancelled"),
+            ("67108963", "the passphrase entry failed or was cancelled"),
         ] {
             let e = check_decrypt_status(&status(code), false).unwrap_err();
             assert_eq!(e, Failure::Locked(why.into()), "{code}");
