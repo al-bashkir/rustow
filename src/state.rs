@@ -251,6 +251,13 @@ pub fn moved_roots(dir: &Path) -> Vec<PathBuf> {
 /// The error is the reason, without the file name.
 fn parse_versioned(bytes: &[u8], steps: &[Migration]) -> std::result::Result<State, String> {
     let newest = steps.len() as u32 + 1;
+    // The newest format goes straight into the types: a `Value` tree takes
+    // several times the memory. Anything else takes the checks below.
+    if let Ok(state) = serde_json::from_slice::<State>(bytes)
+        && state.version == newest
+    {
+        return Ok(state);
+    }
     let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let version = value["version"]
         .as_u64()
@@ -503,6 +510,25 @@ mod tests {
         assert_eq!(s.created_dirs.len(), 3);
         let current = serde_json::to_vec(&sample()).unwrap();
         assert_eq!(parse_versioned(&current, &MIGRATIONS).unwrap(), sample());
+    }
+
+    /// A state that the typed parse refuses gets the reason of the `Value` parse.
+    #[test]
+    fn a_refused_state_names_the_reason() {
+        let refused = |text: &str| parse_versioned(text.as_bytes(), &MIGRATIONS).unwrap_err();
+        assert_eq!(refused("{not json"), "key must be a string at line 1 column 2");
+        assert_eq!(
+            refused(r#"{"version": "1", "repo": "/r"}"#),
+            r#"unsupported state version "1""#
+        );
+        assert_eq!(refused(r#"{"repo": "/r"}"#), "unsupported state version null");
+        assert_eq!(refused("[1]"), "unsupported state version null");
+        let entry = r#"{"source": "../x", "scope": "home", "mode": "link", "source_hash": "h"}"#;
+        let bad = format!(r#"{{"version": 1, "repo": "/r", "entries": {{"/h/x": {entry}}}}}"#);
+        assert_eq!(refused(&bad), "invalid path '../x': '..' is not allowed");
+        let twice = r#"{"version": 1, "repo": "/a", "repo": "/r"}"#;
+        let last = parse_versioned(twice.as_bytes(), &MIGRATIONS).unwrap();
+        assert_eq!(last.repo, Path::new("/r"), "the last key wins, as in a `Value`");
     }
 
     #[test]
