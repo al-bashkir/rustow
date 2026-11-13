@@ -439,6 +439,13 @@ fn diff_summarizes_a_large_text_file() {
         out.stdout,
         format!("~/.big: differ (0 → {} bytes); too large to show\n", big.len())
     );
+    let json: serde_json::Value = serde_json::from_str(&fx.run(&["diff", "--json"]).stdout).unwrap();
+    let item = &json["items"][0];
+    assert_eq!(item["binary"], false, "a large text file is not binary: {item}");
+    assert!(
+        item["diff"].as_str().unwrap().ends_with("too large to show\n"),
+        "{item}"
+    );
     fx.ok(&["apply"]);
     let same = fx.run(&["diff"]);
     assert_eq!((same.code, same.stdout.as_str()), (0, ""), "equal content is not read");

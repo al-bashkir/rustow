@@ -506,6 +506,16 @@ mod tests {
     }
 
     #[test]
+    fn write_new_never_replaces_anything() {
+        let (_t, d) = tmp();
+        write_new(&d.join("f"), b"one", 0o640).unwrap();
+        assert_eq!(mode_of(&d.join("f")), 0o640);
+        assert!(write_new(&d.join("f"), b"two", 0o644).is_err());
+        assert_eq!(fs::read(d.join("f")).unwrap(), b"one");
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 1, "no temporary file left");
+    }
+
+    #[test]
     fn write_atomic_never_follows_dest_symlink() {
         let (_t, d) = tmp();
         fs::write(d.join("victim"), b"keep").unwrap();
