@@ -567,10 +567,19 @@ pub(crate) fn parse_owner(field: &str, text: &str) -> std::result::Result<Owner,
     if text.is_empty() || text.contains([':', '/']) || text.chars().any(char::is_whitespace) {
         return Err(format!("{field} \"{text}\" is not a valid user or group name"));
     }
-    Ok(match text.parse::<u32>() {
-        Ok(id) => Owner::Id(id),
-        Err(_) => Owner::Name(text.to_owned()),
-    })
+    match text.parse::<u32>() {
+        Ok(id) => owner_id(id).ok_or_else(|| format!("{field} \"{text}\" is too large; {LARGEST_ID}")),
+        Err(_) => Ok(Owner::Name(text.to_owned())),
+    }
+}
+
+/// The end of the message for an id that `owner_id` refuses.
+pub(crate) const LARGEST_ID: &str = "the largest id is 4294967294";
+
+/// The owner or group with the numeric `id`. chown takes 4294967295
+/// ((uid_t)-1) as "no change", so that id is none.
+pub(crate) fn owner_id(id: u32) -> Option<Owner> {
+    (id != u32::MAX).then_some(Owner::Id(id))
 }
 
 fn validate_extension(ext: &str) -> Result<()> {
@@ -790,6 +799,22 @@ group = "root"
                 e.contains(&format!("{field} \"{bad}\" is not a valid user or group name")),
                 "{e}"
             );
+        }
+    }
+
+    /// chown takes the id 4294967295 as "no change", so it is no owner or group.
+    #[test]
+    fn owner_and_group_reject_the_id_that_means_no_change() {
+        for field in ["owner", "group"] {
+            let text = |id: &str| format!("version = 1\n[[files]]\nsource = \"a\"\n{field} = \"{id}\"\n");
+            let e = err(&text("4294967295"));
+            assert!(
+                e.contains(&format!(
+                    "{field} \"4294967295\" is too large; the largest id is 4294967294"
+                )),
+                "{e}"
+            );
+            assert!(Config::parse(&text("4294967294")).is_ok());
         }
     }
 

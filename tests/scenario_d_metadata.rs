@@ -65,6 +65,24 @@ fn unknown_owner_is_an_explicit_error() {
     assert!(!fx.home_path(".ssh/config").exists());
 }
 
+/// chown takes the id 4294967295 as "no change": rustow would write the
+/// file and then find the wrong owner. The configuration refuses it.
+#[test]
+fn the_id_that_means_no_change_is_a_configuration_error() {
+    for key in ["owner", "group"] {
+        let fx = with_rule(&format!("{key} = \"4294967295\""));
+        let out = fx.run(&["apply"]);
+        assert_eq!(out.code, 2, "{out:?}");
+        assert!(
+            out.stderr.contains(&format!(
+                "{key} \"4294967295\" is too large; the largest id is 4294967294"
+            )),
+            "{out:?}"
+        );
+        assert!(!fx.home_path(".ssh/config").exists());
+    }
+}
+
 /// `check` finds the unknown names that `apply` would fail on.
 #[test]
 fn check_reports_unknown_owner_and_group_names() {

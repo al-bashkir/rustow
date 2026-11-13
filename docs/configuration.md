@@ -175,7 +175,7 @@ group = "root"
 A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. A system template under `rustowroot/` deploys as a copy also without a rule.
 
 - `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. Only the digits 0–7 are allowed, with no sign or space. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits. The mode must include owner read (`0400`), because rustow reads the deployed file to find changes. Any other mode is a configuration error (exit 2).
-- `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem.
+- `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem. The largest id is 4294967294: `chown` takes 4294967295 as "no change", so it is a configuration error (exit 2).
 
 A rule on a file that is not a template skips that file with a warning. A registered source or a rule source must exist. It must not be ignored, reserved or a directory. Otherwise rustow skips the entry with a warning, for example "warning: gone.json: rustow.toml [[files]] entry does not exist (remove the entry, e.g. with `rustow file remove`)". A template in `[[files]]` is skipped too.
 

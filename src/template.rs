@@ -8,7 +8,7 @@ use minijinja::syntax::SyntaxConfig;
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 use serde_json::{Value, json};
 
-use crate::config::{Metadata, Owner, parse_mode, parse_owner};
+use crate::config::{LARGEST_ID, Metadata, Owner, owner_id, parse_mode, parse_owner};
 use crate::hash::Hash;
 
 /// The built-in facts about this machine that templates and meta conditions read.
@@ -377,8 +377,9 @@ fn owner_value(stmt: &Stmt, already: bool, id_key: &str, name_key: &str) -> Resu
         };
         return n
             .parse()
-            .map(Owner::Id)
-            .map_err(|_| format!("meta.{id_key} {n} is too large"));
+            .ok()
+            .and_then(owner_id)
+            .ok_or_else(|| format!("meta.{id_key} {n} is too large; {LARGEST_ID}"));
     }
     parse_owner(name_key, text_value(stmt)?)
 }
@@ -570,6 +571,18 @@ mod tests {
     fn meta_block_may_be_the_whole_file() {
         let b = split_meta("{%- meta.uid = 0 %}").unwrap();
         assert_eq!((b.body, b.lines), ("", 1));
+    }
+
+    /// chown takes the id 4294967295 as "no change", so it is no owner or group.
+    #[test]
+    fn meta_ids_stop_below_the_id_that_means_no_change() {
+        for key in ["uid", "gid"] {
+            assert_eq!(
+                split_meta(&format!("{{%- meta.{key} = 4294967295 %}}\n")).unwrap_err(),
+                format!("line 1: meta.{key} 4294967295 is too large; the largest id is 4294967294")
+            );
+            assert!(split_meta(&format!("{{%- meta.{key} = 4294967294 %}}\n")).is_ok());
+        }
     }
 
     #[test]
