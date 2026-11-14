@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "rustow"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "age",
  "clap",
