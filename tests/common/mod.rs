@@ -138,15 +138,19 @@ impl Fixture {
     }
 
     /// Like `run`, but fails instead of hanging or exhausting memory: rustow
-    /// gets 1 GiB of address space and is killed after `secs` seconds.
+    /// gets 1 GiB of address space (Linux only: macOS refuses to lower it)
+    /// and is killed after `secs` seconds.
     pub fn run_within(&self, secs: u64, args: &[&str]) -> Out {
-        use std::os::unix::process::CommandExt;
         use std::time::{Duration, Instant};
         let mut cmd = self.command(args, &[]);
-        let limit = nix::sys::resource::Resource::RLIMIT_AS;
-        // SAFETY: setrlimit is async-signal-safe; nothing else runs between fork and exec.
-        unsafe {
-            cmd.pre_exec(move || Ok(nix::sys::resource::setrlimit(limit, 1 << 30, 1 << 30)?));
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            let limit = nix::sys::resource::Resource::RLIMIT_AS;
+            // SAFETY: setrlimit is async-signal-safe; nothing else runs between fork and exec.
+            unsafe {
+                cmd.pre_exec(move || Ok(nix::sys::resource::setrlimit(limit, 1 << 30, 1 << 30)?));
+            }
         }
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

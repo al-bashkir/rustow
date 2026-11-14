@@ -257,7 +257,9 @@ fn symlink_inside_the_cache_is_refused() {
 
 /// While a template renders, its text and its output are in memory once
 /// each; then only the output. A 32 MB template deploys as a copy in
-/// 110 MiB of address space: rustow itself needs about 30 MiB.
+/// 110 MiB of address space: rustow itself needs about 30 MiB. macOS
+/// refuses to lower the address space limit.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_large_template_is_in_memory_at_most_twice() {
     let fx = Fixture::new();
