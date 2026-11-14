@@ -270,7 +270,12 @@ fn a_name_that_is_not_utf8_is_skipped() {
     fx.write(".bashrc", "b\n");
     fx.write(".config/app/a.conf", "a\n");
     let bad = std::ffi::OsStr::from_bytes(b"bad\xff");
-    fs::write(fx.repo.join(bad), "x").unwrap();
+    if let Err(e) = fs::write(fx.repo.join(bad), "x") {
+        // APFS (macOS) refuses such names.
+        assert_eq!(e.raw_os_error(), Some(nix::libc::EILSEQ), "{e}");
+        eprintln!("SKIP: the file system refuses names that are not UTF-8");
+        return;
+    }
     write_file(&fx.repo.join(".config/app").join(bad).join("inner"), "i");
     let apply = fx.run(&["apply"]);
     assert_eq!(apply.code, 0, "{apply:?}");
