@@ -1,81 +1,63 @@
 <h1 align="center"><img src="assets/logo.svg" alt="rustow" width="360"></h1>
 
-rustow is a dotfiles manager for Linux and macOS. It is written in Rust.
+<p align="center">A dotfiles manager for Linux and macOS, written in Rust.</p>
 
-The repository root mirrors your home directory. The `rustowroot/` directory mirrors `/`. rustow deploys each file as a symlink, a copy, or a rendered template. It can keep secrets encrypted in the repository with age or GnuPG.
+> [!NOTE]
+> AI disclosure: the code, the tests and the documentation of rustow were written with Claude Opus, an AI model from Anthropic. Run `rustow apply --dry-run` first, and read the [Limits](#limits), before you trust it with files that matter.
 
-## Features
+rustow keeps your dotfiles in one Git repository and deploys them to your machine. The repository looks like your home directory. rustow links, copies or renders each file to the right place, and it never overwrites your files without a check.
 
-- Symlinks by default. Copies, templates and encrypted files are opt-in by file name or by configuration.
-- Templates use MiniJinja. Undefined variables are errors.
-- Encrypted sources: age (built in) and GnuPG (installed `gpg`).
-- System files under `rustowroot/`. They deploy only as copies, never as symlinks. You run rustow as yourself; it asks `sudo` only for the system files that you cannot write.
-- Safe conflict handling. By default rustow leaves each item that conflicts or fails to plan, deploys the other items and exits with 3 (4 for an error). `--on-conflict abort` changes nothing when any item conflicts or fails to plan.
-- A problem with one source does not stop the run. rustow skips that source with a warning and deploys the rest.
-- State file per repository. `status`, `diff` and `check` show differences. They exit with code 1 when they find some.
-- `.rustowignore` with gitignore syntax.
+```text
+~/dotfiles/                         deploys to
+├── .bashrc                    →    ~/.bashrc                (symlink)
+├── .gitconfig.tmpl            →    ~/.gitconfig             (template)
+├── .config/nvim/init.lua      →    ~/.config/nvim/init.lua  (symlink)
+├── .ssh/id_ed25519.age        →    ~/.ssh/id_ed25519        (decrypted)
+└── rustowroot/etc/app.conf.tmpl →  /etc/app.conf            (template, via sudo)
+```
+
+## Why rustow
+
+- **Simple by default.** One repository, no naming scheme. A file deploys as a symlink, like GNU Stow.
+- **More when you need it.** Add a `.tmpl` suffix for a template. Add `.age` or `.gpg` for an encrypted file. Register a file as a copy with `rustow file add`.
+- **Safe.** rustow checks the real file system before each change. It leaves a conflicting file alone, deploys the rest and tells you what it skipped. `--dry-run` shows every action first.
+- **System files too.** Files under `rustowroot/` deploy to `/`. You run rustow as yourself. It asks `sudo` only for the files that you cannot write.
+- **Scriptable.** Each command has an exit code and a `--json` output.
+
+## Why this project exists
+
+rustow exists because the other tools did not offer the features that its author needed. It was written mainly for personal use. The code is public in case it is useful to someone else too.
+
+Not sure if rustow fits you? See the [comparison with Stow, chezmoi, dotter, yadm and Tuckr](docs/comparison.md).
 
 ## Install
-
-With [Homebrew](https://brew.sh) on macOS (Apple silicon) or Linux:
 
 ```sh
 brew install al-bashkir/tools/rustow
 ```
 
-Or download an archive from [GitHub releases](https://github.com/al-bashkir/rustow/releases). There are static binaries for Linux x86_64 and arm64, and a binary for macOS on Apple silicon.
+This works on macOS (Apple silicon) and on Linux. For other ways, such as release archives or `cargo install`, see [Installation](docs/installation.md).
 
-On other systems, build from source with Rust 1.99 or newer:
-
-```sh
-cargo install --locked --git https://github.com/al-bashkir/rustow
-```
-
-See [docs/installation.md](docs/installation.md).
-
-## Quick start
+## Try it in two minutes
 
 ```sh
-cd ~/dotfiles
-rustow init
-rustow apply --dry-run
-rustow apply
+mkdir ~/dotfiles && cd ~/dotfiles
+git init
+rustow init                 # create rustow.toml and the ignore files
+cp ~/.bashrc .bashrc        # put a file in the repository
+rustow apply --dry-run      # show what would happen
+rustow apply --backup       # deploy; save the old ~/.bashrc as a backup
+rustow status               # check that all is in place
 ```
 
-An example repository is in [examples/dotfiles](examples/dotfiles). See [docs/quickstart.md](docs/quickstart.md).
+The [Quick start](docs/quickstart.md) explains each step. A complete example repository is in [examples/dotfiles](examples/dotfiles).
 
 ## Documentation
 
-- [Installation](docs/installation.md)
-- [Quick start](docs/quickstart.md)
-- [Initialization](docs/initialization.md)
-- [Configuration](docs/configuration.md)
-- [Ignore rules](docs/ignore.md)
-- [Templates](docs/templates.md)
-- [File management (copies)](docs/file-management.md)
-- [Encryption](docs/encryption.md)
-- [System files](docs/system-files.md)
-- [Command reference](docs/cli.md)
-- [Architecture](docs/architecture.md)
-- [Security](docs/security.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Developer notes (AGENTS.md)](AGENTS.md)
-
-## Differences from GNU Stow and chezmoi
-
-rustow takes the symlink model of GNU Stow and the templates, copies, encryption and state of chezmoi. It is a separate program, not a clone of either.
-
-| Topic              | GNU Stow                                  | chezmoi                                                      | rustow                                                                                                                                 |
-| ------------------ | ----------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository layout  | One directory per package                 | Source names with attribute prefixes (`dot_`, `private_`, …) | Flat: the repository mirrors `~`; `rustowroot/` mirrors `/`                                                                            |
-| Default deployment | Symlink                                   | Copy                                                         | Symlink                                                                                                                                |
-| Copies             | No                                        | Default                                                      | Per file, with `rustow file add`                                                                                                       |
-| Templates          | No                                        | Go `text/template`                                           | MiniJinja, rendered into a repository-local cache, then linked; copied when the template has mode, owner or group, or is a system file |
-| Encryption         | No                                        | age, GPG and others                                          | age (built in) and GPG (installed `gpg`), decrypted into a private cache                                                               |
-| System files       | A separate stow directory with target `/` | Not the main use                                             | `rustowroot/`, copies only; run as yourself, sudo only for files you cannot write                                                      |
-| Conflicts          | Stop                                      | Prompt by default                                            | Leave each conflict and deploy the rest by default; `abort`, `backup` or `overwrite` on request                                        |
-| State              | None; the links are the state             | Persistent state                                             | Persistent state, plus a check of the real filesystem before every change                                                              |
-| Directory folding  | On by default                             | No                                                           | On by default, never directly under `~` or `~/.local`; per file or directory with `[[file_rules]]`                                     |
+- [Quick start](docs/quickstart.md): your first repository, step by step.
+- [Concepts](docs/concepts.md): how files map to destinations, and how they deploy.
+- [Comparison with other tools](docs/comparison.md): Stow, chezmoi, dotter, yadm and Tuckr.
+- [Full documentation index](docs/README.md): every page, listed by goal.
 
 ## Limits
 

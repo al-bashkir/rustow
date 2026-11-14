@@ -2,6 +2,16 @@
 
 rustow supports two backends. A source with the outer suffix `.age` uses age. A source with the outer suffix `.gpg` uses GnuPG. rustow never falls back to the other backend or to plaintext.
 
+## In short
+
+1. Make a key. For age, run `age-keygen` (see [age](#age)). For GnuPG, use a key that is in your keyring (see [GnuPG](#gnupg)).
+2. Put the public part in `rustow.toml` under `[encryption]`.
+3. Encrypt a file: `rustow enc .ssh/secret.conf`. This writes `.ssh/secret.conf.age`.
+4. Run `rustow apply`. rustow decrypts the file into a private cache and links the destination to it.
+5. To change the file later, run `rustow enc edit .ssh/secret.conf.age`.
+
+age needs no extra program. GnuPG needs `gpg` on your machine. Scripts and timers never see a passphrase prompt unless you pass `--interactive`.
+
 ## age
 
 rustow includes age. It uses X25519 recipients.

@@ -2,6 +2,14 @@
 
 A template is a source file whose name ends in the template extension (default `.tmpl`). rustow renders it with MiniJinja and deploys the result. The destination name drops the extension. `.gitconfig.tmpl` becomes `~/.gitconfig`.
 
+## In short
+
+- Name the file `something.tmpl`. Write `{{ vars.name }}` for your own values and `{% if os == "macos" %}…{% endif %}` for conditions.
+- Set your values in `[vars]` in `rustow.toml`. The built-in variables are `os`, `hostname`, `username` and more (see [Variables](#variables)).
+- An undefined variable is an error, so a typo never gives an empty value.
+- Run `rustow check` to render the templates offline. Run `rustow diff` to see what would change.
+- By default the result is a symlink to a cache file. To set the mode or the owner, use a `[[template_rules]]` entry or a [meta block](#meta-block). Then the result is a copy.
+
 ## Deployment
 
 - Without a rule, a home template deploys as `template+link`. rustow writes the rendered file to the cache and links to it.

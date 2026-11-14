@@ -1,6 +1,12 @@
 # File management (copies)
 
-By default rustow links home files. To deploy a file as a copy instead, register it with `rustow file add`, or list it in `[[files]]` in `rustow.toml`. With `[defaults] mode = "copy"`, `apply` links no file by itself: you add each file with `file add` or `rustow link <path>`. See [copy mode](configuration.md#copy-mode). A system file under `rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
+By default rustow links home files. Some files must be real files, not links. Examples are files that a program rewrites or that need a fixed mode. Register such a file as a copy in one of these ways:
+
+- Run `rustow file add <path>`. This registers the file on this machine only.
+- List the file in `[[files]]` in `rustow.toml`. This applies on every machine.
+- Set `[defaults] mode = "copy"`. Then `apply` links no file by itself. You add each file with `file add` or `rustow link <path>`. See [copy mode](configuration.md#copy-mode).
+
+A system file under `rustowroot/` that is not a template must be registered. Until then, rustow skips it with a warning. See [system files](system-files.md).
 
 ```sh
 rustow file add .config/example/settings.json

@@ -4,26 +4,84 @@ Files under `rustowroot/` mirror `/`. `rustowroot/etc/example/example.conf.tmpl`
 
 The `rustowroot` directory itself is never deployed.
 
+## In short
+
+- Put a system file under `rustowroot/`, at the path that it has in `/`.
+- System files are always copies, never symlinks.
+- A template (`.tmpl`) deploys with no more setup. A plain file or an encrypted file must be registered first: `rustow file add rustowroot/etc/x`, or a `[[files]]` entry. Until then, rustow skips it with a warning.
+- Run rustow as yourself. It asks `sudo` only for the files that you cannot write. A dry run never runs sudo.
+- Set `owner`, `group` and `mode` in a `[[template_rules]]` or `[[files]]` entry. See the [example](#example).
+
 ## Root target
 
 `--root-target DIR` (or `defaults.root_target`) replaces `/`. rustow prints a notice when it is not `/`. Tests use it.
 
 ## Privileges
 
-Run rustow as yourself. Your HOME, your state, your keys and your cache stay in use. When a system file needs root, rustow asks `sudo` for it:
+Run rustow as yourself. Your HOME, your state, your keys and your cache stay in use. When a system file needs root, rustow asks `sudo` for it. A home file never uses sudo. A home destination that you cannot write fails with "…; elevated privileges may be required".
 
-- rustow plans as you. A system file needs sudo when it must change and you cannot write its directory, or when it must belong to another user, or to a group that you are not a member of (for example a root-owned file in `/etc`, or `owner`/`group` in a template rule or a `[[files]]` entry). A file of yours may get any of your own groups (your primary group and your supplementary groups) without sudo.
-- `apply`, `file apply` and `template apply` write the other items first. Then they run `sudo rustow __sudo-helper` once for all system files that need it. sudo asks for your password on the terminal. rustow renders and decrypts as you and sends the planned content to the helper on a pipe. A system file writes no cache entry. It reads a copied source again at that time. The helper checks the hash of the content against the plan before it replaces the file, so a source that changed during the run fails its item with "content changed while rustow was running". The helper first prints a line that says that it runs. rustow sends the first file only after that line, so when sudo stops before the helper starts (for example, after a wrong password), nothing was sent. rustow sends one file at a time, and it waits for the result of that file before it sends the next one. So each result counts on its own: when sudo or the helper stops in the middle, the files that the helper reported stay recorded, and each later item fails. The helper writes each destination with the same code as a normal run. It opens the planned directory again with your trust rule, checks the destination again, writes through that open directory, and verifies the result. When the directory is not the planned one any more (for example, someone replaced it while sudo asked for the password), the item fails with "changed while rustow was running" and nothing is written. Your state records the result.
-- `undeploy` removes such a system file, and the empty directories that rustow created for it, through the helper in the same way.
-- The plan and the dry run show these items with "via sudo". A dry run, `status` and `diff` never run sudo.
-- When sudo fails (wrong password, no terminal), each of these items fails with a message, for example "sudo failed (exit status: 1); system files that you cannot write need it". The other items stay done. The exit code is 4.
-- rustow waits for the sudo program (or `RUSTOW_SUDO`) and for each answer of the helper. It holds the repository lock all that time, so another rustow command on the same repository stops with "another rustow process is using this repository". A program that hangs blocks the run. The first SIGINT (Ctrl-C), SIGTERM or SIGHUP is noted: rustow waits for the answer to the current file, sends no more files and waits until the program exits. The helper catches these signals too (sudo passes a Ctrl-C at the terminal on to it): it finishes the current file and ends when rustow closes its input. The items that the helper did not get fail and share one output line, for example "error interrupted before 3 items; nothing changed". JSON gives each of them with the detail "interrupted before this item; nothing changed". A second signal exits at once with 130, and rustow saves no record of this run. The program can still run after that, and a file that the helper got already can still be written. The next run finds the desired content in that file and records it. At the password prompt, Ctrl-C stops sudo too.
-- A home file never uses sudo. A home destination that you cannot write fails with "…; elevated privileges may be required".
-- `RUSTOW_SUDO` names another program, for example `doas`. rustow runs `$RUSTOW_SUDO -- <rustow> __sudo-helper`. An empty `RUSTOW_SUDO` counts as unset. A name without a `/` (also the default `sudo`) is looked up in the absolute directories of `PATH` only.
-- For `--backup`, rustow makes the backup directories as you before sudo starts. The helper never makes a directory. It only moves the old file into that directory. So the backup file of a root-owned system file is owned by root, but its directory is yours: you can remove it, and later backups work. Before the helper moves a file from a directory that you cannot search, it removes the permissions of the group and of others from it. So you cannot read the backup either.
-- rustow chooses the name of each temporary file of the helper and journals it before the helper starts. When the helper dies in the middle of a file, the next run prints the command that removes the temporary file, for example "remove it with `sudo rm -- /etc/.rustow-tmp-…`". See [temporary files](cli.md#temporary-files-of-an-interrupted-run).
-- The helper checks each job before it acts. It refuses a path that is not absolute or that has an empty, `.` or `..` part, a directory or temporary name that is not one name, a name with a NUL byte, and a mode with a setuid, setgid or sticky bit (as the configuration does). It writes nothing for such a job, and the item fails with "the sudo helper refuses this job: …". So an update through sudo of an existing file with such a bit fails too.
-- Anyone who may run `sudo rustow` may write any file as root: do not allow rustow in sudoers without a password unless you mean that.
+### When a file needs sudo
+
+rustow plans as you. A system file needs sudo when:
+
+- it must change and you cannot write its directory, or
+- it must belong to another user, or to a group that you are not a member of. For example, a root-owned file in `/etc`, or `owner` or `group` in a template rule or a `[[files]]` entry.
+
+A file of yours may get any of your own groups (your primary group and your supplementary groups) without sudo.
+
+The plan and the dry run show these items with "via sudo". A dry run, `status` and `diff` never run sudo.
+
+### How the sudo step works
+
+1. `apply`, `file apply` and `template apply` write the other items first.
+2. They run `sudo rustow __sudo-helper` once for all system files that need it. sudo asks for your password on the terminal.
+3. rustow renders and decrypts as you. It sends the planned content to the helper on a pipe. A system file writes no cache entry. rustow reads a copied source again at that time.
+4. The helper checks the hash of the content against the plan before it replaces the file. A source that changed during the run fails its item with "content changed while rustow was running".
+5. The helper opens the planned directory again with your trust rule, checks the destination again, writes through that open directory, and verifies the result. When the directory is not the planned one any more (for example, someone replaced it while sudo asked for the password), the item fails with "changed while rustow was running" and nothing is written.
+6. Your state records the result.
+
+The helper prints a line that says that it runs. rustow sends the first file only after that line. So when sudo stops before the helper starts (for example, after a wrong password), nothing was sent. rustow sends one file at a time and waits for the result of that file before it sends the next one. So each result counts on its own: when sudo or the helper stops in the middle, the files that the helper reported stay recorded, and each later item fails.
+
+`undeploy` removes such a system file, and the empty directories that rustow created for it, through the helper in the same way.
+
+### When sudo fails
+
+When sudo fails (wrong password, no terminal), each of these items fails with a message, for example "sudo failed (exit status: 1); system files that you cannot write need it". The other items stay done. The exit code is 4.
+
+rustow waits for the sudo program (or `RUSTOW_SUDO`) and for each answer of the helper. It holds the repository lock all that time, so another rustow command on the same repository stops with "another rustow process is using this repository". A program that hangs blocks the run.
+
+### Interruption
+
+- The first SIGINT (Ctrl-C), SIGTERM or SIGHUP is noted. rustow waits for the answer to the current file, sends no more files and waits until the program exits.
+- The helper catches these signals too (sudo passes a Ctrl-C at the terminal on to it). It finishes the current file and ends when rustow closes its input.
+- The items that the helper did not get fail and share one output line, for example "error interrupted before 3 items; nothing changed". JSON gives each of them with the detail "interrupted before this item; nothing changed".
+- A second signal exits at once with 130, and rustow saves no record of this run. The program can still run after that, and a file that the helper got already can still be written. The next run finds the desired content in that file and records it.
+- At the password prompt, Ctrl-C stops sudo too.
+
+### Other sudo programs
+
+`RUSTOW_SUDO` names another program, for example `doas`. rustow runs `$RUSTOW_SUDO -- <rustow> __sudo-helper`. An empty `RUSTOW_SUDO` counts as unset. A name without a `/` (also the default `sudo`) is looked up in the absolute directories of `PATH` only.
+
+### Backups
+
+For `--backup`, rustow makes the backup directories as you before sudo starts. The helper never makes a directory. It only moves the old file into that directory. So the backup file of a root-owned system file is owned by root, but its directory is yours: you can remove it, and later backups work. Before the helper moves a file from a directory that you cannot search, it removes the permissions of the group and of others from it. So you cannot read the backup either.
+
+### Temporary files
+
+rustow chooses the name of each temporary file of the helper and journals it before the helper starts. When the helper dies in the middle of a file, the next run prints the command that removes the temporary file, for example "remove it with `sudo rm -- /etc/.rustow-tmp-…`". See [temporary files](cli.md#temporary-files-of-an-interrupted-run).
+
+### What the helper refuses
+
+The helper checks each job before it acts. It refuses:
+
+- a path that is not absolute or that has an empty, `.` or `..` part,
+- a directory or temporary name that is not one name, or a name with a NUL byte,
+- a mode with a setuid, setgid or sticky bit (as the configuration does).
+
+It writes nothing for such a job, and the item fails with "the sudo helper refuses this job: …". So an update through sudo of an existing file with such a bit fails too.
+
+> [!WARNING]
+> Anyone who may run `sudo rustow` may write any file as root. Do not allow rustow in sudoers without a password unless you mean that.
 
 ### Destinations that you cannot read
 

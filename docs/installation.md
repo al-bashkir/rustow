@@ -1,5 +1,15 @@
 # Installation
 
+Pick one way:
+
+| You have                                         | Use                                                           |
+| ------------------------------------------------ | ------------------------------------------------------------- |
+| macOS (Apple silicon) or Linux with Homebrew     | [Homebrew](#homebrew): `brew install al-bashkir/tools/rustow` |
+| Linux x86_64 or arm64, or macOS on Apple silicon | [A release archive](#download-a-release)                      |
+| Any other system, or macOS on Intel              | [Build from source](#build-and-install)                       |
+
+Then [check the installation](#check-the-installation).
+
 ## Requirements
 
 - Linux or macOS.

@@ -8,6 +8,24 @@ rustow [OPTIONS] [COMMAND]
 
 Without a command, rustow runs `apply`.
 
+## Everyday commands
+
+| I want to…                                | Run                                       |
+| ----------------------------------------- | ----------------------------------------- |
+| Set up a repository                       | `rustow init`                             |
+| See what would change                     | `rustow apply --dry-run`                  |
+| Deploy everything                         | `rustow apply`                            |
+| Deploy, and keep my old files as backups  | `rustow apply --backup`                   |
+| See what is out of place                  | `rustow status`                           |
+| See the content differences               | `rustow diff`                             |
+| Check the repository without deploying    | `rustow check`                            |
+| Check the environment (keys, directories) | `rustow doctor`                           |
+| Encrypt or edit a secret                  | `rustow enc PATH`, `rustow enc edit PATH` |
+| Deploy one file as a copy                 | `rustow file add PATH`                    |
+| Remove what rustow deployed               | `rustow undeploy`                         |
+
+The sections below describe every option and command.
+
 ## Global options
 
 | Option                   | Meaning                                                                                                                                                                                                                      |
