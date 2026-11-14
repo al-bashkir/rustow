@@ -226,11 +226,10 @@ fn enc_run(ctx: &mut Context, state: &mut State, e: EncArgs, p: &Printer) -> Res
 /// The script the shell sources: on each TAB it calls `rustow` (found on
 /// PATH, so it survives upgrades) with `RUSTOW_COMPLETE` set.
 fn completions(shell: clap_complete::Shell) -> Result<i32> {
-    let shells = clap_complete::env::Shells::builtins();
     let name = clap::ValueEnum::to_possible_value(&shell).map(|v| v.get_name().to_owned());
     let completer = name
         .as_deref()
-        .and_then(|n| shells.completer(n))
+        .and_then(|n| crate::complete::SHELLS.completer(n))
         .ok_or_else(|| Error::Usage(format!("no completion support for {shell}")))?;
     let mut script = Vec::new();
     completer

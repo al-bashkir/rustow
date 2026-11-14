@@ -68,6 +68,32 @@ fn conflict_options_complete_only_where_they_resolve_conflicts() {
     }
 }
 
+/// Options complete only after the word starts with `-`; before that,
+/// commands and paths complete, and an empty list stays empty.
+#[test]
+fn options_complete_only_after_a_dash() {
+    let fx = repo();
+    for words in [
+        &[""][..],
+        &["file", ""],
+        &["apply", ""],
+        &["check", ""],
+        &["apply", ".c"],
+    ] {
+        assert_eq!(options(&fx, words), Vec::<String>::new(), "{words:?}");
+    }
+    assert!(complete(&fx, &[""]).contains(&"apply".to_owned()));
+    assert!(complete(&fx, &["file", ""]).contains(&"add".to_owned()));
+    assert!(options(&fx, &["file", "add", "-"]).contains(&"-n".to_owned()));
+    assert!(options(&fx, &["apply", "--b"]).contains(&"--backup".to_owned()));
+    // fish sends no index: the last word is the current one.
+    let fish = fx.run_env(&["--", "rustow", "file", ""], &[("RUSTOW_COMPLETE", "fish")]);
+    assert!(fish.stdout.lines().any(|l| l.starts_with("add")), "{fish:?}");
+    assert!(!fish.stdout.lines().any(|l| l.starts_with('-')), "{fish:?}");
+    let fish = fx.run_env(&["--", "rustow", "file", "add", "-"], &[("RUSTOW_COMPLETE", "fish")]);
+    assert!(fish.stdout.lines().any(|l| l.starts_with("-n")), "{fish:?}");
+}
+
 /// A command shows, completes and takes only the global options it reads.
 #[test]
 fn global_options_show_only_where_a_command_reads_them() {
