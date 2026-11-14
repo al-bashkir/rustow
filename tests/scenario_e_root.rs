@@ -492,7 +492,7 @@ fn a_group_writable_system_source_deploys_only_in_a_user_private_group() {
 /// directory, it does not take the directory's group.
 #[test]
 fn a_new_system_file_does_not_take_the_group_of_a_setgid_directory() {
-    use nix::unistd::{getegid, getgroups};
+    use rustix::process::{getegid, getgroups};
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let fx = Fixture::new();
     fx.write(
