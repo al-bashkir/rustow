@@ -52,6 +52,13 @@ pub enum Walked {
         path: PathBuf,
         reason: String,
     },
+    /// The last component is a directory (`id`) that the user may not
+    /// search, so the walk cannot open it without `O_PATH` (macOS). Its
+    /// entries are `Observed::Hidden`; root opens it later.
+    Sealed {
+        path: PathBuf,
+        id: DirId,
+    },
 }
 
 /// Most symlinks that one walk follows, as in the kernel.
@@ -70,6 +77,8 @@ enum Next {
     Into(Dir),
     Missing,
     Blocked(PathBuf, String),
+    /// A directory (path, id) that the user may not search.
+    Sealed(PathBuf, DirId),
 }
 
 /// The planned directory at `path`, walked again for `me`; any other
@@ -77,11 +86,28 @@ enum Next {
 pub fn open_planned(path: &Path, id: DirId, me: u32) -> Result<Dir> {
     match Dir::open(path, me)? {
         Walked::Ready(dir) if dir.id()? == id => Ok(dir),
-        _ => Err(Error::Failed(format!(
-            "{} changed while rustow was running; left unchanged",
-            path.display()
-        ))),
+        Walked::Sealed { path: at, id: now } if now == id => {
+            Err(Error::Failed(format!("{}: {}", at.display(), Errno::EACCES.desc())))
+        }
+        _ => Err(changed(path)),
     }
+}
+
+/// Like `open_planned`, also for a planned directory that the user may
+/// not search (`Walked::Sealed`): it checks, and opens nothing.
+pub fn check_planned(path: &Path, id: DirId, me: u32) -> Result<()> {
+    match Dir::open(path, me)? {
+        Walked::Ready(dir) if dir.id()? == id => Ok(()),
+        Walked::Sealed { id: now, .. } if now == id => Ok(()),
+        _ => Err(changed(path)),
+    }
+}
+
+fn changed(path: &Path) -> Error {
+    Error::Failed(format!(
+        "{} changed while rustow was running; left unchanged",
+        path.display()
+    ))
 }
 
 /// The existing directory at `path`, walked for `me`.
@@ -90,6 +116,7 @@ pub fn open_ready(path: &Path, me: u32) -> Result<Dir> {
         Walked::Ready(dir) => Ok(dir),
         Walked::Missing { .. } => Err(Error::Failed(format!("{}: {}", path.display(), Errno::ENOENT.desc()))),
         Walked::Blocked { path, reason } => Err(Error::Failed(format!("{}: {reason}", path.display()))),
+        Walked::Sealed { path, .. } => Err(Error::Failed(format!("{}: {}", path.display(), Errno::EACCES.desc()))),
     }
 }
 
@@ -164,6 +191,12 @@ impl Dir {
             Ok(dir) => Ok(Next::Into(dir)),
             Err(Errno::ENOENT) => Ok(Next::Missing),
             Err(Errno::ELOOP | Errno::ENOTDIR) => self.follow(name, self.entry(name), me, budget),
+            // Without `O_PATH` (macOS), opening needs search permission on
+            // the directory itself; this one still has a known identity.
+            Err(Errno::EACCES) => match fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+                Ok(st) if kind(&st) == SFlag::S_IFDIR => Ok(Next::Sealed(self.entry(name), id_of(&st))),
+                _ => Ok(Next::Blocked(self.entry(name), Errno::EACCES.desc().into())),
+            },
             Err(e) => Ok(Next::Blocked(self.entry(name), e.desc().into())),
         }
     }
@@ -230,6 +263,8 @@ impl Dir {
             Walked::Ready(dir) => Ok(Ok(dir)),
             Walked::Missing { .. } => blocked("symlink does not resolve"),
             Walked::Blocked { path, reason } => Ok(Err(Next::Blocked(path, reason))),
+            // ponytail: the trust rule needs the target open; root-only targets block.
+            Walked::Sealed { path, .. } => Ok(Err(Next::Blocked(path, Errno::EACCES.desc().into()))),
         }
     }
 
@@ -552,9 +587,22 @@ fn walk_in(mut cur: Dir, rel: &Path, me: u32, budget: &mut u32) -> Result<Walked
             Next::Into(next) => cur = next,
             Next::Missing => return Ok(missing(cur, &parts[i..])),
             Next::Blocked(path, reason) => return Ok(Walked::Blocked { path, reason }),
+            Next::Sealed(path, id) => return Ok(sealed(path, id, i + 1 == parts.len())),
         }
     }
     Ok(Walked::Ready(cur))
+}
+
+/// A directory that the user may not search ends a walk: as the `last`
+/// component it is `Sealed`; above that it blocks, as it does with `O_PATH`.
+fn sealed(path: PathBuf, id: DirId, last: bool) -> Walked {
+    match last {
+        true => Walked::Sealed { path, id },
+        false => Walked::Blocked {
+            path,
+            reason: Errno::EACCES.desc().into(),
+        },
+    }
 }
 
 fn missing(dir: Dir, rest: &[&OsStr]) -> Walked {

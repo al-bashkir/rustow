@@ -193,6 +193,8 @@ fn walk(parent: &Path, me: u32) -> std::result::Result<Dir, Leftover> {
         Ok(Walked::Ready(dir)) => Ok(dir),
         Ok(Walked::Missing { .. }) => Err(Leftover::Gone),
         Ok(Walked::Blocked { path, reason }) => Err(Leftover::Unchecked(format!("{}: {reason}", path.display()))),
+        // A directory that the user cannot search: only root can look, as in `found`.
+        Ok(Walked::Sealed { .. }) => Err(Leftover::NeedsRoot),
         Err(e) => Err(Leftover::Unchecked(e.to_string())),
     }
 }

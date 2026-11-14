@@ -330,6 +330,7 @@ fn target_dir(path: &Path, what: &str) -> Result<PathBuf> {
         Walked::Missing { .. } => refused(nix::errno::Errno::ENOENT.desc().into()),
         Walked::Blocked { path: at, reason } if at == path => refused(reason),
         Walked::Blocked { path: at, reason } => refused(format!("{}: {reason}", at.display())),
+        Walked::Sealed { .. } => refused(nix::errno::Errno::EACCES.desc().into()),
     }
 }
 

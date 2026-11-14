@@ -444,14 +444,24 @@ fn write_in(
     made: &mut Vec<PathBuf>,
 ) -> Result<Option<String>> {
     let (parent, name) = fsops::split(&d.path)?;
-    let (base, missing) = match &d.missing_dirs {
-        Some((existing, missing)) => (existing.as_path(), missing.as_slice()),
-        None => (parent, &[][..]),
-    };
+    let (base, missing) = planned_dir(d, parent);
+    // Nothing to write or to see: the directory need not open (macOS cannot, without `O_PATH`).
+    if d.decision == Decision::UpToDate && d.observed == Observed::Hidden {
+        return fsops::check_planned(base, d.dir_id, me).map(|()| None);
+    }
     let dir = make_dirs(fsops::open_planned(base, d.dir_id, me)?, missing, d.dir_mode, me, made)?;
     let detail = apply_dest(&dir, name, d, new, (policy, backup), me)?;
     verify(&dir, name, d)?;
     Ok(detail)
+}
+
+/// The existing directory that the plan walked for `d` (its `parent`, or
+/// the deepest one above it), and the directories to make below it.
+fn planned_dir<'a>(d: &'a Deploy, parent: &'a Path) -> (&'a Path, &'a [String]) {
+    match &d.missing_dirs {
+        Some((existing, missing)) => (existing.as_path(), missing.as_slice()),
+        None => (parent, &[][..]),
+    }
 }
 
 /// The directory `missing` names below `dir`, each made with `mode` when

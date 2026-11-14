@@ -17,7 +17,7 @@ use crate::hash::Hash;
 use crate::paths::RelPath;
 
 mod dir;
-pub use dir::{Dir, DirId, Walked, journal_to, open_planned, open_ready, temp_name};
+pub use dir::{Dir, DirId, Walked, check_planned, journal_to, open_planned, open_ready, temp_name};
 
 /// Name prefix of every temporary file rustow creates. Names with it are
 /// reserved at any depth, so a file left by a crash is never deployed.
@@ -75,6 +75,13 @@ pub fn inspect(path: &Path) -> Result<Observed> {
     match Dir::at(parent) {
         Ok(dir) => dir.inspect(name),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Observed::Missing),
+        // Without `O_PATH` (macOS), a parent that the user may not search
+        // does not open at all: as on Linux, its entry is hidden. Its `stat`
+        // needs search only above it, so a denied directory above the
+        // parent stays an error, as on Linux.
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied && fs::metadata(parent).is_ok_and(|m| m.is_dir()) => {
+            Ok(Observed::Hidden)
+        }
         Err(e) => Err(e).ctx(|| format!("inspect {}", path.display())),
     }
 }
@@ -314,6 +321,7 @@ pub fn parent_state(scope_root: &Path, dest: &RelPath, me: u32) -> Result<Parent
             missing,
         },
         Walked::Blocked { path, reason } => ParentState::Blocked { path, reason },
+        Walked::Sealed { path, id } => ParentState::Ready { dir: path, id },
     })
 }
 
@@ -950,6 +958,74 @@ mod tests {
             open.starts_with("symlink target is not safe") && open.contains("writable by others"),
             "{open}"
         );
+    }
+
+    /// A parent that the user cannot search is still a known directory: its
+    /// entries are `Hidden`, for the sudo helper to look at. macOS has no
+    /// `O_PATH`, so the walk cannot open it there; it must not block.
+    #[test]
+    fn a_parent_that_you_cannot_search_is_ready_and_its_entries_are_hidden() {
+        if geteuid().is_root() {
+            eprintln!("SKIP: root searches every directory");
+            return;
+        }
+        let (_t, d) = tmp();
+        fs::create_dir_all(d.join("h/sealed/sub")).unwrap();
+        let id = dir_id(&d.join("h/sealed"));
+        fs::set_permissions(d.join("h/sealed"), fs::Permissions::from_mode(0o000)).unwrap();
+        let me = geteuid().as_raw();
+        let ready = parent_state(&d.join("h"), &rel("sealed/x"), me);
+        let deeper = parent_state(&d.join("h"), &rel("sealed/sub/x"), me);
+        let seen = inspect(&d.join("h/sealed/x"));
+        let below = inspect(&d.join("h/sealed/sub/x"));
+        fs::set_permissions(d.join("h/sealed"), fs::Permissions::from_mode(0o755)).unwrap();
+        let dir = d.join("h/sealed");
+        assert_eq!(ready.unwrap(), ParentState::Ready { dir: dir.clone(), id });
+        assert_eq!(seen.unwrap(), Observed::Hidden);
+        assert!(below.is_err(), "{below:?}");
+        match deeper.unwrap() {
+            ParentState::Blocked { path, reason } => {
+                assert!(path.starts_with(&dir), "{path:?}");
+                assert_eq!(reason, nix::errno::Errno::EACCES.desc());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The planned directory must still have the planned identity, open or
+    /// sealed; a sealed one that is still planned is denied, not "changed".
+    #[test]
+    fn a_planned_directory_is_checked_by_its_identity() {
+        if geteuid().is_root() {
+            eprintln!("SKIP: root searches every directory");
+            return;
+        }
+        let (_t, d) = tmp();
+        fs::create_dir_all(d.join("open")).unwrap();
+        fs::create_dir_all(d.join("sealed")).unwrap();
+        let (open, sealed) = (d.join("open"), d.join("sealed"));
+        let (open_id, sealed_id) = (dir_id(&open), dir_id(&sealed));
+        let me = geteuid().as_raw();
+        let changed = |r: Result<()>| r.unwrap_err().to_string().contains("changed while rustow was running");
+        assert!(check_planned(&open, open_id, me).is_ok());
+        assert!(changed(check_planned(&open, sealed_id, me)));
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000)).unwrap();
+        let checked = (
+            check_planned(&sealed, sealed_id, me),
+            check_planned(&sealed, open_id, me),
+        );
+        let opened = (
+            open_planned(&sealed, sealed_id, me).map(drop),
+            open_planned(&sealed, open_id, me).map(drop),
+        );
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+        // Linux opens it (`O_PATH`); macOS gets its identity without opening it.
+        assert!(checked.0.is_ok(), "{:?}", checked.0);
+        assert!(changed(checked.1));
+        assert!(changed(opened.1));
+        if let Err(e) = opened.0 {
+            assert!(e.to_string().ends_with(nix::errno::Errno::EACCES.desc()), "{e}");
+        }
     }
 
     /// A symlinked ancestor must be owned by root or by the user, as each
