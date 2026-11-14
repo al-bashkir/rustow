@@ -28,24 +28,35 @@ The sections below describe every option and command.
 
 ## Global options
 
-| Option                   | Meaning                                                                                                                                                                                                                      |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <DIR>`           | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                 |
-| `--target <DIR>`         | Target of home sources. A symlink in the path must pass the [trust rule](security.md#trust-rule) for symlinked ancestors. Otherwise, or when the directory is missing, rustow stops with exit 2.                             |
-| `--root-target <DIR>`    | Target of `rustowroot/` sources. The same check as for `--target` applies.                                                                                                                                                   |
-| `-n`, `--dry-run`        | Show what would change. Change nothing.                                                                                                                                                                                      |
-| `--backup`               | Same as `--on-conflict backup`. `unlink` and `undeploy` refuse it.                                                                                                                                                           |
-| `--force`                | Same as `--on-conflict overwrite`. `unlink` and `undeploy` refuse it (`state export` uses it to replace FILE).                                                                                                               |
-| `--on-conflict <POLICY>` | `skip` (default), `abort`, `backup`, `overwrite`. `unlink` and `undeploy` take only `skip` and `abort`.                                                                                                                      |
-| `-v`, `--verbose`        | Also list unchanged items.                                                                                                                                                                                                   |
-| `-q`, `--quiet`          | Print only conflicts and errors.                                                                                                                                                                                             |
-| `--json`                 | JSON output. Paths of destinations are absolute; text output shortens the home directory to `~`.                                                                                                                             |
-| `--no-color`             | No colors. Also `NO_COLOR` with a value that is not empty.                                                                                                                                                                   |
-| `--interactive`          | Allow passphrase prompts: GnuPG pinentry and the age identity prompt. Without it, a locked key fails (exit 4) with a hint. This also applies to `enc edit`. See [encryption](encryption.md#interactive-and-unattended-runs). |
-| `-h`, `--help`           | Help.                                                                                                                                                                                                                        |
-| `-V`, `--version`        | Version.                                                                                                                                                                                                                     |
+| Option                | Meaning                                                                                                                                                                                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repo <DIR>`        | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                 |
+| `--target <DIR>`      | Target of home sources. A symlink in the path must pass the [trust rule](security.md#trust-rule) for symlinked ancestors. Otherwise, or when the directory is missing, rustow stops with exit 2.                             |
+| `--root-target <DIR>` | Target of `rustowroot/` sources. The same check as for `--target` applies.                                                                                                                                                   |
+| `-n`, `--dry-run`     | Show what would change. Change nothing.                                                                                                                                                                                      |
+| `-v`, `--verbose`     | Also list unchanged items.                                                                                                                                                                                                   |
+| `-q`, `--quiet`       | Print only conflicts and errors.                                                                                                                                                                                             |
+| `--json`              | JSON output. Paths of destinations are absolute; text output shortens the home directory to `~`.                                                                                                                             |
+| `--no-color`          | No colors. Also `NO_COLOR` with a value that is not empty.                                                                                                                                                                   |
+| `--interactive`       | Allow passphrase prompts: GnuPG pinentry and the age identity prompt. Without it, a locked key fails (exit 4) with a hint. This also applies to `enc edit`. See [encryption](encryption.md#interactive-and-unattended-runs). |
+| `-h`, `--help`        | Help.                                                                                                                                                                                                                        |
+| `-V`, `--version`     | Version.                                                                                                                                                                                                                     |
+
+A global option can go before or after the command.
 
 A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts at the working directory. rustow needs the working directory only for such a path and to find the repository. When the working directory was deleted, an absolute path still works. Else rustow stops with exit 4: "current directory: No such file or directory".
+
+## Conflict options
+
+`apply`, `link`, `file apply`, `template apply` and bare `rustow` take these options. Put them after the command: `rustow apply --backup`. Before a command, they exit 2. Other commands do not take them.
+
+| Option                   | Meaning                                           |
+| ------------------------ | ------------------------------------------------- |
+| `--backup`               | Same as `--on-conflict backup`.                   |
+| `--force`                | Same as `--on-conflict overwrite`.                |
+| `--on-conflict <POLICY>` | `skip` (default), `abort`, `backup`, `overwrite`. |
+
+`unlink` and `undeploy` take only `--on-conflict skip` and `--on-conflict abort`. `state export` takes `--force` to replace FILE.
 
 ## Commands
 

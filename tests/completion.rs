@@ -55,6 +55,20 @@ fn candidates(fx: &Fixture, words: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn conflict_options_complete_only_where_they_resolve_conflicts() {
+    let fx = repo();
+    let has = |words: &[&str], o: &str| options(&fx, words).contains(&o.to_owned());
+    for words in [&["--"][..], &["apply", "--"], &["file", "apply", "--"]] {
+        assert!(has(words, "--backup") && has(words, "--on-conflict"), "{words:?}");
+    }
+    assert!(has(&["unlink", "--"], "--on-conflict") && !has(&["unlink", "--"], "--force"));
+    assert!(has(&["state", "export", "--"], "--force"));
+    for words in [&["status", "--"][..], &["enc", "--"], &["state", "export", "--"]] {
+        assert!(!has(words, "--backup") && !has(words, "--on-conflict"), "{words:?}");
+    }
+}
+
+#[test]
 fn options_of_the_command_come_before_global_options() {
     let fx = repo();
     for (words, own) in [

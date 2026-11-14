@@ -20,6 +20,9 @@ use crate::execute::Policy;
                   at another time ends rustow with that signal (the shell shows 128 + its number)."
 )]
 pub struct Cli {
+    /// The conflict options of bare `rustow` (`apply`); a command takes its own.
+    #[command(flatten)]
+    pub conflict: Conflict,
     #[command(flatten)]
     pub global: Global,
     #[command(subcommand)]
@@ -42,15 +45,6 @@ pub struct Global {
     /// Show what would change; change nothing
     #[arg(short = 'n', long, global = true)]
     pub dry_run: bool,
-    /// Resolve conflicts by moving the existing destination into the backup directory
-    #[arg(long, global = true, conflicts_with_all = ["force", "on_conflict"])]
-    pub backup: bool,
-    /// Resolve conflicts by replacing an existing file or symlink (never a directory)
-    #[arg(long, global = true, conflicts_with = "on_conflict")]
-    pub force: bool,
-    /// Conflict policy (default: skip)
-    #[arg(long, global = true, value_enum, value_name = "POLICY")]
-    pub on_conflict: Option<Policy>,
     /// Also list unchanged items
     #[arg(short, long, global = true, conflicts_with = "quiet")]
     pub verbose: bool,
@@ -68,7 +62,25 @@ pub struct Global {
     pub interactive: bool,
 }
 
-impl Global {
+/// What a deploy does with a destination that it may not change.
+#[derive(Debug, Default, Args)]
+pub struct Conflict {
+    /// Resolve conflicts by moving the existing destination into the backup directory
+    #[arg(long, conflicts_with_all = ["force", "on_conflict"])]
+    pub backup: bool,
+    /// Resolve conflicts by replacing an existing file or symlink (never a directory)
+    #[arg(long, conflicts_with = "on_conflict")]
+    pub force: bool,
+    /// Conflict policy (default: skip)
+    #[arg(long, value_enum, value_name = "POLICY")]
+    pub on_conflict: Option<Policy>,
+}
+
+impl Conflict {
+    pub fn is_set(&self) -> bool {
+        self.backup || self.force || self.on_conflict.is_some()
+    }
+
     pub fn policy(&self) -> Policy {
         match (self.on_conflict, self.backup, self.force) {
             (Some(p), _, _) => p,
@@ -82,11 +94,11 @@ impl Global {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Deploy all eligible sources: links, copies, templates, encrypted files (default)
-    Apply(Paths),
+    Apply(DeployArgs),
     /// Deploy ordinary plaintext symlinks only
-    Link(Paths),
+    Link(DeployArgs),
     /// Remove rustow-managed ordinary symlinks
-    Unlink(Paths),
+    Unlink(RemovalArgs),
     /// Prepare a new or existing repository (config, ignore files, private cache); deploys nothing
     Init,
     /// Manage sources deployed by copying instead of symlinking
@@ -132,7 +144,7 @@ pub enum FileCommand {
     /// List registered sources
     List,
     /// Deploy registered copies only
-    Apply(Paths),
+    Apply(DeployArgs),
     /// Diff registered copies against their destinations (may print secrets)
     Diff(Paths),
 }
@@ -142,7 +154,7 @@ pub enum TemplateCommand {
     /// List template sources and how they deploy
     List,
     /// Deploy templates only (including encrypted templates)
-    Apply(Paths),
+    Apply(DeployArgs),
 }
 
 #[derive(Debug, Args)]
@@ -184,6 +196,9 @@ pub enum CacheCommand {
 pub enum StateCommand {
     /// Print the registrations of this machine as JSON (or write them to FILE; "-" prints them)
     Export {
+        /// Replace FILE when it exists
+        #[arg(long)]
+        force: bool,
         #[arg(value_name = "FILE")]
         file: Option<PathBuf>,
     },
@@ -214,7 +229,39 @@ pub struct UndeployArgs {
     #[arg(short, long)]
     pub yes: bool,
     #[command(flatten)]
+    pub removal: RemovalArgs,
+}
+
+#[derive(Debug, Default, Args)]
+pub struct DeployArgs {
+    #[command(flatten)]
+    pub conflict: Conflict,
+    #[command(flatten)]
     pub paths: Paths,
+}
+
+/// `unlink` and `undeploy` never remove a destination that changed.
+#[derive(Debug, Args)]
+pub struct RemovalArgs {
+    /// Conflict policy (default: skip); a changed destination always stays
+    #[arg(long, value_enum, value_name = "POLICY")]
+    pub on_conflict: Option<RemovalPolicy>,
+    #[command(flatten)]
+    pub paths: Paths,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum RemovalPolicy {
+    /// Remove nothing at all when any item conflicts.
+    Abort,
+    /// Leave changed destinations as they are; remove the rest (default).
+    Skip,
+}
+
+impl RemovalArgs {
+    pub fn abort(&self) -> bool {
+        self.on_conflict == Some(RemovalPolicy::Abort)
+    }
 }
 
 #[derive(Debug, Default, Args)]

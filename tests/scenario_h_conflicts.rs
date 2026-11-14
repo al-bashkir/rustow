@@ -124,6 +124,30 @@ fn unlink_removes_only_ours() {
     assert!(fx.repo.join(".bashrc").exists(), "sources are never removed");
 }
 
+/// Only a command that can resolve a conflict takes a conflict flag. Bare
+/// `rustow` is `apply`, so it takes them too, but not before a command.
+#[test]
+fn conflict_flags_belong_to_commands_that_resolve_conflicts() {
+    let fx = two();
+    fx.write_home(".bashrc", "mine\n");
+    for args in [
+        &["status", "--force"][..],
+        &["diff", "--backup"],
+        &["check", "--on-conflict", "skip"],
+        &["state", "export", "--on-conflict", "overwrite"],
+        &["--force", "apply"],
+    ] {
+        let out = fx.run(args);
+        assert_eq!(out.code, 2, "{args:?}\n{out:?}");
+    }
+    assert_eq!(read(&fx.home_path(".bashrc")), "mine\n");
+    fx.ok(&["--force"]);
+    assert!(
+        is_symlink(&fx.home_path(".bashrc")),
+        "bare rustow --force is apply --force"
+    );
+}
+
 #[test]
 fn removal_honors_abort_and_refuses_backup_and_force() {
     let fx = two();
@@ -143,7 +167,7 @@ fn removal_honors_abort_and_refuses_backup_and_force() {
         ] {
             let out = fx.run(&[cmd, flag].concat());
             assert_eq!(out.code, 2, "{cmd:?} {flag:?}\n{out:?}");
-            assert!(out.stderr.contains(&flag.join(" ")), "{out:?}");
+            assert!(out.stderr.contains(flag[flag.len() - 1]), "{out:?}");
             assert!(is_symlink(&fx.home_path(".bashrc")), "a refused flag removes nothing");
         }
     }

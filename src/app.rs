@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::cli::{
-    CacheCommand, Cli, Command, EncArgs, EncCommand, FileCommand, Global, Paths, StateCommand, StatusArgs,
-    TemplateCommand,
+    CacheCommand, Cli, Command, Conflict, DeployArgs, EncArgs, EncCommand, FileCommand, Global, RemovalArgs,
+    StateCommand, StatusArgs, TemplateCommand,
 };
 use crate::config::DefaultMode;
 use crate::error::{Error, Result};
@@ -25,10 +25,10 @@ pub fn run(cli: Cli) -> Result<i32> {
     let g = &cli.global;
     let mut printer = Printer::new(g.json, g.quiet, g.verbose, g.no_color);
     let p = &mut printer;
-    match cli.command.unwrap_or(Command::Apply(Paths::default())) {
-        Command::Apply(a) => deploy(g, &env, p, &a.paths, Selector::All),
-        Command::Link(a) => deploy(g, &env, p, &a.paths, Selector::Link),
-        Command::Unlink(a) => undeploy(g, &env, p, &a.paths, Selector::Link, false),
+    match command(cli.command, cli.conflict)? {
+        Command::Apply(a) => deploy(g, &env, p, &a, Selector::All),
+        Command::Link(a) => deploy(g, &env, p, &a, Selector::Link),
+        Command::Unlink(a) => undeploy(g, &env, p, &a, Selector::Link, false),
         Command::Init => init_cmd(g, &env, p),
         Command::File(c) => file_cmd(g, &env, p, c),
         Command::Template(c) => template_cmd(g, &env, p, c),
@@ -37,14 +37,29 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Check => check_cmd(g, &env, p),
         Command::Doctor => crate::doctor::doctor(&open(g, &env, p)?, p),
         Command::Undeploy(a) => {
-            let ask = a.paths.paths.is_empty() && !a.yes;
-            undeploy(g, &env, p, &a.paths.paths, Selector::All, ask)
+            let ask = a.removal.paths.paths.is_empty() && !a.yes;
+            undeploy(g, &env, p, &a.removal, Selector::All, ask)
         }
         Command::Cache(CacheCommand::Clean) => cache_clean(g, &env, p),
         Command::State(c) => state_cmd(g, &env, p, c),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
         Command::Completions { shell } => completions(shell),
         Command::SudoHelper => crate::sudo::serve(),
+    }
+}
+
+/// The command to run: bare `rustow` is `apply` with the conflict options
+/// before it. A command takes its own, so there they are refused.
+fn command(command: Option<Command>, conflict: Conflict) -> Result<Command> {
+    match command {
+        None => Ok(Command::Apply(DeployArgs {
+            conflict,
+            ..DeployArgs::default()
+        })),
+        Some(_) if conflict.is_set() => Err(Error::Usage(
+            "put --backup, --force and --on-conflict after the command, as in `rustow apply --backup`".into(),
+        )),
+        Some(c) => Ok(c),
     }
 }
 
@@ -94,7 +109,7 @@ fn file_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: FileCommand) -> Result<
         FileCommand::Add(a) => file_edit(g, env, p, &a.paths, files::add),
         FileCommand::Remove(a) => file_edit(g, env, p, &a.paths, files::remove),
         FileCommand::List => files::list(&mut open(g, env, p)?, p),
-        FileCommand::Apply(a) => deploy(g, env, p, &a.paths, Selector::File),
+        FileCommand::Apply(a) => deploy(g, env, p, &a, Selector::File),
         FileCommand::Diff(a) => diff_cmd(g, env, p, &a.paths, Selector::File),
     }
 }
@@ -115,7 +130,7 @@ fn file_edit(
 fn template_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: TemplateCommand) -> Result<i32> {
     match cmd {
         TemplateCommand::List => template_list(g, env, p),
-        TemplateCommand::Apply(a) => deploy(g, env, p, &a.paths, Selector::Template),
+        TemplateCommand::Apply(a) => deploy(g, env, p, &a, Selector::Template),
     }
 }
 
@@ -164,9 +179,7 @@ fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Resul
         StateCommand::Export { .. } if g.dry_run => Err(Error::Usage(
             "`rustow state export` has no --dry-run; it changes no state".into(),
         )),
-        StateCommand::Export { file } => {
-            crate::transfer::export(&ctx, file.as_deref(), g.policy() == Policy::Overwrite)
-        }
+        StateCommand::Export { force, file } => crate::transfer::export(&ctx, file.as_deref(), force),
         StateCommand::Import { file } => {
             let _lock = lock(&ctx, p, g.dry_run)?;
             crate::transfer::import(&mut ctx, p, &file, g.dry_run)
@@ -406,7 +419,8 @@ fn forget_links(state: &mut State, selector: Selector, removals: &[plan::Removal
     }
 }
 
-fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], selector: Selector) -> Result<i32> {
+fn deploy(g: &Global, env: &Env, printer: &mut Printer, a: &DeployArgs, selector: Selector) -> Result<i32> {
+    let paths = &a.paths.paths;
     let Prepared {
         ctx,
         mut state,
@@ -417,7 +431,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, paths: &[String], select
     printer.warn(ctx.skipped(&discovery, paths)?);
     printer.warn(&discovery.rule_warnings);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
-    let policy = g.policy();
+    let policy = a.conflict.policy();
     if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {
         return Ok(unrun(&plan, policy, orphaned, g.dry_run, printer));
     }
@@ -470,11 +484,11 @@ fn undeploy(
     g: &Global,
     env: &Env,
     printer: &mut Printer,
-    paths: &[String],
+    a: &RemovalArgs,
     selector: Selector,
     ask: bool,
 ) -> Result<i32> {
-    let abort = removal_policy(g, selector)? == Policy::Abort;
+    let (paths, abort) = (&a.paths.paths, a.abort());
     let ctx = open(g, env, printer)?;
     let held = lock_run(&ctx, printer, g.dry_run, !ask)?;
     let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
@@ -488,27 +502,6 @@ fn undeploy(
     forget_links(&mut state, selector, &removals);
     let items = execute::remove(removals, &stop, &mut state, &ctx.cache_dir);
     finish(&ctx, &mut state, held.as_ref(), printer, &items)
-}
-
-/// The policy of `undeploy` and `unlink`: they never remove a changed
-/// destination, so only `skip` and `abort` apply.
-fn removal_policy(g: &Global, selector: Selector) -> Result<Policy> {
-    let flag = match (g.policy(), g.backup, g.force) {
-        (p @ (Policy::Skip | Policy::Abort), ..) => return Ok(p),
-        (_, true, _) => "--backup",
-        (_, _, true) => "--force",
-        (Policy::Backup, ..) => "--on-conflict backup",
-        _ => "--on-conflict overwrite",
-    };
-    let cmd = if selector == Selector::Link {
-        "unlink"
-    } else {
-        "undeploy"
-    };
-    Err(Error::Usage(format!(
-        "`rustow {cmd}` does not take {flag}: it never removes a destination that changed; \
-         move or remove such a file yourself"
-    )))
 }
 
 /// The exit code of an `undeploy` or `unlink` that removes nothing: a dry
