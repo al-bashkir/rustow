@@ -10,6 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 /// The regular files at or below `dir`.
+#[cfg(target_os = "linux")]
 fn files_below(dir: &Path) -> Vec<std::path::PathBuf> {
     match fs::symlink_metadata(dir) {
         Ok(m) if m.is_dir() => fs::read_dir(dir)
