@@ -21,6 +21,21 @@ fn repo() -> Fixture {
 /// The candidates for the last word, as the zsh script asks for them,
 /// without options and descriptions.
 fn complete(fx: &Fixture, words: &[&str]) -> Vec<String> {
+    candidates(fx, words)
+        .into_iter()
+        .filter(|c| !c.starts_with('-'))
+        .collect()
+}
+
+/// The option candidates for the last word, in the order the shell shows them.
+fn options(fx: &Fixture, words: &[&str]) -> Vec<String> {
+    candidates(fx, words)
+        .into_iter()
+        .filter(|c| c.starts_with('-'))
+        .collect()
+}
+
+fn candidates(fx: &Fixture, words: &[&str]) -> Vec<String> {
     let mut args = vec!["--", "rustow"];
     args.extend_from_slice(words);
     let index = words.len().to_string();
@@ -35,9 +50,27 @@ fn complete(fx: &Fixture, words: &[&str]) -> Vec<String> {
     assert_eq!(out.code, 0, "{words:?}: {out:?}");
     out.stdout
         .lines()
-        .filter(|l| !l.starts_with('-'))
         .map(|l| l.split(':').next().unwrap_or_default().to_owned())
         .collect()
+}
+
+#[test]
+fn options_of_the_command_come_before_global_options() {
+    let fx = repo();
+    for (words, own) in [
+        (&["enc", "--"][..], "--backend"),
+        (&["enc", "edit", "--"], "--reencrypt"),
+        (&["status", "--"], "--ignored"),
+        (&["undeploy", "--"], "--yes"),
+    ] {
+        let opts = options(&fx, words);
+        let at = |o: &str| {
+            opts.iter()
+                .position(|c| c == o)
+                .unwrap_or_else(|| panic!("{o}: {opts:?}"))
+        };
+        assert!(at(own) < at("--repo"), "{words:?}: {opts:?}");
+    }
 }
 
 #[test]

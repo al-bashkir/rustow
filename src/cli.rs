@@ -26,7 +26,9 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+/// A heading of their own puts the options of a command first, in help and completion.
 #[derive(Debug, Args)]
+#[command(next_help_heading = "Global options")]
 pub struct Global {
     /// Repository root (default: $RUSTOW_REPO, else the nearest directory with rustow.toml or .rustowignore; `init` uses the current directory)
     #[arg(long, global = true, value_name = "DIR")]
