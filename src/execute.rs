@@ -1041,7 +1041,7 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_item_keeps_only_the_directories_it_cannot_remove() {
         let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
+        let base = &tmp.path().canonicalize().unwrap();
         let me = nix::unistd::geteuid().as_raw();
         let below = |uid, owner| {
             let file = Desired::File {
