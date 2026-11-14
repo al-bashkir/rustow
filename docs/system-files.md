@@ -96,7 +96,7 @@ A system file can be unreadable for you, for example a `[[files]]` entry with `m
 
 ### Destinations in a directory that you cannot search
 
-A system file can be in a directory that you cannot search, for example `/etc/sudoers.d` (mode 0750, owner root). rustow can open that directory, but it cannot see what is in it. It compares the file with your state:
+A system file can be in a directory that you cannot search, for example `/etc/sudoers.d` (mode 0750, owner root). rustow knows that directory, but it cannot see what is in it. (On macOS, rustow cannot open it. It gets the identity of the directory from the directory above it.) It compares the file with your state:
 
 - When the state has no record of the file, the item is a create through sudo. The helper looks as root before it writes. When something other than the desired content is there already, the item is a conflict: "existing destination is not managed by rustow", and the file stays. `--force` and `--backup` resolve it, as for any foreign file. A directory or a special file there fails the item.
 - The state records the content and the metadata (`mode`, `owner`, `group`) that rustow wrote last. When the desired content and metadata are the recorded ones, the item is clean. `status` shows it as ok. With `-v`, the detail is "not readable by you; compared with the state". `apply` does not run sudo for it. `diff` shows nothing for it.
