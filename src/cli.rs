@@ -34,13 +34,13 @@ pub struct Cli {
 #[command(next_help_heading = "Global options")]
 pub struct Global {
     /// Repository root (default: $RUSTOW_REPO, else the nearest directory with rustow.toml or .rustowignore; `init` uses the current directory)
-    #[arg(long, global = true, value_name = "DIR")]
+    #[arg(short, long, global = true, value_name = "DIR")]
     pub repo: Option<PathBuf>,
     /// Target for home sources (default: defaults.target, normally ~)
-    #[arg(long, global = true, value_name = "DIR")]
+    #[arg(short, long, global = true, value_name = "DIR")]
     pub target: Option<PathBuf>,
     /// Target for rustowroot/ sources (default: defaults.root_target, normally /)
-    #[arg(long, global = true, value_name = "DIR")]
+    #[arg(short = 'R', long, global = true, value_name = "DIR")]
     pub root_target: Option<PathBuf>,
     /// Show what would change; change nothing
     #[arg(short = 'n', long, global = true)]
@@ -52,13 +52,13 @@ pub struct Global {
     #[arg(short, long, global = true)]
     pub quiet: bool,
     /// Machine-readable JSON output
-    #[arg(long, global = true)]
+    #[arg(short, long, global = true)]
     pub json: bool,
     /// Disable colors (also: NO_COLOR)
     #[arg(long, global = true)]
     pub no_color: bool,
     /// Allow passphrase prompts (pinentry, terminal)
-    #[arg(long, global = true)]
+    #[arg(short, long, global = true)]
     pub interactive: bool,
 }
 
@@ -66,13 +66,13 @@ pub struct Global {
 #[derive(Debug, Default, Args)]
 pub struct Conflict {
     /// Resolve conflicts by moving the existing destination into the backup directory
-    #[arg(long, conflicts_with_all = ["force", "on_conflict"])]
+    #[arg(short, long, conflicts_with_all = ["force", "on_conflict"])]
     pub backup: bool,
     /// Resolve conflicts by replacing an existing file or symlink (never a directory)
-    #[arg(long, conflicts_with = "on_conflict")]
+    #[arg(short, long, conflicts_with = "on_conflict")]
     pub force: bool,
     /// Conflict policy (default: skip)
-    #[arg(long, value_enum, value_name = "POLICY")]
+    #[arg(short = 'c', long, value_enum, value_name = "POLICY")]
     pub on_conflict: Option<Policy>,
 }
 
@@ -163,7 +163,7 @@ pub struct EncArgs {
     #[command(subcommand)]
     pub command: Option<EncCommand>,
     /// Backend for this encryption only (default: encryption.backend)
-    #[arg(long, value_enum)]
+    #[arg(short = 'B', long, value_enum)]
     pub backend: Option<crate::config::Backend>,
     /// Repository-relative plaintext source (a file named "edit" is written ./edit)
     #[arg(value_name = "PATH", required = true, add = ArgValueCompleter::new(crate::complete::plaintext))]
@@ -178,7 +178,7 @@ pub enum EncCommand {
     /// Decrypt into a private workspace, run $VISUAL or $EDITOR, re-encrypt with the same backend
     Edit {
         /// Re-encrypt even when content and recipients look unchanged
-        #[arg(long)]
+        #[arg(short = 'e', long)]
         reencrypt: bool,
         /// Repository-relative encrypted source (*.age or *.gpg)
         #[arg(value_name = "PATH", add = ArgValueCompleter::new(crate::complete::encrypted))]
@@ -197,7 +197,7 @@ pub enum StateCommand {
     /// Print the registrations of this machine as JSON (or write them to FILE; "-" prints them)
     Export {
         /// Replace FILE when it exists
-        #[arg(long)]
+        #[arg(short, long)]
         force: bool,
         #[arg(value_name = "FILE")]
         file: Option<PathBuf>,
@@ -217,7 +217,7 @@ pub enum StateCommand {
 #[derive(Debug, Args)]
 pub struct StatusArgs {
     /// Also list ignored repository paths
-    #[arg(long)]
+    #[arg(short = 'I', long)]
     pub ignored: bool,
     #[command(flatten)]
     pub paths: Paths,
@@ -244,7 +244,7 @@ pub struct DeployArgs {
 #[derive(Debug, Args)]
 pub struct RemovalArgs {
     /// Conflict policy (default: skip); a changed destination always stays
-    #[arg(long, value_enum, value_name = "POLICY")]
+    #[arg(short = 'c', long, value_enum, value_name = "POLICY")]
     pub on_conflict: Option<RemovalPolicy>,
     #[command(flatten)]
     pub paths: Paths,
@@ -276,4 +276,46 @@ pub struct RequiredPaths {
     /// Repository-relative source files
     #[arg(value_name = "PATH", required = true, add = ArgValueCompleter::new(crate::complete::any))]
     pub paths: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{CommandFactory, Parser};
+
+    use super::Cli;
+
+    #[test]
+    fn each_short_option_parses_as_its_long_option() {
+        Cli::command().debug_assert();
+        let parsed = |args: &[&str]| format!("{:?}", Cli::try_parse_from([&["rustow"], args].concat()));
+        for (short, long) in [
+            (
+                &["-r", "d", "-t", "h", "-R", "/r", "-j", "-i", "status"][..],
+                &[
+                    "--repo",
+                    "d",
+                    "--target",
+                    "h",
+                    "--root-target",
+                    "/r",
+                    "--json",
+                    "--interactive",
+                    "status",
+                ][..],
+            ),
+            (&["-b"], &["--backup"]),
+            (&["apply", "-f"], &["apply", "--force"]),
+            (&["link", "-c", "abort"], &["link", "--on-conflict", "abort"]),
+            (&["unlink", "-c", "skip"], &["unlink", "--on-conflict", "skip"]),
+            (&["undeploy", "-c", "abort"], &["undeploy", "--on-conflict", "abort"]),
+            (&["state", "export", "-f", "x"], &["state", "export", "--force", "x"]),
+            (&["status", "-I"], &["status", "--ignored"]),
+            (&["enc", "-B", "age", "p"], &["enc", "--backend", "age", "p"]),
+            (&["enc", "edit", "-e", "p"], &["enc", "edit", "--reencrypt", "p"]),
+        ] {
+            let got = parsed(short);
+            assert!(got.starts_with("Ok("), "{short:?}: {got}");
+            assert_eq!(got, parsed(long), "{short:?}");
+        }
+    }
 }

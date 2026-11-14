@@ -28,19 +28,19 @@ The sections below describe every option and command.
 
 ## Global options
 
-| Option                | Meaning                                                                                                                                                                                                                      |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--repo <DIR>`        | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                 |
-| `--target <DIR>`      | Target of home sources. A symlink in the path must pass the [trust rule](security.md#trust-rule) for symlinked ancestors. Otherwise, or when the directory is missing, rustow stops with exit 2.                             |
-| `--root-target <DIR>` | Target of `rustowroot/` sources. The same check as for `--target` applies.                                                                                                                                                   |
-| `-n`, `--dry-run`     | Show what would change. Change nothing.                                                                                                                                                                                      |
-| `-v`, `--verbose`     | Also list unchanged items.                                                                                                                                                                                                   |
-| `-q`, `--quiet`       | Print only conflicts and errors.                                                                                                                                                                                             |
-| `--json`              | JSON output. Paths of destinations are absolute; text output shortens the home directory to `~`.                                                                                                                             |
-| `--no-color`          | No colors. Also `NO_COLOR` with a value that is not empty.                                                                                                                                                                   |
-| `--interactive`       | Allow passphrase prompts: GnuPG pinentry and the age identity prompt. Without it, a locked key fails (exit 4) with a hint. This also applies to `enc edit`. See [encryption](encryption.md#interactive-and-unattended-runs). |
-| `-h`, `--help`        | Help.                                                                                                                                                                                                                        |
-| `-V`, `--version`     | Version.                                                                                                                                                                                                                     |
+| Option                      | Meaning                                                                                                                                                                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-r`, `--repo <DIR>`        | Repository root. Default: `$RUSTOW_REPO`, else the nearest ancestor with `rustow.toml` or `.rustowignore`. Only `init` falls back to the current directory; other commands stop with exit 2.                                 |
+| `-t`, `--target <DIR>`      | Target of home sources. A symlink in the path must pass the [trust rule](security.md#trust-rule) for symlinked ancestors. Otherwise, or when the directory is missing, rustow stops with exit 2.                             |
+| `-R`, `--root-target <DIR>` | Target of `rustowroot/` sources. The same check as for `--target` applies.                                                                                                                                                   |
+| `-n`, `--dry-run`           | Show what would change. Change nothing.                                                                                                                                                                                      |
+| `-v`, `--verbose`           | Also list unchanged items.                                                                                                                                                                                                   |
+| `-q`, `--quiet`             | Print only conflicts and errors.                                                                                                                                                                                             |
+| `-j`, `--json`              | JSON output. Paths of destinations are absolute; text output shortens the home directory to `~`.                                                                                                                             |
+| `--no-color`                | No colors. Also `NO_COLOR` with a value that is not empty.                                                                                                                                                                   |
+| `-i`, `--interactive`       | Allow passphrase prompts: GnuPG pinentry and the age identity prompt. Without it, a locked key fails (exit 4) with a hint. This also applies to `enc edit`. See [encryption](encryption.md#interactive-and-unattended-runs). |
+| `-h`, `--help`              | Help.                                                                                                                                                                                                                        |
+| `-V`, `--version`           | Version.                                                                                                                                                                                                                     |
 
 A global option can go before or after the command.
 
@@ -50,13 +50,13 @@ A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts
 
 `apply`, `link`, `file apply`, `template apply` and bare `rustow` take these options. Put them after the command: `rustow apply --backup`. Before a command, they exit 2. Other commands do not take them.
 
-| Option                   | Meaning                                           |
-| ------------------------ | ------------------------------------------------- |
-| `--backup`               | Same as `--on-conflict backup`.                   |
-| `--force`                | Same as `--on-conflict overwrite`.                |
-| `--on-conflict <POLICY>` | `skip` (default), `abort`, `backup`, `overwrite`. |
+| Option                         | Meaning                                           |
+| ------------------------------ | ------------------------------------------------- |
+| `-b`, `--backup`               | Same as `--on-conflict backup`.                   |
+| `-f`, `--force`                | Same as `--on-conflict overwrite`.                |
+| `-c`, `--on-conflict <POLICY>` | `skip` (default), `abort`, `backup`, `overwrite`. |
 
-`unlink` and `undeploy` take only `--on-conflict skip` and `--on-conflict abort`. `state export` takes `--force` to replace FILE.
+`unlink` and `undeploy` take only `--on-conflict skip` and `--on-conflict abort`. `state export` takes `-f` (`--force`) to replace FILE.
 
 ## Commands
 
@@ -176,7 +176,7 @@ When rustow cannot write the state file, these commands still print the item rep
 
 ## status
 
-States: LINKED, COPIED, TEMPLATED (clean); MISSING, OUTDATED, MODIFIED, CONFLICT, UNMANAGED, ERROR (rustow cannot compute the desired state, or cannot write the destination directory, or cannot give a home file the owner or group that it needs: only root can give a file to another user or to a group that you are not in), ORPHANED (recorded, source removed; the detail is "source removed; `rustow undeploy <source>` removes it". For a template whose [meta condition](templates.md#meta-block) became false, the detail names the condition instead. When the path is still there but is not a source, the detail says why: "source is ignored by .rustowignore", "source is reserved and can never be deployed" or "source is a directory, not a file". A copy whose `[[files]]` entry or `file add` registration names such a path is ORPHANED too, and its SKIPPED row stays), SKIPPED (a [skipped source](#skipped-sources) in the selection, or a template whose meta condition is false on this machine; the detail is the reason. A recorded destination whose source is below an unreadable directory is SKIPPED too, with the reason of the directory: rustow cannot tell if the source is still there), IGNORED (with `--ignored`; a path argument selects the ignored paths at or below it, and the ignored directory above it. With `--ignored`, a path argument may name an ignored path; without it, that is a usage error). Clean rows are hidden unless `-v`. SKIPPED and IGNORED rows always show, and they do not need attention. The summary counts skipped sources and ignored paths apart, for example "1 ok, 1 skipped, 0 need attention" or "1 ok, 1 ignored, 0 need attention". Exit 0 when clean, 1 when attention is needed. JSON output never contains content.
+States: LINKED, COPIED, TEMPLATED (clean); MISSING, OUTDATED, MODIFIED, CONFLICT, UNMANAGED, ERROR (rustow cannot compute the desired state, or cannot write the destination directory, or cannot give a home file the owner or group that it needs: only root can give a file to another user or to a group that you are not in), ORPHANED (recorded, source removed; the detail is "source removed; `rustow undeploy <source>` removes it". For a template whose [meta condition](templates.md#meta-block) became false, the detail names the condition instead. When the path is still there but is not a source, the detail says why: "source is ignored by .rustowignore", "source is reserved and can never be deployed" or "source is a directory, not a file". A copy whose `[[files]]` entry or `file add` registration names such a path is ORPHANED too, and its SKIPPED row stays), SKIPPED (a [skipped source](#skipped-sources) in the selection, or a template whose meta condition is false on this machine; the detail is the reason. A recorded destination whose source is below an unreadable directory is SKIPPED too, with the reason of the directory: rustow cannot tell if the source is still there), IGNORED (with `--ignored` or `-I`; a path argument selects the ignored paths at or below it, and the ignored directory above it. With `--ignored`, a path argument may name an ignored path; without it, that is a usage error). Clean rows are hidden unless `-v`. SKIPPED and IGNORED rows always show, and they do not need attention. The summary counts skipped sources and ignored paths apart, for example "1 ok, 1 skipped, 0 need attention" or "1 ok, 1 ignored, 0 need attention". Exit 0 when clean, 1 when attention is needed. JSON output never contains content.
 
 MODIFIED means that the destination, or the cache entry behind rustow's link, changed since rustow last applied it. When the desired content changed too, `status` shows CONFLICT: "source and destination both changed since rustow last applied it". Another CONFLICT row has the detail that `apply` gives, for example "existing destination is not managed by rustow (broken symlink to gone)", or "cache entry: …" for a conflict of the cache entry.
 

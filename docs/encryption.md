@@ -92,7 +92,7 @@ rustow --interactive enc edit .ssh/secret.conf.gpg
 One repository can hold `.age` and `.gpg` sources together.
 
 - The outer suffix selects the backend for deployment, `diff`, `status` and `enc edit`. rustow never tries the other backend.
-- `encryption.backend` and `rustow enc --backend` choose only the backend for new encryption.
+- `encryption.backend` and `rustow enc --backend` (`-B`) choose only the backend for new encryption.
 - Each backend has its own configuration: `recipients` and `identity_files` for age, `[encryption.gpg]` for GnuPG. Configure each backend that you use.
 - rustow loads age identities and runs `gpg` only for selected, non-ignored sources of that backend. On a machine without `gpg`, ignore the `.gpg` sources, or give paths to other sources. Otherwise each `.gpg` item is an error. Under the default policy, rustow deploys the other items and exits with 4. With `--on-conflict abort`, it writes nothing.
 - `x.age` and `x.gpg` deploy to the same destination `x`. This is a collision: `check` reports it, and both items are conflicts (exit 3). A plaintext `x` next to `x.age` collides too. Keep one source for each destination.
@@ -143,7 +143,7 @@ rustow enc edit [--reencrypt] .ssh/secret.conf.age
 - If the ciphertext changed meanwhile, rustow exits with 3. It leaves the ciphertext untouched and keeps your edited plaintext in the workspace. It prints the path. `rustow cache clean` removes stale workspaces.
 - If content and recipients are unchanged, rustow does not rewrite the file.
 - When rustow rewrites an armored `.age` file, the new file is binary.
-- rustow finds a recipient change from the last encryption that the state file records for this ciphertext. Without such a record, GnuPG compares the key ids in the ciphertext with the configured keys, so rustow encrypts again also when you replace one key with another. age shows only the number of recipients, so rustow finds only a changed count. After you replace an age recipient, use `--reencrypt`. `--reencrypt` always forces a rewrite.
+- rustow finds a recipient change from the last encryption that the state file records for this ciphertext. Without such a record, GnuPG compares the key ids in the ciphertext with the configured keys, so rustow encrypts again also when you replace one key with another. age shows only the number of recipients, so rustow finds only a changed count. After you replace an age recipient, use `--reencrypt` (`-e`). `--reencrypt` always forces a rewrite.
 - It never deploys.
 
 ## Deployment
