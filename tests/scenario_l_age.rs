@@ -34,6 +34,20 @@ fn enc_defaults_to_age_and_retires_plaintext() {
 }
 
 #[test]
+fn a_run_forgets_the_encryption_record_of_a_removed_source() {
+    let (fx, _key) = keyed();
+    fx.write("kept", "k\n");
+    fx.write("gone", "g\n");
+    fx.ok(&["enc", "kept"]);
+    fx.ok(&["enc", "gone"]);
+    fs::remove_file(fx.repo.join("gone.age")).unwrap();
+    fx.ok(&["apply"]);
+    let records = fx.state_json()["encryption"].clone();
+    let names: Vec<_> = records.as_object().unwrap().keys().collect();
+    assert_eq!(names, ["kept.age"], "{records}");
+}
+
+#[test]
 fn enc_with_public_recipients_only_and_decrypt_needs_identity() {
     let fx = Fixture::new();
     let key = fx.age_key("main");

@@ -465,6 +465,7 @@ fn finish(
     items: &[ItemReport],
 ) -> Result<i32> {
     state.forget_missing_dirs();
+    state.forget_missing_sources(&ctx.root);
     let saved = save(ctx, state, held);
     printer.items(items, RunKind::Applied);
     saved.map(|()| execute::exit_code(items))

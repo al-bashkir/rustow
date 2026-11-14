@@ -163,11 +163,15 @@ impl State {
     /// a directory there later is not rustow's. One that rustow cannot look
     /// at stays.
     pub fn forget_missing_dirs(&mut self) {
-        use std::io::ErrorKind::{NotADirectory, NotFound};
-        self.created_dirs.retain(|d| match fs::symlink_metadata(d) {
-            Ok(m) => m.is_dir(),
-            Err(e) => !matches!(e.kind(), NotFound | NotADirectory),
-        });
+        self.created_dirs
+            .retain(|d| fs::symlink_metadata(d).map_or_else(|e| !gone(&e), |m| m.is_dir()));
+    }
+
+    /// Forgets the encryption record of each source under `root` that is
+    /// gone. A source that rustow cannot look at keeps its record.
+    pub fn forget_missing_sources(&mut self, root: &Path) {
+        self.encryption
+            .retain(|rel, _| fs::symlink_metadata(root.join(rel.as_path())).map_or_else(|e| !gone(&e), |_| true));
     }
 
     /// Loads the state of `repo`; a missing file gives an empty state.
@@ -310,6 +314,13 @@ impl Lock {
     }
 }
 
+/// True when the error says the path does not exist. Any other error
+/// (rustow cannot look) is no proof that it is gone.
+fn gone(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{NotADirectory, NotFound};
+    matches!(e.kind(), NotFound | NotADirectory)
+}
+
 fn file_id(path: &Path) -> std::io::Result<(u64, u64)> {
     fs::symlink_metadata(path).map(|m| (m.dev(), m.ino()))
 }
@@ -437,6 +448,30 @@ mod tests {
             want.insert(0, p("closed/inside")); // rustow cannot look: it stays
         }
         assert_eq!(s.created_dirs.into_iter().collect::<Vec<_>>(), want);
+    }
+
+    #[test]
+    fn the_encryption_record_of_a_source_that_is_gone_is_forgotten() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir(d.path().join("closed")).unwrap();
+        for file in ["kept.age", "file", "closed/x.age"] {
+            fs::write(d.path().join(file), "").unwrap();
+        }
+        fs::set_permissions(d.path().join("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+        let record = sample().encryption.into_values().next().unwrap();
+        let mut s = sample();
+        s.encryption = ["kept.age", "gone.age", "file/below.age", "closed/x.age"]
+            .map(|p| (RelPath::parse(p).unwrap(), record.clone()))
+            .into();
+        s.forget_missing_sources(d.path());
+        fs::set_permissions(d.path().join("closed"), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut want = vec!["kept.age"];
+        if !nix::unistd::geteuid().is_root() {
+            want.insert(0, "closed/x.age"); // rustow cannot look: it stays
+        }
+        let kept: Vec<_> = s.encryption.keys().map(|r| r.to_string()).collect();
+        assert_eq!(kept, want);
     }
 
     #[test]
