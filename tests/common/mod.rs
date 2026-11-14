@@ -127,10 +127,12 @@ impl Fixture {
             // A test that forgets VISUAL fails fast instead of waiting in vi.
             .env("EDITOR", "false")
             // Never the real sudo: a test that escalates by accident fails fast.
-            .env("RUSTOW_SUDO", "false")
-            .arg("--root-target")
-            .arg(&self.root)
-            .args(args);
+            .env("RUSTOW_SUDO", "false");
+        // `completions` takes no global option; every other command takes --root-target.
+        if args.first() != Some(&"completions") {
+            cmd.arg("--root-target").arg(&self.root);
+        }
+        cmd.args(args);
         for (k, v) in env {
             cmd.env(k, v);
         }

@@ -42,7 +42,15 @@ The sections below describe every option and command.
 | `-h`, `--help`              | Help.                                                                                                                                                                                                                        |
 | `-V`, `--version`           | Version.                                                                                                                                                                                                                     |
 
-A global option can go before or after the command.
+A global option can go before or after the command. Each command takes only the global options that it reads. The help and the completion of a command show only those. Another global option exits 2: "`rustow status` does not take --dry-run".
+
+| Options                      | Commands                                                                                                                                                                                           |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-r`, `-t`, `-R`, `-j`, `-q` | Every command except `completions`.                                                                                                                                                                |
+| `-n`                         | Commands that change files: bare `rustow`, `apply`, `link`, `unlink`, `undeploy`, `file apply`, `template apply`, `init`, `file add`, `file remove`, `cache clean`, `state import`, `state adopt`. |
+| `-v`                         | Commands that list items: bare `rustow`, `apply`, `link`, `unlink`, `undeploy`, `file apply`, `template apply`, `init`, `status`.                                                                  |
+| `--no-color`                 | Bare `rustow`, `apply`, `link`, `unlink`, `undeploy`, `file apply`, `template apply`.                                                                                                              |
+| `-i`                         | Commands that decrypt or encrypt: bare `rustow`, `apply`, `file apply`, `template apply`, `diff`, `file diff`, `status`, `enc`, `enc edit`.                                                        |
 
 A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts at the working directory. rustow needs the working directory only for such a path and to find the repository. When the working directory was deleted, an absolute path still works. Else rustow stops with exit 4: "current directory: No such file or directory".
 

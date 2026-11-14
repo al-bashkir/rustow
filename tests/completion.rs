@@ -68,6 +68,55 @@ fn conflict_options_complete_only_where_they_resolve_conflicts() {
     }
 }
 
+/// A command shows, completes and takes only the global options it reads.
+#[test]
+fn global_options_show_only_where_a_command_reads_them() {
+    let fx = repo();
+    for (words, shown, hidden) in [
+        (
+            &["apply", "-"][..],
+            &["-n", "-i", "-v", "--no-color", "-R"][..],
+            &[][..],
+        ),
+        (&["status", "-"], &["-i", "-v", "-j", "-R"], &["-n", "--no-color"]),
+        (&["enc", "-"], &["-i", "-q"], &["-n", "-v"]),
+        (&["file", "add", "-"], &["-n", "-t"], &["-i", "-v"]),
+        (&["check", "-"], &["-j", "-r"], &["-n", "-i", "-v", "--no-color"]),
+        (&["completions", "-"], &[], &["-r", "-t", "-R", "-n", "-j", "-q"]),
+    ] {
+        let opts = options(&fx, words);
+        assert!(
+            shown.iter().all(|o| opts.contains(&o.to_string())),
+            "{words:?}: {opts:?}"
+        );
+        assert!(
+            !hidden.iter().any(|o| opts.contains(&o.to_string())),
+            "{words:?}: {opts:?}"
+        );
+    }
+    let help = fx.ok(&["check", "--help"]).stdout;
+    assert!(help.contains("--json") && !help.contains("--dry-run"), "{help}");
+    assert!(!fx.ok(&["completions", "--help"]).stdout.contains("Global options"));
+    for (args, refused) in [
+        (&["status", "-n"][..], "`rustow status` does not take --dry-run"),
+        (&["-n", "status"], "`rustow status` does not take --dry-run"),
+        (&["check", "-v"], "`rustow check` does not take --verbose"),
+        (
+            &["file", "list", "--no-color"],
+            "`rustow file list` does not take --no-color",
+        ),
+        (
+            &["completions", "-j", "zsh"],
+            "`rustow completions` does not take --json",
+        ),
+    ] {
+        let out = fx.run(args);
+        assert_eq!(out.code, 2, "{args:?}\n{out:?}");
+        assert!(out.stderr.contains(refused), "{out:?}");
+    }
+    fx.ok(&["-n", "link"]);
+}
+
 #[test]
 fn options_of_the_command_come_before_global_options() {
     let fx = repo();

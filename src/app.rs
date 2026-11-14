@@ -176,9 +176,6 @@ fn cache_clean(g: &Global, env: &Env, p: &mut Printer) -> Result<i32> {
 fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Result<i32> {
     let mut ctx = open(g, env, p)?;
     match cmd {
-        StateCommand::Export { .. } if g.dry_run => Err(Error::Usage(
-            "`rustow state export` has no --dry-run; it changes no state".into(),
-        )),
         StateCommand::Export { force, file } => crate::transfer::export(&ctx, file.as_deref(), force),
         StateCommand::Import { file } => {
             let _lock = lock(&ctx, p, g.dry_run)?;
@@ -192,11 +189,6 @@ fn state_cmd(g: &Global, env: &Env, p: &mut Printer, cmd: StateCommand) -> Resul
 }
 
 fn enc_cmd(g: &Global, env: &Env, p: &mut Printer, e: EncArgs) -> Result<i32> {
-    if g.dry_run {
-        return Err(Error::Usage(
-            "`rustow enc` has no --dry-run; it changes only the repository".into(),
-        ));
-    }
     if let Some(arg) = e.extra.first() {
         return Err(Error::Usage(format!(
             "unexpected argument '{arg}'; `rustow enc` takes one PATH"

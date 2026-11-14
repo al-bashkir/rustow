@@ -29,6 +29,122 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+// Each command reads these: `--target` is also the way to run under sudo.
+const PLACE: &[&str] = &["repo", "target", "root_target", "json", "quiet"];
+// Item lines: unchanged ones (`-v`) and colored verbs.
+const ITEMS: &[&str] = &["verbose", "no_color"];
+const DRY: &[&str] = &["dry_run"];
+// Commands that decrypt or encrypt.
+const UNLOCK: &[&str] = &["interactive"];
+const DEPLOY: &[&[&str]] = &[PLACE, ITEMS, DRY, UNLOCK];
+
+/// The global options that each command takes, by its path ("" is bare
+/// `rustow`). Help and completion hide the others there, and `try_parse_from`
+/// refuses them. A command that is not here takes none.
+const TAKES: &[(&str, &[&[&str]])] = &[
+    ("", DEPLOY),
+    ("apply", DEPLOY),
+    ("file apply", DEPLOY),
+    ("template apply", DEPLOY),
+    ("link", &[PLACE, ITEMS, DRY]),
+    ("unlink", &[PLACE, ITEMS, DRY]),
+    ("undeploy", &[PLACE, ITEMS, DRY]),
+    ("init", &[PLACE, &["verbose"], DRY]),
+    ("file add", &[PLACE, DRY]),
+    ("file remove", &[PLACE, DRY]),
+    ("cache clean", &[PLACE, DRY]),
+    ("state import", &[PLACE, DRY]),
+    ("state adopt", &[PLACE, DRY]),
+    ("status", &[PLACE, &["verbose"], UNLOCK]),
+    ("diff", &[PLACE, UNLOCK]),
+    ("file diff", &[PLACE, UNLOCK]),
+    ("enc", &[PLACE, UNLOCK]),
+    ("enc edit", &[PLACE, UNLOCK]),
+    ("file list", &[PLACE]),
+    ("template list", &[PLACE]),
+    ("check", &[PLACE]),
+    ("doctor", &[PLACE]),
+    ("state export", &[PLACE]),
+];
+
+const GLOBAL: &[&str] = &[
+    "repo",
+    "target",
+    "root_target",
+    "dry_run",
+    "verbose",
+    "quiet",
+    "json",
+    "no_color",
+    "interactive",
+];
+
+/// The global options that `path` or a command below it takes.
+fn shown(path: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let below = move |p: &str| path.is_empty() || p == path || p.strip_prefix(path).is_some_and(|r| r.starts_with(' '));
+    (TAKES.iter().filter(move |(p, _)| below(p))).flat_map(|(_, groups)| groups.iter().copied().flatten().copied())
+}
+
+fn takes(path: &str, id: &str) -> bool {
+    TAKES
+        .iter()
+        .any(|(p, groups)| *p == path && groups.iter().any(|g| g.contains(&id)))
+}
+
+/// The command line, where each command shows only the global options it takes.
+pub fn command() -> clap::Command {
+    let cmd = <Cli as clap::CommandFactory>::command();
+    let globals: Vec<clap::Arg> = cmd.get_arguments().filter(|a| a.is_global_set()).cloned().collect();
+    limit(cmd, "", &globals)
+}
+
+/// Gives each command below `cmd` its own copy of each global option,
+/// hidden where it does not take it. clap copies a global option only into
+/// a command that lacks it, and a change after `build` breaks its lookup.
+fn limit(mut cmd: clap::Command, path: &str, globals: &[clap::Arg]) -> clap::Command {
+    let names: Vec<String> = cmd.get_subcommands().map(|s| s.get_name().to_owned()).collect();
+    for name in names {
+        let below = if path.is_empty() {
+            name.clone()
+        } else {
+            format!("{path} {name}")
+        };
+        let shown: Vec<&str> = shown(&below).collect();
+        cmd = cmd.mut_subcommand(&name, |mut sub| {
+            for arg in globals {
+                sub = sub.arg(arg.clone().hide(!shown.contains(&arg.get_id().as_str())));
+            }
+            limit(sub, &below, globals)
+        });
+    }
+    cmd
+}
+
+/// Parses the command line; a global option that the command does not take
+/// is an error, as an unknown option is.
+pub fn try_parse_from<I, T>(args: I) -> Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    use clap::FromArgMatches;
+    let mut cmd = command();
+    let matches = cmd.try_get_matches_from_mut(args)?;
+    let (mut path, mut leaf, mut sub_cmd) = (Vec::new(), &matches, &mut cmd);
+    while let Some((name, sub)) = leaf.subcommand() {
+        path.push(name);
+        leaf = sub;
+        sub_cmd = sub_cmd.find_subcommand_mut(name).expect("clap matched this command");
+    }
+    let path = path.join(" ");
+    let given = |id: &str| leaf.value_source(id) == Some(clap::parser::ValueSource::CommandLine);
+    if let Some(id) = GLOBAL.iter().find(|id| given(id) && !takes(&path, id)) {
+        let message = format!("`rustow {path}` does not take --{}", id.replace('_', "-"));
+        return Err(sub_cmd.error(clap::error::ErrorKind::UnknownArgument, message));
+    }
+    Cli::from_arg_matches(&matches)
+}
+
 /// A heading of their own puts the options of a command first, in help and completion.
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Global options")]
@@ -280,17 +396,15 @@ pub struct RequiredPaths {
 
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Parser};
-
-    use super::Cli;
+    use super::{TAKES, command, try_parse_from};
 
     #[test]
     fn each_short_option_parses_as_its_long_option() {
-        Cli::command().debug_assert();
-        let parsed = |args: &[&str]| format!("{:?}", Cli::try_parse_from([&["rustow"], args].concat()));
+        command().debug_assert();
+        let parsed = |args: &[&str]| format!("{:?}", try_parse_from([&["rustow"], args].concat()));
         for (short, long) in [
             (
-                &["-r", "d", "-t", "h", "-R", "/r", "-j", "-i", "status"][..],
+                &["-r", "d", "-t", "h", "-R", "/r", "-j", "-i", "apply"][..],
                 &[
                     "--repo",
                     "d",
@@ -300,7 +414,7 @@ mod tests {
                     "/r",
                     "--json",
                     "--interactive",
-                    "status",
+                    "apply",
                 ][..],
             ),
             (&["-b"], &["--backup"]),
@@ -316,6 +430,16 @@ mod tests {
             let got = parsed(short);
             assert!(got.starts_with("Ok("), "{short:?}: {got}");
             assert_eq!(got, parsed(long), "{short:?}");
+        }
+    }
+
+    #[test]
+    fn each_command_in_the_option_table_exists() {
+        for (path, _) in TAKES {
+            let mut cmd = command();
+            for name in path.split_whitespace() {
+                cmd = cmd.find_subcommand(name).unwrap_or_else(|| panic!("{path:?}")).clone();
+            }
         }
     }
 }
