@@ -147,6 +147,29 @@ fn doctor_reports_environment() {
     }
 }
 
+/// `cache clean` never follows a symlink below the cache root: a symlinked
+/// `rendered` (for example committed in a cloned repository) cannot make
+/// it delete files outside the cache.
+#[test]
+fn cache_clean_refuses_a_symlinked_kind_directory() {
+    let fx = mixed();
+    fx.ok(&["apply"]);
+    let rendered = fx.repo.join(".rustowcache/rendered");
+    let repo_id = fs::read_dir(&rendered).unwrap().next().unwrap().unwrap().file_name();
+    let outside = fx.home_path("outside");
+    let victim = write_file(&outside.join(&repo_id).join("keep/precious"), "mine");
+    fs::remove_dir_all(&rendered).unwrap();
+    std::os::unix::fs::symlink(&outside, &rendered).unwrap();
+
+    let out = fx.run(&["cache", "clean"]);
+    assert_ne!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout.contains("symlinks are not followed") || out.stderr.contains("symlinks are not followed"),
+        "{out:?}"
+    );
+    assert_eq!(read(&victim), "mine", "nothing outside the cache is removed");
+}
+
 #[test]
 fn cache_clean_keeps_live_entries() {
     let fx = mixed();

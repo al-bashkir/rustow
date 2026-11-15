@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, IoContext, Result};
+use crate::fsops;
 use crate::repo::Context;
 use crate::report::Change;
 use crate::source::{Mode, Source};
@@ -61,17 +62,17 @@ fn cache_root_present(cache_dir: &Path) -> Result<bool> {
                 "{shown} is not a directory (symlinks are not followed)"
             )))
         }
-        Ok(_) => Ok(true),
+        // A cache root that the user owns, as for every other cache use.
+        Ok(_) => fsops::ensure_private_dir(cache_dir).map(|()| true),
     }
 }
 
 /// Walks this repository's entries of one cache kind and removes the unused ones.
 fn clean_kind(ctx: &Context, kind: &str, live: &BTreeSet<&Path>, dry_run: bool) -> Result<Vec<Change>> {
-    let base = ctx.cache_dir.join(kind).join(&ctx.repo_id);
     let mut changes = Vec::new();
-    if !fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
+    let Some(base) = kind_dir(ctx, kind)? else {
         return Ok(changes);
-    }
+    };
     for entry in walkdir::WalkDir::new(&base).follow_links(false).contents_first(true) {
         let entry = entry.map_err(|e| Error::Failed(format!("scan {}: {e}", base.display())))?;
         let path = entry.path();
@@ -85,6 +86,17 @@ fn clean_kind(ctx: &Context, kind: &str, live: &BTreeSet<&Path>, dry_run: bool) 
         }
     }
     Ok(changes)
+}
+
+/// This repository's directory of one cache kind, when it exists. Each
+/// level below the cache root must be a real directory that the user owns.
+fn kind_dir(ctx: &Context, kind: &str) -> Result<Option<PathBuf>> {
+    let base = ctx.cache_dir.join(kind).join(&ctx.repo_id);
+    if !fs::symlink_metadata(&base).is_ok_and(|m| m.is_dir()) {
+        return Ok(None);
+    }
+    fsops::private_tree(&ctx.cache_dir, &base)?;
+    Ok(Some(base))
 }
 
 /// Removes one cache file unless a managed symlink uses it.
