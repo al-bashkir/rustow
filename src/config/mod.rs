@@ -224,9 +224,10 @@ impl Config {
     pub fn parse(text: &str) -> Result<Config> {
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| toml_error(text, e.message(), e.span()))?;
         check_header(&raw)?;
-        let files = parse_entries(raw.files, "files", false)?;
-        let template_rules = parse_entries(raw.template_rules, "template_rules", true)?;
-        let file_rules = parse_file_rules(&raw.file_rules)?;
+        let files = parse_entries(raw.files.into_iter().map(RawEntry::validate), "files", false)?;
+        let rules = raw.template_rules.into_iter().map(RawTemplateRule::validate);
+        let template_rules = parse_entries(rules, "template_rules", true)?;
+        let file_rules = parse_file_rules(raw.file_rules)?;
         let global_rules = parse_global_rules(raw.global_rules)?;
         Ok(Config {
             present: true,
@@ -322,32 +323,59 @@ fn check_header(raw: &Raw) -> Result<()> {
     validate_extension(&raw.templates.extension)
 }
 
-/// The `[[files]]` or `[[template_rules]]` entries (`table`) by source.
-/// With `need_meta`, each entry must set at least one of mode, owner, group.
-fn parse_entries(raw: Vec<RawEntry>, table: &str, need_meta: bool) -> Result<BTreeMap<RelPath, Metadata>> {
-    let mut entries = BTreeMap::new();
-    for (i, r) in raw.into_iter().enumerate() {
-        let bad = |e: String| invalid(&format!("{table}[{i}]: {e}"));
-        let (path, meta) = r.validate().map_err(bad)?;
+/// The validated `[[files]]` or `[[template_rules]]` entries (`table`) by
+/// source. With `need_meta`, each entry must set at least one of mode, owner, group.
+fn parse_entries(
+    raw: impl Iterator<Item = std::result::Result<(Vec<RelPath>, Metadata), String>>,
+    table: &str,
+    need_meta: bool,
+) -> Result<BTreeMap<RelPath, Metadata>> {
+    let entries = raw.map(|r| {
+        let (paths, meta) = r?;
         if need_meta && meta == Metadata::default() {
-            return Err(bad(format!("'{path}' sets none of mode, owner or group")));
+            return Err(format!("'{}' sets none of mode, owner or group", paths[0]));
         }
-        if entries.insert(path.clone(), meta).is_some() {
-            return Err(invalid(&format!("duplicate [[{table}]] entry for '{path}'")));
-        }
-    }
-    Ok(entries)
+        Ok((paths, meta))
+    });
+    by_source(entries, table)
 }
 
-fn parse_file_rules(raw: &[RawFileRule]) -> Result<BTreeMap<RelPath, bool>> {
-    let mut rules = BTreeMap::new();
-    for (i, r) in raw.iter().enumerate() {
-        let path = RelPath::parse(&r.source).map_err(|e| invalid(&format!("file_rules[{i}].source: {e}")))?;
-        if rules.insert(path, r.fold_directories).is_some() {
-            return Err(invalid(&format!("duplicate [[file_rules]] entry for '{}'", r.source)));
+fn parse_file_rules(raw: Vec<RawFileRule>) -> Result<BTreeMap<RelPath, bool>> {
+    let rules = raw
+        .into_iter()
+        .map(|r| Ok((rule_sources(r.source, r.sources)?, r.fold_directories)));
+    by_source(rules, "file_rules")
+}
+
+/// One value per source of the entries of `table`: an entry with several
+/// sources gives each the same value. A source in two entries is an error.
+fn by_source<T: Clone>(
+    entries: impl Iterator<Item = std::result::Result<(Vec<RelPath>, T), String>>,
+    table: &str,
+) -> Result<BTreeMap<RelPath, T>> {
+    let mut out = BTreeMap::new();
+    for (i, entry) in entries.enumerate() {
+        let (paths, value) = entry.map_err(|e| invalid(&format!("{table}[{i}]: {e}")))?;
+        for path in paths {
+            if out.insert(path.clone(), value.clone()).is_some() {
+                return Err(invalid(&format!("duplicate [[{table}]] entry for '{path}'")));
+            }
         }
     }
-    Ok(rules)
+    Ok(out)
+}
+
+/// The sources of a rule entry: `source` or a non-empty `sources`, never both.
+fn rule_sources(source: Option<String>, sources: Option<Vec<String>>) -> std::result::Result<Vec<RelPath>, String> {
+    match (source, sources) {
+        (Some(_), Some(_)) => Err("set either source or sources, not both".into()),
+        (None, None) => Err("set source or sources".into()),
+        (Some(s), None) => Ok(vec![RelPath::parse(&s).map_err(|e| format!("source: {e}"))?]),
+        (None, Some(list)) if list.is_empty() => Err("sources is empty".into()),
+        (None, Some(list)) => (list.iter().enumerate())
+            .map(|(j, s)| RelPath::parse(s).map_err(|e| format!("sources[{j}]: {e}")))
+            .collect(),
+    }
 }
 
 fn invalid(msg: &str) -> Error {
@@ -471,7 +499,7 @@ struct Raw {
     #[serde(default)]
     files: Vec<RawEntry>,
     #[serde(default)]
-    template_rules: Vec<RawEntry>,
+    template_rules: Vec<RawTemplateRule>,
     #[serde(default)]
     file_rules: Vec<RawFileRule>,
     #[serde(default)]
@@ -495,7 +523,8 @@ struct RawGlobalRule {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFileRule {
-    source: String,
+    source: Option<String>,
+    sources: Option<Vec<String>>,
     fold_directories: bool,
 }
 
@@ -515,7 +544,7 @@ impl Default for RawTemplates {
     }
 }
 
-/// One `[[files]]` or `[[template_rules]]` entry.
+/// One `[[files]]` entry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawEntry {
@@ -525,16 +554,41 @@ struct RawEntry {
     group: Option<String>,
 }
 
+/// One `[[template_rules]]` entry.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTemplateRule {
+    source: Option<String>,
+    sources: Option<Vec<String>>,
+    mode: Option<String>,
+    owner: Option<String>,
+    group: Option<String>,
+}
+
 impl RawEntry {
-    fn validate(self) -> std::result::Result<(RelPath, Metadata), String> {
+    fn validate(self) -> std::result::Result<(Vec<RelPath>, Metadata), String> {
         let path = RelPath::parse(&self.source).map_err(|e| format!("source: {e}"))?;
-        let meta = Metadata {
-            mode: self.mode.as_deref().map(parse_mode).transpose()?,
-            owner: self.owner.as_deref().map(|o| parse_owner("owner", o)).transpose()?,
-            group: self.group.as_deref().map(|g| parse_owner("group", g)).transpose()?,
-        };
-        Ok((path, meta))
+        Ok((vec![path], metadata(self.mode, self.owner, self.group)?))
     }
+}
+
+impl RawTemplateRule {
+    fn validate(self) -> std::result::Result<(Vec<RelPath>, Metadata), String> {
+        let paths = rule_sources(self.source, self.sources)?;
+        Ok((paths, metadata(self.mode, self.owner, self.group)?))
+    }
+}
+
+fn metadata(
+    mode: Option<String>,
+    owner: Option<String>,
+    group: Option<String>,
+) -> std::result::Result<Metadata, String> {
+    Ok(Metadata {
+        mode: mode.as_deref().map(parse_mode).transpose()?,
+        owner: owner.as_deref().map(|o| parse_owner("owner", o)).transpose()?,
+        group: group.as_deref().map(|g| parse_owner("group", g)).transpose()?,
+    })
 }
 
 /// True when `mode` holds only permission bits (0777): no setuid, setgid
@@ -928,6 +982,50 @@ group = "root"
         )
         .unwrap_err();
         assert!(e.to_string().contains("duplicate [[file_rules]] entry for 'a'"), "{e}");
+    }
+
+    /// One rule entry with `sources` acts as one entry per source, with the same settings.
+    #[test]
+    fn rules_take_a_list_of_sources() {
+        let c = Config::parse(
+            "version = 1\n[[file_rules]]\nsources = [\"a\", \"b/c\"]\nfold_directories = false\n\
+             [[template_rules]]\nsources = [\"x.tmpl\", \"y.tmpl\"]\nmode = \"0600\"\n",
+        )
+        .unwrap();
+        let rel = |p| RelPath::parse(p).unwrap();
+        assert_eq!(c.file_rules, BTreeMap::from([(rel("a"), false), (rel("b/c"), false)]));
+        let meta = Metadata {
+            mode: Some(0o600),
+            ..Metadata::default()
+        };
+        assert_eq!(
+            c.template_rules,
+            BTreeMap::from([(rel("x.tmpl"), meta.clone()), (rel("y.tmpl"), meta)])
+        );
+    }
+
+    #[test]
+    fn rules_need_exactly_one_of_source_and_sources() {
+        let both = "source = \"a\"\nsources = [\"b\"]\n";
+        let cases = [
+            (both, "set either source or sources, not both"),
+            ("", "set source or sources"),
+            ("sources = []\n", "sources is empty"),
+        ];
+        for (keys, want) in cases {
+            let e = err(&format!(
+                "version = 1\n[[file_rules]]\n{keys}fold_directories = false\n"
+            ));
+            assert!(e.contains(&format!("file_rules[0]: {want}")), "{e}");
+            let e = err(&format!("version = 1\n[[template_rules]]\n{keys}mode = \"0600\"\n"));
+            assert!(e.contains(&format!("template_rules[0]: {want}")), "{e}");
+        }
+        let e = err("version = 1\n[[file_rules]]\nsources = [\"a\", \"../x\"]\nfold_directories = false\n");
+        assert!(e.contains("file_rules[0]: sources[1]:"), "{e}");
+        let e = err("version = 1\n[[template_rules]]\nsources = [\"a.tmpl\", \"./a.tmpl\"]\nmode = \"0600\"\n");
+        assert!(e.contains("duplicate [[template_rules]] entry for 'a.tmpl'"), "{e}");
+        let e = err("version = 1\n[[files]]\nsources = [\"a\"]\n");
+        assert!(e.contains("unknown field `sources`"), "{e}");
     }
 
     #[test]

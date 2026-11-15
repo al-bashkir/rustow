@@ -191,17 +191,16 @@ fn names_source(value: Option<&Value>, source: &RelPath) -> bool {
         == Some(source)
 }
 
-/// Renames the matching entries of one array key; returns how many changed.
-/// The value is replaced in place: `insert` would drop the comments around it.
+/// Renames the matching entries of one array key, in `source` or in the
+/// `sources` list; returns how many changed. The value is replaced in
+/// place: `insert` would drop the comments around it.
 fn rename_in_key(item: Option<&mut Item>, from: &RelPath, to: &RelPath) -> usize {
     let sources: Vec<&mut Value> = match item {
-        Some(Item::ArrayOfTables(tables)) => tables
-            .iter_mut()
-            .filter_map(|t| t.get_mut("source")?.as_value_mut())
-            .collect(),
+        Some(Item::ArrayOfTables(tables)) => tables.iter_mut().flat_map(|t| source_values(t)).collect(),
         Some(Item::Value(Value::Array(array))) => array
             .iter_mut()
-            .filter_map(|v| v.as_inline_table_mut()?.get_mut("source"))
+            .filter_map(Value::as_inline_table_mut)
+            .flat_map(|t| source_values(t))
             .collect(),
         _ => Vec::new(),
     };
@@ -213,6 +212,21 @@ fn rename_in_key(item: Option<&mut Item>, from: &RelPath, to: &RelPath) -> usize
         renamed += 1;
     }
     renamed
+}
+
+/// The `source` value of an entry, or each item of its `sources` list.
+fn source_values(entry: &mut dyn toml_edit::TableLike) -> Vec<&mut Value> {
+    if entry.contains_key("source") {
+        return entry
+            .get_mut("source")
+            .and_then(Item::as_value_mut)
+            .into_iter()
+            .collect();
+    }
+    match entry.get_mut("sources").and_then(Item::as_value_mut) {
+        Some(Value::Array(list)) => list.iter_mut().collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn parse_doc(text: &str) -> Result<DocumentMut> {
@@ -446,6 +460,26 @@ mod tests {
         let inline = "version = 1\nfiles = [{ source = \"a\" }]\n";
         let out = rename_source(inline, &rel("a"), &rel("a.gpg")).unwrap().unwrap();
         assert!(Config::parse(&out).unwrap().files.contains_key(&rel("a.gpg")), "{out}");
+    }
+
+    #[test]
+    fn rename_source_renames_one_item_of_a_sources_list() {
+        let text = "version = 1\n[[template_rules]]\nsources = [\"a.tmpl\", \"t.tmpl\" ] # c\nmode = \"0600\"\n";
+        let out = rename_source(text, &rel("t.tmpl"), &rel("t.tmpl.age"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, text.replace("t.tmpl\"", "t.tmpl.age\""));
+        let inline = "version = 1\ntemplate_rules = [{ sources = [\"./t.tmpl\"], mode = \"0600\" }]\n";
+        let out = rename_source(inline, &rel("t.tmpl"), &rel("t.tmpl.age"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            Config::parse(&out)
+                .unwrap()
+                .template_rules
+                .contains_key(&rel("t.tmpl.age")),
+            "{out}"
+        );
     }
 
     #[test]

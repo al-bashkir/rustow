@@ -172,7 +172,15 @@ owner = "root"
 group = "root"
 ```
 
-A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. A system template under `rustowroot/` deploys as a copy also without a rule.
+A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. To give several templates the same metadata, list them in `sources` instead of `source`:
+
+```toml
+[[template_rules]]
+sources = [".ssh/config.tmpl", ".netrc.tmpl"]
+mode = "0600"
+```
+
+Set `source` or `sources` in each entry, not both. `sources` must not be empty. One entry with `sources` is the same as one entry for each source. A source in two entries is a configuration error (exit 2). A system template under `rustowroot/` deploys as a copy also without a rule.
 
 - `mode` is a string of 3 or 4 octal digits, for example `"0600"` or `"644"`. Only the digits 0–7 are allowed, with no sign or space. The maximum is `0777`. rustow rejects setuid, setgid and sticky bits. The mode must include owner read (`0400`), because rustow reads the deployed file to find changes. Any other mode is a configuration error (exit 2).
 - `owner` and `group` are a name or a numeric id. An unknown name is an error. `rustow check` reports it as a problem. The largest id is 4294967294: `chown` takes 4294967295 as "no change", so it is a configuration error (exit 2).
@@ -192,6 +200,14 @@ fold_directories = false
 ```
 
 A rule controls [folding](#folding) for symlinked files. `source` is a file or a directory. `fold_directories` is required. Two rules with the same `source` are a configuration error (exit 2).
+
+To give several paths the same value, list them in `sources` instead of `source`, as in [`[[template_rules]]`](#template_rules):
+
+```toml
+[[file_rules]]
+sources = [".config/gh", ".config/Code", ".config/nvim"]
+fold_directories = false
+```
 
 Each home link source gets the value of the rule on its own path or on its nearest parent directory. With no rule, it gets `defaults.fold_directories`. A directory can fold only when every link source below it has the value `true`.
 
