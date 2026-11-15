@@ -30,8 +30,9 @@ rustow checks each path of a chain once in a command, while it plans: the result
 
 The same rule protects system files. rustow installs a system file as root, so its repository source and `rustow.toml` must pass the rule for you: each path on their chains is owned by root or by you, and only your user-private group may write it. `rustow.toml` decides the destination, the owner, the mode and the `[vars]` of system files; when it is a symlink, rustow checks the file that it names. Otherwise the item is a conflict, also with `--force` or `--backup`: "untrusted source: <path> is writable by others; another user can change what rustow installs as root". `check` reports it as a problem.
 
-A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow opens the directories above a destination one at a time and never follows a symlink by accident. It follows a symlinked ancestor only when both checks pass for the current user:
+A destination can have a symlinked ancestor directory, for example `~/.config` that points to another disk. rustow opens the directories above a destination one at a time and never follows a symlink by accident. It follows a symlinked ancestor only when all three checks pass for the current user:
 
+- The directory that holds the symlink passes the same rule, so no other user can swap the symlink there while rustow reads it. A root-owned sticky directory such as `/tmp` passes. Otherwise the item is a conflict: "symlink is not safe: …".
 - The symlink itself is owned by root or by you. Its mode bits do not count. Otherwise the item is a conflict: "symlink is not safe: …".
 - Its target directory passes the same rule. Otherwise the item is a conflict: "symlink target is not safe: …".
 

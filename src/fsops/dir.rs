@@ -157,8 +157,9 @@ impl Dir {
 
     /// Walks `rel` below this directory. Each component opens without
     /// following a symlink. A symlink is followed only when `check_dir`
-    /// accepts its owner (for `me`) and the directory that it reaches, and
-    /// it is still the same symlink after that; at most 40 per walk.
+    /// accepts the directory that holds it, its owner (for `me`) and the
+    /// directory that it reaches, and it is still the same symlink after
+    /// that; at most 40 per walk.
     pub fn walk(self, rel: &Path, me: u32) -> Result<Walked> {
         let mut budget = MAX_SYMLINKS;
         walk_in(self, rel, me, &mut budget)
@@ -203,6 +204,12 @@ impl Dir {
 
     /// Follows the symlink `name` (at `path`) if the trust rule allows it.
     fn follow(&self, name: &OsStr, path: PathBuf, me: u32, budget: &mut u32) -> Result<Next> {
+        // Another user who may rename entries here could swap the symlink
+        // between its owner check and readlinkat.
+        let here = sys(fstat(&self.fd)).ctx(|| format!("inspect {}", self.path.display()))?;
+        if let Err(why) = trusted(&self.path, &here, Some(&self.fd), me) {
+            return Ok(Next::Blocked(path, format!("symlink is not safe: {why}")));
+        }
         let link = match self.followable(name, &path, me, budget) {
             Ok(link) => link,
             Err(why) => return Ok(Next::Blocked(path, why)),

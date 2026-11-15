@@ -617,6 +617,50 @@ fn a_target_behind_a_symlink_to_a_directory_with_a_write_acl_is_refused() {
     assert!(!shared.join(".cfg").exists());
 }
 
+/// Another user who can rename entries in a directory can swap the symlink
+/// there between its owner check and its text. So the walk follows a
+/// symlink only in a directory that passes the trust rule too.
+#[test]
+fn a_symlink_in_a_directory_that_others_can_write_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("shared/app/rc", "r\n");
+    let shared = fx.home_path("shared");
+    let intended = fx.home_path("intended");
+    fs::create_dir_all(&intended).unwrap();
+    fs::create_dir(&shared).unwrap();
+    std::os::unix::fs::symlink(&intended, shared.join("app")).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+
+    let out = fx.run(&["apply"]);
+    assert_ne!(out.code, 0, "{out:?}");
+    let why = format!("symlink is not safe: {} is writable by others", shared.display());
+    assert!(out.stdout.contains(&why) || out.stderr.contains(&why), "{out:?}");
+    assert!(!intended.join("rc").exists());
+}
+
+/// A root-owned sticky directory such as /tmp stays accepted: the sticky
+/// bit stops other users from renaming the user's symlink there.
+#[test]
+fn a_symlink_in_a_root_owned_sticky_directory_is_followed() {
+    use std::os::unix::fs::MetadataExt;
+    let tmp = std::env::temp_dir();
+    let meta = fs::metadata(&tmp).unwrap();
+    if meta.uid() != 0 || meta.mode() & 0o1000 == 0 {
+        eprintln!("SKIP: {} is not a root-owned sticky directory", tmp.display());
+        return;
+    }
+    let fx = Fixture::new();
+    fx.write(".cfg", "c\n");
+    let name = format!("rustow-test-{}", fx.base.file_name().unwrap().to_string_lossy());
+    let link = tmp.join(name);
+    std::os::unix::fs::symlink(&fx.home, &link).unwrap();
+    let out = fx.run(&["--target", link.to_str().unwrap(), "apply"]);
+    fs::remove_file(&link).unwrap();
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(is_symlink(&fx.home_path(".cfg")), "{out:?}");
+}
+
 /// A target that holds the state directory cannot deploy into it, also
 /// with --force: a source there would replace rustow's own state file.
 #[test]
