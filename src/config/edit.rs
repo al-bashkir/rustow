@@ -156,12 +156,12 @@ fn drop_tables(tables: &mut ArrayOfTables, source: &RelPath) -> String {
     carried
 }
 
-/// Points every `[[files]]` and `[[template_rules]]` entry for `from` at
+/// Points every `[[files]]`, `[[template_rules]]` and `[[file_rules]]` entry for `from` at
 /// `to`, keeping the other keys of the entry. `None` when nothing refers to `from`.
 pub fn rename_source(text: &str, from: &RelPath, to: &RelPath) -> Result<Option<String>> {
     Config::parse(text)?;
     let mut doc = parse_doc(text)?;
-    let renamed: usize = ["files", "template_rules"]
+    let renamed: usize = ["files", "template_rules", "file_rules"]
         .into_iter()
         .map(|key| rename_in_key(doc.get_mut(key), from, to))
         .sum();
@@ -460,6 +460,16 @@ mod tests {
         let inline = "version = 1\nfiles = [{ source = \"a\" }]\n";
         let out = rename_source(inline, &rel("a"), &rel("a.gpg")).unwrap().unwrap();
         assert!(Config::parse(&out).unwrap().files.contains_key(&rel("a.gpg")), "{out}");
+    }
+
+    #[test]
+    fn rename_source_moves_a_file_rule_with_its_destination() {
+        let text = "version = 1\n[[file_rules]]\nsource = \"s/run\"\ndestination = \"bin/run\"\n";
+        let out = rename_source(text, &rel("s/run"), &rel("s/run.age")).unwrap().unwrap();
+        assert_eq!(
+            Config::parse(&out).unwrap().destinations[&rel("s/run.age")],
+            rel("bin/run")
+        );
     }
 
     #[test]
