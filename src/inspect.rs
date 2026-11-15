@@ -2,7 +2,7 @@
 //! `diff` (may print secrets by design), `status` and `check` (never print
 //! content).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -480,8 +480,9 @@ fn prefixes(args: &[String]) -> Result<Vec<RelPath>> {
 }
 
 /// Recorded destinations in the current targets whose source no longer
-/// exists. A source below a skipped path (an unreadable directory) comes
-/// with that path: rustow cannot tell if it is still there.
+/// exists or deploys to another destination now. A source below a skipped
+/// path (an unreadable directory) comes with that path: rustow cannot tell
+/// if it is still there.
 fn orphans<'a, 'd>(
     ctx: &Context,
     discovery: &'d Discovery,
@@ -497,9 +498,13 @@ fn orphans<'a, 'd>(
     let paths: HashSet<&RelPath> = (discovery.sources.iter().map(|s| &s.path))
         .chain(present.iter().map(|s| &s.path))
         .collect();
+    let dests: HashMap<&RelPath, PathBuf> = (discovery.sources.iter())
+        .map(|s| (&s.path, ctx.dest_path(s)))
+        .collect();
     let mut found = Vec::new();
     for (dest, record) in &state.entries {
-        let known = source_exists(ctx, &paths, record);
+        let moved = dests.get(&record.source).is_some_and(|now| now != dest);
+        let known = source_exists(ctx, &paths, record) && !moved;
         let selected = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
         if known || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;
@@ -514,8 +519,15 @@ fn orphans<'a, 'd>(
 /// with no path would remove every managed destination).
 /// A template whose meta condition turned false names that condition; a
 /// source that a `[[global_rules]]` entry ignores names the rule; a path
-/// that is there but is not a source says why.
+/// that is there but is not a source says why. A source that deploys to
+/// another destination now names `undeploy orphaned`, which keeps the new one.
 fn orphan_detail(ctx: &Context, discovery: &Discovery, record: &Record) -> String {
+    if discovery.sources.iter().any(|s| s.path == record.source) {
+        return format!(
+            "the source deploys to another destination now; `rustow undeploy orphaned {}` removes it",
+            record.source
+        );
+    }
     let inactive = discovery.inactive.iter().find(|s| s.path == record.source);
     let why = match (inactive, ctx.ignore.ignoring_rule(&record.source, record.folded_dir)) {
         (Some(s), _) => s.reason.clone(),

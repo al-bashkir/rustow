@@ -252,6 +252,7 @@ destination = ".gitconfig"
 - In `[[file_rules]]`, `destination` alone is enough. `fold_directories` is then optional. In `[[template_rules]]`, `destination` alone is enough too, and the template stays a symlink. Add `mode`, `owner` or `group` to make it a copy.
 - Two sources with one destination are a collision, as without `destination`: both items are conflicts (exit 3), and `check` reports it.
 - A source with `destination` never [folds](#folding). A directory that a destination is below never folds either: the fold would write the file into the repository. An existing fold there becomes a real directory, with the rules for an unfold.
+- When you change a destination, the old one is ORPHANED. `apply` keeps it. `rustow undeploy orphaned <source>` removes it and keeps the new one.
 
 ## `[[global_rules]]`
 

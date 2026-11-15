@@ -161,3 +161,25 @@ fn a_source_that_moves_into_a_fold_unfolds_it() {
         "nothing written into the repository"
     );
 }
+
+/// When the destination changes, the old one is orphaned: `apply` keeps
+/// it and names the command that removes only it.
+#[test]
+fn a_changed_destination_orphans_the_old_one() {
+    let fx = Fixture::new();
+    let rule =
+        |dest: &str| format!("version = 1\n[[file_rules]]\nsource = \"scripts/run\"\ndestination = \"{dest}\"\n");
+    fx.write("rustow.toml", &rule("bin/run"));
+    fx.write("scripts/run", "r\n");
+    fx.ok(&["apply"]);
+    fx.write("rustow.toml", &rule("tools/run"));
+    let out = fx.ok(&["apply"]);
+    let line = out.stdout.lines().find(|l| l.contains("~/bin/run")).unwrap_or_default();
+    assert!(line.contains("orphaned"), "{out:?}");
+    let want = "the source deploys to another destination now; `rustow undeploy orphaned scripts/run` removes it";
+    assert!(line.contains(want), "{out:?}");
+    assert!(is_symlink(&fx.home_path("bin/run")), "apply removes nothing");
+    fx.ok(&["undeploy", "orphaned", "scripts/run"]);
+    assert!(!fx.home_path("bin/run").exists());
+    assert!(is_symlink(&fx.home_path("tools/run")), "the new one stays");
+}
