@@ -199,3 +199,20 @@ fn a_destination_inside_the_repository_is_a_conflict() {
     assert!(out.stdout.contains("resolves inside the repository"), "{out:?}");
     assert!(!fx.repo.join("b").exists(), "nothing written into the repository");
 }
+
+/// A missing source warns once, in the table of its entry.
+#[test]
+fn a_missing_source_with_a_destination_warns_once() {
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"gone\"\ndestination = \"x\"\n",
+    );
+    let out = fx.ok(&["apply"]);
+    assert_eq!(out.stderr.matches("warning: gone:").count(), 1, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("warning: gone: rustow.toml [[files]] entry does not exist"),
+        "{out:?}"
+    );
+}
