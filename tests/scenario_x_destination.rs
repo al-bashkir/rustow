@@ -183,3 +183,19 @@ fn a_changed_destination_orphans_the_old_one() {
     assert!(!fx.home_path("bin/run").exists());
     assert!(is_symlink(&fx.home_path("tools/run")), "the new one stays");
 }
+
+/// The repository is `~/dotfiles`: a destination inside it is blocked,
+/// and nothing is written there.
+#[test]
+fn a_destination_inside_the_repository_is_a_conflict() {
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[file_rules]]\nsource = \"a\"\ndestination = \"dotfiles/b\"\n",
+    );
+    fx.write("a", "1\n");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains("resolves inside the repository"), "{out:?}");
+    assert!(!fx.repo.join("b").exists(), "nothing written into the repository");
+}
