@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::cli::{
     CacheCommand, Cli, Command, Conflict, DeployArgs, EncArgs, EncCommand, FileCommand, Global, RemovalArgs,
-    StateCommand, StatusArgs, TemplateCommand, UndeployCommand,
+    StateCommand, StatusArgs, TemplateCommand, UndeployArgs, UndeployCommand,
 };
 use crate::config::DefaultMode;
 use crate::error::{Error, Result};
@@ -14,7 +14,7 @@ use crate::paths::{RelPath, Scope};
 use crate::plan::{self, Plan};
 use crate::repo::{Context, Env, GlobalOpts};
 use crate::report::{Listed, Printer, RunKind};
-use crate::source::{Discovery, Mode, Selector, Source};
+use crate::source::{Discovery, Mode, Selector, Skipped, Source};
 use crate::state::{self, Lock, Registration, State};
 use crate::{files, fsops, inspect};
 
@@ -36,17 +36,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Status(a) => status_cmd(g, &env, p, &a),
         Command::Check => check_cmd(g, &env, p),
         Command::Doctor => crate::doctor::doctor(&open(g, &env, p)?, p),
-        Command::Undeploy(a) => match a.command {
-            // clap parses these before the subcommand, and `orphaned` would drop them.
-            Some(_) if a.yes || a.removal.on_conflict.is_some() => Err(Error::Usage(
-                "put the options after `orphaned`, as in `rustow undeploy orphaned --on-conflict abort`".into(),
-            )),
-            Some(UndeployCommand::Orphaned(r)) => undeploy(g, &env, p, &r, Selector::All, Removing::Orphaned),
-            None => {
-                let ask = a.removal.paths.paths.is_empty() && !a.yes;
-                undeploy(g, &env, p, &a.removal, Selector::All, Removing::Selected { ask })
-            }
-        },
+        Command::Undeploy(a) => undeploy_cmd(g, &env, p, a),
         Command::Cache(CacheCommand::Clean) => cache_clean(g, &env, p),
         Command::State(c) => state_cmd(g, &env, p, c),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
@@ -487,6 +477,47 @@ enum Removing {
     Orphaned,
 }
 
+fn undeploy_cmd(g: &Global, env: &Env, p: &mut Printer, a: UndeployArgs) -> Result<i32> {
+    match a.command {
+        // clap parses these before the subcommand, and `orphaned` would drop them.
+        Some(_) if a.yes || a.removal.on_conflict.is_some() => Err(Error::Usage(
+            "put the options after `orphaned`, as in `rustow undeploy orphaned --on-conflict abort`".into(),
+        )),
+        Some(UndeployCommand::Orphaned(r)) => undeploy(g, env, p, &r, Selector::All, Removing::Orphaned),
+        None => {
+            let ask = a.removal.paths.paths.is_empty() && !a.yes;
+            undeploy(g, env, p, &a.removal, Selector::All, Removing::Selected { ask })
+        }
+    }
+}
+
+impl Removing {
+    /// The removals of `plan::plan_removal` that this run makes. Only
+    /// `Selected` warns about records under other targets. With
+    /// `Orphaned`, a path that selects no orphan is a usage error.
+    fn keep(
+        self,
+        (ctx, state, paths): (&Context, &State, &[String]),
+        (mut removals, elsewhere): (Vec<plan::Removal>, Vec<Skipped>),
+        printer: &mut Printer,
+    ) -> Result<Vec<plan::Removal>> {
+        if let Removing::Selected { .. } = self {
+            printer.warn(&elsewhere);
+            return Ok(removals);
+        }
+        let gone = inspect::orphaned(ctx, &ctx.discover()?, state, paths)?;
+        removals.retain(|r| gone.contains(&r.dest));
+        if removals.is_empty() && !paths.is_empty() {
+            return Err(Error::Usage(format!("nothing orphaned matches {}", paths.join(", "))));
+        }
+        Ok(removals)
+    }
+
+    fn asks(self) -> bool {
+        matches!(self, Removing::Selected { ask: true })
+    }
+}
+
 /// Removes managed destinations.
 fn undeploy(
     g: &Global,
@@ -497,21 +528,12 @@ fn undeploy(
     removing: Removing,
 ) -> Result<i32> {
     let (paths, abort) = (&a.paths.paths, a.abort());
-    let ask = matches!(removing, Removing::Selected { ask: true });
+    let ask = removing.asks();
     let mut ctx = open(g, env, printer)?;
     let held = lock_run(&ctx, printer, g.dry_run, !ask)?;
     let mut state = ctx.load_state()?;
-    let (mut removals, elsewhere) = plan::plan_removal(&ctx, paths, selector, &state)?;
-    match removing {
-        Removing::Selected { .. } => printer.warn(&elsewhere),
-        Removing::Orphaned => {
-            let gone = inspect::orphaned(&ctx, &ctx.discover()?, &state, paths)?;
-            removals.retain(|r| gone.contains(&r.dest));
-            if removals.is_empty() && !paths.is_empty() {
-                return Err(Error::Usage(format!("nothing orphaned matches {}", paths.join(", "))));
-            }
-        }
-    }
+    let planned = plan::plan_removal(&ctx, paths, selector, &state)?;
+    let removals = removing.keep((&ctx, &state, paths), planned, printer)?;
     let predicted = execute::predict_removal(&removals);
     if let Some(code) = removes_nothing(g.dry_run, (abort, ask), printer, &predicted)? {
         return Ok(code);
