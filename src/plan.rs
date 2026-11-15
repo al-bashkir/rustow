@@ -824,13 +824,20 @@ fn unsafe_cache(want: &Want, target: &Path) -> Option<&'static str> {
 
 /// Why another user can change what rustow installs as root from the
 /// system source `source`: the trust rule of link targets
-/// (`fsops::trust_cache`) on its repository path, for the current user.
-/// `None` for a home source or a trusted one. `check` reports it too.
+/// (`fsops::trust_cache`) on its repository path and on `rustow.toml`,
+/// which decides its destination, metadata and `[vars]`, for the current
+/// user. `None` for a home source or a trusted one. `check` reports it too.
 pub fn untrusted_source(ctx: &Context, source: &Source) -> Option<String> {
     if source.scope != Scope::Root {
         return None;
     }
-    let why = fsops::trust_cache(&ctx.root.join(source.path.as_path()), geteuid().as_raw()).err()?;
+    let me = geteuid().as_raw();
+    let why = [
+        ctx.root.join(crate::config::CONFIG_FILE),
+        ctx.root.join(source.path.as_path()),
+    ]
+    .iter()
+    .find_map(|path| fsops::trust_cache(path, me).err())?;
     Some(format!("{why}; another user can change what rustow installs as root"))
 }
 

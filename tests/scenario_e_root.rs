@@ -515,6 +515,64 @@ fn a_new_system_file_does_not_take_the_group_of_a_setgid_directory() {
     assert_eq!(gid, egid.as_raw(), "not group {other} of the setgid directory");
 }
 
+/// rustow.toml decides the destination, owner, mode and `[vars]` of what
+/// rustow installs as root. One that another user can change makes each
+/// system item a conflict, as an untrusted source does. Home items deploy.
+#[test]
+fn a_configuration_that_others_can_change_blocks_system_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let config = fx.write(
+        "rustow.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/app.conf\"\n",
+    );
+    fx.write("rustowroot/etc/app.conf", "x\n");
+    fx.write(".home.conf", "h\n");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o666)).unwrap();
+    let why = format!(
+        "untrusted source: {} is writable by others; another user can change what rustow installs as root",
+        config.display()
+    );
+
+    let out = fx.run(&["apply", "--force"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains(&why), "{out:?}");
+    assert!(!fx.root_path("etc/app.conf").exists());
+    assert!(is_symlink(&fx.home_path(".home.conf")), "home items deploy: {out:?}");
+    let check = fx.run(&["check"]);
+    assert_eq!(check.code, 1, "{check:?}");
+    assert!(
+        check
+            .stdout
+            .contains(&format!("problem: rustowroot/etc/app.conf: {why}")),
+        "{check:?}"
+    );
+}
+
+/// A symlinked rustow.toml is checked at the file that it names.
+#[test]
+fn a_symlinked_configuration_is_checked_at_its_target() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let shared = fx.write_home(
+        "shared.toml",
+        "version = 1\n[[files]]\nsource = \"rustowroot/etc/app.conf\"\n",
+    );
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o666)).unwrap();
+    std::os::unix::fs::symlink(&shared, fx.repo.join("rustow.toml")).unwrap();
+    fx.write("rustowroot/etc/app.conf", "x\n");
+
+    let check = fx.run(&["check"]);
+    assert_eq!(check.code, 1, "{check:?}");
+    let real = fs::canonicalize(&shared).unwrap();
+    assert!(
+        check
+            .stdout
+            .contains(&format!("untrusted source: {} is writable by others", real.display())),
+        "{check:?}"
+    );
+}
+
 /// An ACL can let another user write a source whose mode bits look safe:
 /// the group bits are then the ACL mask. Such a system source is untrusted.
 #[cfg(target_os = "linux")]
