@@ -64,7 +64,7 @@ rustow waits for the sudo program (or `RUSTOW_SUDO`) and for each answer of the 
 
 ### Backups
 
-For `--backup`, rustow makes the backup directories as you before sudo starts. The helper never makes a directory. It only moves the old file into that directory. So the backup file of a root-owned system file is owned by root, but its directory is yours: you can remove it, and later backups work. Before the helper moves a file from a directory that you cannot search, it removes the permissions of the group and of others from it. So you cannot read the backup either.
+For `--backup`, rustow makes the backup directories as you before sudo starts. The helper never makes a directory. It only moves the old file into that directory. So the backup file of a root-owned system file is owned by root, but its directory is yours: you can remove it, and later backups work. Before the helper moves a file from a directory that you cannot search, it removes the permissions of the group and of others from it. So you cannot read the backup either. A file there with more than one name (a hard link) fails the item and stays unchanged: another name would change with it. rustow also never changes only the owner or the mode of a file that has more than one name.
 
 ### Temporary files
 

@@ -361,6 +361,21 @@ impl Dir {
         Ok((file, meta))
     }
 
+    /// `open_regular` for a change of owner or mode: a file with another
+    /// name (a hard link that someone who may write here planted) would
+    /// change with it.
+    fn open_single(&self, name: &OsStr) -> Result<(File, fs::Metadata)> {
+        let (file, meta) = self.open_regular(name)?;
+        if meta.nlink() != 1 {
+            let (path, n) = (self.entry(name), meta.nlink());
+            return Err(Error::Failed(format!(
+                "{} has {n} hard links; left unchanged",
+                path.display()
+            )));
+        }
+        Ok((file, meta))
+    }
+
     /// Writes `want.1` bytes from `from` to `name` through the new
     /// temporary file `temp` (from `temp_name`) in this directory: private
     /// (0600) from creation, streamed (`Hash::copy`), then owner and mode
@@ -425,7 +440,7 @@ impl Dir {
     /// `check` judges what the open file is, and the change reaches that
     /// file, also when another one takes the name in the meantime.
     pub fn set_meta(&self, name: &OsStr, meta: FileMeta, check: impl FnOnce(Observed) -> Result<()>) -> Result<()> {
-        let (mut file, stat) = self.open_regular(name)?;
+        let (mut file, stat) = self.open_single(name)?;
         check(self.observed(name, &mut file, &stat)?)?;
         chown_chmod(&file, &self.entry(name), (meta.uid, meta.gid), meta.mode)
     }
@@ -515,7 +530,7 @@ impl Dir {
         if kind(&st) == SFlag::S_IFLNK {
             return Ok(None);
         }
-        let (file, meta) = self.open_regular(name)?;
+        let (file, meta) = self.open_single(name)?;
         let old = meta.mode() & 0o7777;
         file.set_permissions(Permissions::from_mode(old & 0o700))
             .ctx(|| format!("restrict {}", path.display()))?;
@@ -740,6 +755,47 @@ fn id_of(st: &FileStat) -> DirId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A destination `app.conf` that is a hard link to `other`, which another
+    /// name (outside the destination directory) also reaches.
+    fn hard_linked() -> (tempfile::TempDir, Dir, PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let other = t.path().join("other");
+        fs::write(&other, "x\n").unwrap();
+        fs::set_permissions(&other, Permissions::from_mode(0o664)).unwrap();
+        let dest = t.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        fs::hard_link(&other, dest.join("app.conf")).unwrap();
+        let dir = open_ready(&dest, nix::unistd::geteuid().as_raw()).unwrap();
+        (t, dir, other)
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().mode() & 0o7777
+    }
+
+    /// The sudo helper restricts a hidden destination before its backup: a
+    /// hard link planted there must not let it change another file's mode.
+    #[test]
+    fn restrict_refuses_a_hard_linked_file() {
+        let (_t, dir, other) = hard_linked();
+        let err = dir.restrict(OsStr::new("app.conf")).unwrap_err();
+        assert!(err.to_string().contains("hard links"), "{err}");
+        assert_eq!(mode_of(&other), 0o664);
+    }
+
+    #[test]
+    fn set_meta_refuses_a_hard_linked_file() {
+        let (_t, dir, other) = hard_linked();
+        let meta = FileMeta {
+            mode: Some(0o600),
+            uid: None,
+            gid: None,
+        };
+        let err = dir.set_meta(OsStr::new("app.conf"), meta, |_| Ok(())).unwrap_err();
+        assert!(err.to_string().contains("hard links"), "{err}");
+        assert_eq!(mode_of(&other), 0o664);
+    }
 
     /// The counter alone keeps two names apart, also when the clock does not move.
     #[test]

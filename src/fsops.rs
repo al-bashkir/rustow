@@ -780,13 +780,12 @@ mod tests {
     }
 
     /// The check sees the open file, and the change reaches that file, also
-    /// when another file takes its name after the check (a hardlink swap).
+    /// when another file takes its name after the check (a rename swap).
     #[test]
     fn set_meta_changes_the_file_that_its_check_saw() {
         let (_t, d) = tmp();
         let dir = open(&d);
         fs::write(d.join("f"), b"mine").unwrap();
-        fs::hard_link(d.join("f"), d.join("kept")).unwrap();
         fs::write(d.join("other"), b"theirs").unwrap();
         fs::set_permissions(d.join("other"), fs::Permissions::from_mode(0o644)).unwrap();
         let meta = FileMeta {
@@ -796,7 +795,10 @@ mod tests {
         let mut seen = None;
         dir.set_meta(name("f"), meta, |now| {
             seen = Some(now);
-            fs::rename(d.join("other"), d.join("f")).map_err(|e| Error::Failed(e.to_string()))
+            let swap = |from: &str, to: &str| fs::rename(d.join(from), d.join(to));
+            swap("f", "kept")
+                .and_then(|()| swap("other", "f"))
+                .map_err(|e| Error::Failed(e.to_string()))
         })
         .unwrap();
         assert!(matches!(seen, Some(Observed::File { hash, .. }) if hash == Hash::of(b"mine")));
