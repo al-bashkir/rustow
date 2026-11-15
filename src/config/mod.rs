@@ -157,6 +157,10 @@ pub struct Config {
     pub template_rules: BTreeMap<RelPath, Metadata>,
     /// `[[file_rules]]`: `fold_directories` by rule source (a file or a directory).
     pub file_rules: BTreeMap<RelPath, bool>,
+    /// The `destination` of a `[[files]]`, `[[template_rules]]` or
+    /// `[[file_rules]]` entry, by source: the path relative to the target
+    /// root of the source's scope, in place of the source path.
+    pub destinations: BTreeMap<RelPath, RelPath>,
     /// `[[global_rules]]`, in file order.
     pub global_rules: Vec<GlobalRule>,
 }
@@ -205,6 +209,7 @@ impl Default for Config {
             added_files: BTreeSet::new(),
             template_rules: BTreeMap::new(),
             file_rules: BTreeMap::new(),
+            destinations: BTreeMap::new(),
             global_rules: Vec::new(),
         }
     }
@@ -224,10 +229,15 @@ impl Config {
     pub fn parse(text: &str) -> Result<Config> {
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| toml_error(text, e.message(), e.span()))?;
         check_header(&raw)?;
+        let mut destinations = BTreeMap::new();
         let files = parse_entries(raw.files.into_iter().map(RawEntry::validate), "files", false)?;
+        let files = take_destinations(files, &mut destinations)?;
         let rules = raw.template_rules.into_iter().map(RawTemplateRule::validate);
-        let template_rules = parse_entries(rules, "template_rules", true)?;
-        let file_rules = parse_file_rules(raw.file_rules)?;
+        let template_rules = take_destinations(parse_entries(rules, "template_rules", true)?, &mut destinations)?;
+        let file_rules = take_destinations(parse_file_rules(raw.file_rules)?, &mut destinations)?
+            .into_iter()
+            .filter_map(|(source, fold)| Some((source, fold?)))
+            .collect();
         let global_rules = parse_global_rules(raw.global_rules)?;
         Ok(Config {
             present: true,
@@ -239,6 +249,7 @@ impl Config {
             added_files: BTreeSet::new(),
             template_rules,
             file_rules,
+            destinations,
             global_rules,
         })
     }
@@ -250,6 +261,12 @@ impl Config {
             .get(path)
             .cloned()
             .or_else(|| self.added_files.contains(path).then(Metadata::default))
+    }
+
+    /// The metadata of the `[[template_rules]]` entry of `path`, which makes
+    /// the template a copy. An entry with only a destination has none.
+    pub fn template_meta(&self, path: &RelPath) -> Option<&Metadata> {
+        self.template_rules.get(path).filter(|m| **m != Metadata::default())
     }
 
     /// Merges the `vars` of each `[[global_rules]]` entry that matches
@@ -323,28 +340,82 @@ fn check_header(raw: &Raw) -> Result<()> {
     validate_extension(&raw.templates.extension)
 }
 
+/// The value of an entry and its `destination`.
+type Moved<T> = (T, Option<RelPath>);
+
+/// The sources of one entry with its value, or the error in it.
+type Parsed<T> = std::result::Result<(Vec<RelPath>, Moved<T>), String>;
+
 /// The validated `[[files]]` or `[[template_rules]]` entries (`table`) by
-/// source. With `need_meta`, each entry must set at least one of mode, owner, group.
+/// source. With `need_meta`, each entry must set at least one of mode,
+/// owner, group and destination.
 fn parse_entries(
-    raw: impl Iterator<Item = std::result::Result<(Vec<RelPath>, Metadata), String>>,
+    raw: impl Iterator<Item = Parsed<Metadata>>,
     table: &str,
     need_meta: bool,
-) -> Result<BTreeMap<RelPath, Metadata>> {
+) -> Result<BTreeMap<RelPath, Moved<Metadata>>> {
     let entries = raw.map(|r| {
-        let (paths, meta) = r?;
-        if need_meta && meta == Metadata::default() {
-            return Err(format!("'{}' sets none of mode, owner or group", paths[0]));
+        let (paths, (meta, dest)) = r?;
+        if need_meta && meta == Metadata::default() && dest.is_none() {
+            return Err(format!("'{}' sets none of mode, owner, group or destination", paths[0]));
         }
-        Ok((paths, meta))
+        Ok((paths, (meta, dest)))
     });
     by_source(entries, table)
 }
 
-fn parse_file_rules(raw: Vec<RawFileRule>) -> Result<BTreeMap<RelPath, bool>> {
-    let rules = raw
-        .into_iter()
-        .map(|r| Ok((rule_sources(r.source, r.sources)?, r.fold_directories)));
+fn parse_file_rules(raw: Vec<RawFileRule>) -> Result<BTreeMap<RelPath, Moved<Option<bool>>>> {
+    let rules = raw.into_iter().map(|r| {
+        if r.fold_directories.is_none() && r.destination.is_none() {
+            return Err("set fold_directories or destination".into());
+        }
+        let (paths, dest) = entry_sources(r.source, r.sources, r.destination)?;
+        Ok((paths, (r.fold_directories, dest)))
+    });
     by_source(rules, "file_rules")
+}
+
+/// Moves the destination of each entry to `out`; one source has at most one.
+fn take_destinations<T>(
+    entries: BTreeMap<RelPath, Moved<T>>,
+    out: &mut BTreeMap<RelPath, RelPath>,
+) -> Result<BTreeMap<RelPath, T>> {
+    (entries.into_iter())
+        .map(|(source, (value, dest))| {
+            if let Some(dest) = dest
+                && out.insert(source.clone(), dest).is_some()
+            {
+                return Err(invalid(&format!("'{source}' has a destination in more than one entry")));
+            }
+            Ok((source, value))
+        })
+        .collect()
+}
+
+/// The sources of a rule entry and the `destination` of its one `source`.
+fn entry_sources(
+    source: Option<String>,
+    sources: Option<Vec<String>>,
+    destination: Option<String>,
+) -> std::result::Result<(Vec<RelPath>, Option<RelPath>), String> {
+    if sources.is_some() && destination.is_some() {
+        return Err("destination needs source, not sources".into());
+    }
+    Ok((rule_sources(source, sources)?, parse_destination(destination)?))
+}
+
+/// A `destination`: relative to the target root, and with no component
+/// that a temporary file of rustow could have.
+fn parse_destination(text: Option<String>) -> std::result::Result<Option<RelPath>, String> {
+    let Some(text) = text else { return Ok(None) };
+    let dest = RelPath::parse(&text).map_err(|e| format!("destination: {e}"))?;
+    if dest.components().any(|c| c.starts_with(fsops::TEMP_PREFIX)) {
+        return Err(format!(
+            "destination: '{dest}' uses the reserved prefix {}",
+            fsops::TEMP_PREFIX
+        ));
+    }
+    Ok(Some(dest))
 }
 
 /// One value per source of the entries of `table`: an entry with several
@@ -525,7 +596,8 @@ struct RawGlobalRule {
 struct RawFileRule {
     source: Option<String>,
     sources: Option<Vec<String>>,
-    fold_directories: bool,
+    fold_directories: Option<bool>,
+    destination: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -552,6 +624,7 @@ struct RawEntry {
     mode: Option<String>,
     owner: Option<String>,
     group: Option<String>,
+    destination: Option<String>,
 }
 
 /// One `[[template_rules]]` entry.
@@ -563,19 +636,21 @@ struct RawTemplateRule {
     mode: Option<String>,
     owner: Option<String>,
     group: Option<String>,
+    destination: Option<String>,
 }
 
 impl RawEntry {
-    fn validate(self) -> std::result::Result<(Vec<RelPath>, Metadata), String> {
+    fn validate(self) -> Parsed<Metadata> {
         let path = RelPath::parse(&self.source).map_err(|e| format!("source: {e}"))?;
-        Ok((vec![path], metadata(self.mode, self.owner, self.group)?))
+        let meta = metadata(self.mode, self.owner, self.group)?;
+        Ok((vec![path], (meta, parse_destination(self.destination)?)))
     }
 }
 
 impl RawTemplateRule {
-    fn validate(self) -> std::result::Result<(Vec<RelPath>, Metadata), String> {
-        let paths = rule_sources(self.source, self.sources)?;
-        Ok((paths, metadata(self.mode, self.owner, self.group)?))
+    fn validate(self) -> Parsed<Metadata> {
+        let (paths, dest) = entry_sources(self.source, self.sources, self.destination)?;
+        Ok((paths, (metadata(self.mode, self.owner, self.group)?, dest)))
     }
 }
 
@@ -1028,9 +1103,68 @@ group = "root"
         assert!(e.contains("unknown field `sources`"), "{e}");
     }
 
+    /// Each table takes `destination` next to one `source`; it alone is
+    /// enough for a rule, and it sets no metadata or fold rule.
+    #[test]
+    fn destination_moves_one_source() {
+        let c = Config::parse(
+            "version = 1\n[[files]]\nsource = \"a\"\ndestination = \".local/bin/a\"\n\
+             [[template_rules]]\nsource = \"t.tmpl\"\ndestination = \"x/t\"\n\
+             [[file_rules]]\nsource = \"l\"\ndestination = \"./y//l\"\n",
+        )
+        .unwrap();
+        let rel = |p| RelPath::parse(p).unwrap();
+        let want = [("a", ".local/bin/a"), ("l", "y/l"), ("t.tmpl", "x/t")].map(|(s, d)| (rel(s), rel(d)));
+        assert_eq!(c.destinations, BTreeMap::from(want));
+        assert_eq!(c.files[&rel("a")], Metadata::default());
+        assert_eq!(c.template_rules[&rel("t.tmpl")], Metadata::default());
+        assert!(c.file_rules.is_empty(), "a destination alone sets no fold rule");
+    }
+
+    #[test]
+    fn destination_errors() {
+        let cases = [
+            (
+                "[[file_rules]]\nsources = [\"a\"]\ndestination = \"b\"\n",
+                "file_rules[0]: destination needs source, not sources",
+            ),
+            (
+                "[[template_rules]]\nsources = [\"a.tmpl\"]\nmode = \"0600\"\ndestination = \"b\"\n",
+                "template_rules[0]: destination needs source, not sources",
+            ),
+            (
+                "[[files]]\nsource = \"a\"\ndestination = \"/etc/a\"\n",
+                "files[0]: destination: invalid path '/etc/a'",
+            ),
+            (
+                "[[files]]\nsource = \"a\"\ndestination = \"x/../a\"\n",
+                "files[0]: destination: invalid path",
+            ),
+            (
+                "[[files]]\nsource = \"a\"\ndestination = \"x/.rustow-tmp-a\"\n",
+                "files[0]: destination: 'x/.rustow-tmp-a' uses the reserved prefix .rustow-tmp-",
+            ),
+            (
+                "[[files]]\nsource = \"a\"\ndestination = \"b\"\n[[file_rules]]\nsource = \"a\"\ndestination = \"c\"\n",
+                "'a' has a destination in more than one entry",
+            ),
+            (
+                "[[file_rules]]\nsource = \"a\"\n",
+                "file_rules[0]: set fold_directories or destination",
+            ),
+            (
+                "[[template_rules]]\nsource = \"a.tmpl\"\n",
+                "'a.tmpl' sets none of mode, owner, group or destination",
+            ),
+        ];
+        for (text, want) in cases {
+            let e = err(&format!("version = 1\n{text}"));
+            assert!(e.contains(want), "{text}: {e}");
+        }
+    }
+
     #[test]
     fn file_rules_need_fold_directories_and_reject_unknown_keys() {
-        assert!(Config::parse("version = 1\n[[file_rules]]\nsource = \"a\"\n").is_err());
         assert!(
             Config::parse("version = 1\n[[file_rules]]\nsource = \"a\"\nfold_directories = false\nmode = \"0600\"\n")
                 .is_err()

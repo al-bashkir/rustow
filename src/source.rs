@@ -367,7 +367,7 @@ fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Disco
         None => Placed::Deploy(source),
         Some(Err(e)) => Placed::Skip(format!("{META_ERROR}{e}")),
         Some(Ok(block)) => {
-            let has_rule = cfg.template_rules.contains_key(&path);
+            let has_rule = cfg.template_meta(&path).is_some();
             apply_meta(source, block.meta, has_rule, host)
         }
     };
@@ -454,9 +454,9 @@ pub fn repo_relative(repo: &Path, path: &Path) -> Result<(RelPath, bool)> {
     Ok((RelPath::parse(&rel.to_string_lossy())?, rel.to_str().is_some()))
 }
 
-/// Each `[[files]]`, `[[template_rules]]` and `rustow file add` entry that
-/// names no discovered file, and no file at or below a skipped path, with
-/// the reason.
+/// Each `[[files]]`, `[[template_rules]]` and `rustow file add` entry, and
+/// each `destination`, that names no discovered file, and no file at or
+/// below a skipped path, with the reason.
 fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Discovery) -> Vec<Skipped> {
     let known: BTreeSet<&RelPath> = (found.sources.iter().map(|s| &s.path))
         .chain(found.inactive.iter().map(|s| &s.path))
@@ -474,7 +474,12 @@ fn check_registrations(repo: &Path, ignore: &Ignore, cfg: &Config, found: &Disco
             .iter()
             .map(|p| ("`rustow file add` registration".to_owned(), p)),
     );
+    // A destination outside those two tables comes from [[file_rules]].
+    let moved = (cfg.destinations.keys())
+        .filter(|p| !cfg.files.contains_key(*p) && !cfg.template_rules.contains_key(*p))
+        .map(|p| (format!("{config} [[file_rules]] entry"), p));
     entries
+        .chain(moved)
         // A path that a matching [[global_rules]] entry ignores is not for this host: no warning.
         .filter(|(_, path)| !known.contains(path) && !skipped(path) && ignore.ignoring_rule(path, false).is_none())
         .map(|(entry, path)| {
@@ -510,10 +515,11 @@ pub fn classify(path: &RelPath, cfg: &Config) -> std::result::Result<Source, Str
     let (scope, inner) = split_scope(path).map_err(|e| e.to_string())?;
     let (backend, template, name) = split_suffixes(inner.file_name(), &cfg.template_extension)?;
     let mode = select_mode(path, cfg, backend, template)?;
+    let dest = cfg.destinations.get(path).cloned();
     Ok(Source {
         path: path.clone(),
         scope,
-        dest: inner.with_file_name(name),
+        dest: dest.unwrap_or_else(|| inner.with_file_name(name)),
         mode: scoped_mode(scope, cfg.defaults.mode, mode, path)?,
     })
 }
@@ -577,11 +583,10 @@ fn select_mode(
     template: bool,
 ) -> std::result::Result<Mode, String> {
     let registered = cfg.registration(path);
-    let rule = cfg.template_rules.get(path);
     if template {
-        template_mode(backend, registered.is_some(), rule)
+        template_mode(backend, registered.is_some(), cfg.template_meta(path))
     } else {
-        plain_mode(cfg, backend, registered, rule.is_some())
+        plain_mode(cfg, backend, registered, cfg.template_rules.contains_key(path))
     }
 }
 

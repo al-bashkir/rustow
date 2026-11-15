@@ -93,10 +93,12 @@ pub fn never_folds(dir: &str) -> bool {
     )
 }
 
-/// A home link source that may sit below a folded directory.
+/// A home link source that may sit below a folded directory. A fold
+/// shows the source path, so a source with a `destination` cannot.
 fn foldable(ctx: &Context, source: &Source) -> bool {
     is_home(source)
         && source.mode == Mode::Link
+        && !ctx.config.destinations.contains_key(&source.path)
         && fold_allowed(
             &ctx.config.file_rules,
             ctx.config.defaults.fold_directories,
@@ -120,6 +122,11 @@ fn fold_candidates(
             .map(|s| &s.path)
             .collect(),
         chosen: selected.iter().filter(|s| foldable(ctx, s)).map(|s| &s.path).collect(),
+        moved_into: dirs_above(
+            (discovery.sources.iter())
+                .filter(|s| is_home(s) && ctx.config.destinations.contains_key(&s.path))
+                .map(|s| &s.dest),
+        ),
         ..Contents::default()
     };
     let mut folds = BTreeSet::new();
@@ -139,7 +146,8 @@ fn fold_candidates(
 }
 
 /// `dir` can be one symlink: no home destination collides at or below it,
-/// its destination allows a fold, and it holds only sources that the fold may hold.
+/// no source moves into it, its destination allows a fold, and it holds
+/// only sources that the fold may hold.
 fn qualifies(
     ctx: &Context,
     dir: &RelPath,
@@ -150,7 +158,9 @@ fn qualifies(
     let collides = collided
         .keys()
         .any(|(scope, dest)| *scope == Scope::Home && dest.starts_with(dir));
-    Ok(!collides && dest_allows_fold(ctx, dir, recorded)? && contents.holds_only(ctx, dir, recorded)?)
+    // The fold would write a moved source into the repository.
+    let moved_into = contents.moved_into.contains(dir);
+    Ok(!collides && !moved_into && dest_allows_fold(ctx, dir, recorded)? && contents.holds_only(ctx, dir, recorded)?)
 }
 
 /// Recorded folded links that a selected source now lies below and that are no longer folded.
@@ -257,6 +267,9 @@ struct Contents<'a> {
     linked: BTreeSet<&'a RelPath>,
     /// The ones that this run selects: a new fold may hold only these.
     chosen: BTreeSet<&'a RelPath>,
+    /// The directories above the destination of each home source with a
+    /// `destination`: none of them folds.
+    moved_into: BTreeSet<RelPath>,
     /// Each directory that a walk reached.
     walked: BTreeSet<RelPath>,
     /// Directories with an entry below them that is reserved or not one of `linked`.

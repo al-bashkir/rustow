@@ -635,10 +635,7 @@ fn unknown_ids(ctx: &Context, sources: &[Source]) -> Vec<String> {
             out.extend(unknown_names(meta).map(|why| format!("{CONFIG_FILE}: [[{table}]] source '{path}': {why}")));
         }
     }
-    for s in sources
-        .iter()
-        .filter(|s| !ctx.config.template_rules.contains_key(&s.path))
-    {
+    for s in sources.iter().filter(|s| ctx.config.template_meta(&s.path).is_none()) {
         if let Mode::TemplateCopy(None, meta) = &s.mode {
             out.extend(unknown_names(meta).map(|why| format!("{}: template meta block: {why}", s.path)));
         }

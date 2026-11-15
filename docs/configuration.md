@@ -107,6 +107,7 @@ rustow uses one symlink for the shallowest home directory when all these conditi
 - The repository directory holds only ordinary link sources, and each of them may fold: its [`[[file_rules]]`](#file_rules) value, or `fold_directories` when no rule covers it, is `true`.
 - It holds no reserved directory, such as `.git` or an in-repository `cache_dir` or `state_dir`. This is also true for a configured directory that does not exist yet.
 - No destination collision is on the directory or below it.
+- No source below it has a [`destination`](#destination), and no `destination` is below it.
 - The destination directory does not exist, or it is a symlink to this repository directory. rustow adopts such a symlink without a state record when its text is what rustow writes: `status` shows UNMANAGED and `apply` records it. A symlink in other text, such as an absolute path, becomes rustow's link text. This covers a lost state file, `state import` on a new machine and a fold that GNU Stow made. rustow never adopts a symlink where it never folds, for example a GNU Stow fold of `~/.config`. Each file below it is a conflict: "~/.config is a symlink into the repository that rustow does not manage and never folds; replace it with a real directory".
 - For a new fold, the run selects every source below the directory. A selective run (a path argument, or a command such as `rustow link`) folds a new directory only then. It keeps an existing fold.
 
@@ -160,7 +161,7 @@ group = "root"
 
 Registers a source for copy deployment on every machine. You write this list by hand. `rustow file add` does not write it: it registers the source in the state file of one machine. `rustow file remove` removes an entry from both. See [file management](file-management.md#state-or-rustowtoml). A system file under `rustowroot/` that is not a template must be registered in one of them. See [system files](system-files.md).
 
-An entry can set `mode`, `owner` and `group`, with the same values and checks as a [`[[template_rules]]`](#template_rules) entry. All three are optional. Without `mode`, a new copy gets the mode of the source (0600 for an encrypted source), and an update keeps the mode of the destination. A new system file (`rustowroot/`) gets the mode of the source without write access for the group and others. Without `owner` or `group`, the copy belongs to the user who writes it, and an update keeps the owner and group. A new system file gets the group of the user who writes it, also in a setgid directory. A `rustow file add` registration sets no metadata. When `[[files]]` lists the source too, the entry wins.
+An entry can set `mode`, `owner` and `group`, with the same values and checks as a [`[[template_rules]]`](#template_rules) entry. All three are optional. Without `mode`, a new copy gets the mode of the source (0600 for an encrypted source), and an update keeps the mode of the destination. A new system file (`rustowroot/`) gets the mode of the source without write access for the group and others. Without `owner` or `group`, the copy belongs to the user who writes it, and an update keeps the owner and group. A new system file gets the group of the user who writes it, also in a setgid directory. A `rustow file add` registration sets no metadata. When `[[files]]` lists the source too, the entry wins. An entry can also set a [`destination`](#destination).
 
 ## `[[template_rules]]`
 
@@ -172,7 +173,7 @@ owner = "root"
 group = "root"
 ```
 
-A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group`. To give several templates the same metadata, list them in `sources` instead of `source`:
+A rule sets the metadata of a template and makes it deploy as a copy. Set at least one of `mode`, `owner`, `group` and [`destination`](#destination). A rule with only `destination` sets no metadata, and the template stays a symlink. To give several templates the same metadata, list them in `sources` instead of `source`:
 
 ```toml
 [[template_rules]]
@@ -199,7 +200,7 @@ source = ".config/a/b.txt"       # one file
 fold_directories = false
 ```
 
-A rule controls [folding](#folding) for symlinked files. `source` is a file or a directory. `fold_directories` is required. Two rules with the same `source` are a configuration error (exit 2).
+A rule controls [folding](#folding) for symlinked files. `source` is a file or a directory. Set `fold_directories`, a [`destination`](#destination), or both. Two rules with the same `source` are a configuration error (exit 2).
 
 To give several paths the same value, list them in `sources` instead of `source`, as in [`[[template_rules]]`](#template_rules):
 
@@ -222,6 +223,35 @@ With `fold_directories = false`, a rule with `true` lets a directory fold. A dir
 A rule that stops an existing fold unfolds it, with the rules above. A directory that an unfold has made real keeps per-file links; it does not fold again.
 
 An entry that cannot apply gives a warning, and rustow ignores the entry. This happens when the source does not exist, is ignored or reserved, is under `rustowroot/`, or is a file that is not a plain symlinked file (a template, a copy or an encrypted file). Example: "warning: gone: rustow.toml [[file_rules]] entry does not exist (remove the entry)". The warning shows on stderr, in the JSON `warnings` array and in `rustow check`. `status` shows no row for it. A directory rule that covers templates or copies is valid; the rule has no effect on them.
+
+## `destination`
+
+A `[[files]]`, `[[template_rules]]` or `[[file_rules]]` entry can set `destination`. Use it to keep a file in one place in the repository and deploy it to another place:
+
+```toml
+[[file_rules]]                     # a symlink
+source = "scripts/backup.sh"
+destination = ".local/bin/backup"
+
+[[files]]                          # a copy
+source = "shared/app.conf"
+destination = ".config/app/app.conf"
+mode = "0600"
+
+[[template_rules]]                 # a template; without metadata it stays a symlink
+source = "templates/gitconfig.tmpl"
+destination = ".gitconfig"
+```
+
+- `destination` is the full path of the deployed file, relative to the target of the source's scope. For a home source, the base is the home target (`~`). For a source under `rustowroot/`, the base is the root target (`/`): `source = "rustowroot/shared/app.conf"` with `destination = "etc/app.conf"` deploys to `/etc/app.conf`. A destination cannot change the scope.
+- rustow keeps the name that you write. It does not remove the `.tmpl`, `.age` or `.gpg` suffix from it.
+- Use `destination` only with `source`. With `sources`, it is a configuration error (exit 2).
+- An absolute path, `..`, or a component that starts with `.rustow-tmp-` is a configuration error (exit 2).
+- Set the destination of a source in one entry only. A destination for the same source in two entries is a configuration error (exit 2).
+- `destination` names one file. On a `[[file_rules]]` directory, rustow ignores it with a warning: "rustow.toml [[file_rules]] entry is a directory, not a file".
+- In `[[file_rules]]`, `destination` alone is enough. `fold_directories` is then optional. In `[[template_rules]]`, `destination` alone is enough too, and the template stays a symlink. Add `mode`, `owner` or `group` to make it a copy.
+- Two sources with one destination are a collision, as without `destination`: both items are conflicts (exit 3), and `check` reports it.
+- A source with `destination` never [folds](#folding). A directory that a destination is below never folds either: the fold would write the file into the repository. An existing fold there becomes a real directory, with the rules for an unfold.
 
 ## `[[global_rules]]`
 
