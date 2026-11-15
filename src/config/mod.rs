@@ -229,29 +229,37 @@ impl Config {
     pub fn parse(text: &str) -> Result<Config> {
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| toml_error(text, e.message(), e.span()))?;
         check_header(&raw)?;
-        let mut destinations = BTreeMap::new();
-        let files = parse_entries(raw.files.into_iter().map(RawEntry::validate), "files", false)?;
-        let files = take_destinations(files, &mut destinations)?;
-        let rules = raw.template_rules.into_iter().map(RawTemplateRule::validate);
-        let template_rules = take_destinations(parse_entries(rules, "template_rules", true)?, &mut destinations)?;
-        let file_rules = take_destinations(parse_file_rules(raw.file_rules)?, &mut destinations)?
-            .into_iter()
-            .filter_map(|(source, fold)| Some((source, fold?)))
-            .collect();
-        let global_rules = parse_global_rules(raw.global_rules)?;
-        Ok(Config {
+        let mut config = Config {
             present: true,
             defaults: raw.defaults,
             template_extension: raw.templates.extension,
             encryption: raw.encryption,
             vars: raw.vars,
-            files,
-            added_files: BTreeSet::new(),
-            template_rules,
-            file_rules,
-            destinations,
-            global_rules,
-        })
+            ..Config::default()
+        };
+        config.set_rules(raw.files, raw.template_rules, raw.file_rules)?;
+        config.global_rules = parse_global_rules(raw.global_rules)?;
+        Ok(config)
+    }
+
+    /// Sets `[[files]]`, `[[template_rules]]`, `[[file_rules]]` and the
+    /// `destination` of their entries.
+    fn set_rules(
+        &mut self,
+        files: Vec<RawEntry>,
+        template_rules: Vec<RawTemplateRule>,
+        file_rules: Vec<RawFileRule>,
+    ) -> Result<()> {
+        let files = parse_entries(files.into_iter().map(RawEntry::validate), "files", false)?;
+        self.files = take_destinations(files, &mut self.destinations)?;
+        let rules = template_rules.into_iter().map(RawTemplateRule::validate);
+        let rules = parse_entries(rules, "template_rules", true)?;
+        self.template_rules = take_destinations(rules, &mut self.destinations)?;
+        let rules = take_destinations(parse_file_rules(file_rules)?, &mut self.destinations)?;
+        self.file_rules = (rules.into_iter())
+            .filter_map(|(source, fold)| Some((source, fold?)))
+            .collect();
+        Ok(())
     }
 
     /// The metadata of `path` when `[[files]]` or `rustow file add` registers
