@@ -49,6 +49,7 @@ const TAKES: &[(&str, &[&[&str]])] = &[
     ("link", &[PLACE, ITEMS, DRY]),
     ("unlink", &[PLACE, ITEMS, DRY]),
     ("undeploy", &[PLACE, ITEMS, DRY]),
+    ("undeploy orphaned", &[PLACE, ITEMS, DRY]),
     ("init", &[PLACE, &["verbose"], DRY]),
     ("file add", &[PLACE, DRY]),
     ("file remove", &[PLACE, DRY]),
@@ -341,11 +342,19 @@ pub struct StatusArgs {
 
 #[derive(Debug, Args)]
 pub struct UndeployArgs {
+    #[command(subcommand)]
+    pub command: Option<UndeployCommand>,
     /// Do not ask before removing everything (required without a terminal)
     #[arg(short, long)]
     pub yes: bool,
     #[command(flatten)]
     pub removal: RemovalArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UndeployCommand {
+    /// Remove the destinations whose source is gone (ORPHANED in `status`); a source named "orphaned" is ./orphaned
+    Orphaned(RemovalArgs),
 }
 
 #[derive(Debug, Default, Args)]

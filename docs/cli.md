@@ -85,6 +85,7 @@ A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts
 | `check`                         | Validate offline.                                                                                                                      |
 | `doctor`                        | Report on the environment.                                                                                                             |
 | `undeploy [-y] [PATH]...`       | Remove managed destinations of any mode. Without a path, asks first.                                                                   |
+| `undeploy orphaned [PATH]...`   | Remove only the ORPHANED destinations. Does not ask. A source named `orphaned` is `./orphaned`.                                        |
 | `cache clean`                   | Remove unused cache entries and stale edit workspaces.                                                                                 |
 | `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON. `-` prints them.                                           |
 | `state import FILE`             | Add the registrations in FILE (`-` for stdin) to this machine.                                                                         |
@@ -178,7 +179,7 @@ Human output escapes control characters in names and messages, on stdout and std
 
 With `--json` they print one object: `dry_run`, `aborted`, `items` (each with `source`, `dest`, `mode`, `action` and `detail`), `summary` (`changed`, `unchanged`, `adopted`, `conflicts`, `errors`) and `warnings` (each with `source` and `reason`; for `unlink` and `undeploy`, only the records under another target, see [status](#status)). `dry_run` is true only with `-n`. `aborted` is true when the abort policy stopped the run before it wrote anything.
 
-`apply`, `link`, `file apply` and `template apply` also report recorded destinations of their modes whose source is gone, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". In JSON the item has the action `orphaned`. rustow removes nothing, and the exit code does not change.
+`apply`, `link`, `file apply` and `template apply` also report recorded destinations of their modes whose source is gone, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". In JSON the item has the action `orphaned`. rustow removes nothing, and the exit code does not change. `rustow undeploy orphaned` removes them.
 
 When rustow cannot write the state file, these commands still print the item report and the summary. Then the state error goes to stderr, and the exit code is 4.
 

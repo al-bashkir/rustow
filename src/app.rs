@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::cli::{
     CacheCommand, Cli, Command, Conflict, DeployArgs, EncArgs, EncCommand, FileCommand, Global, RemovalArgs,
-    StateCommand, StatusArgs, TemplateCommand,
+    StateCommand, StatusArgs, TemplateCommand, UndeployCommand,
 };
 use crate::config::DefaultMode;
 use crate::error::{Error, Result};
@@ -28,7 +28,7 @@ pub fn run(cli: Cli) -> Result<i32> {
     match command(cli.command, cli.conflict)? {
         Command::Apply(a) => deploy(g, &env, p, &a, Selector::All),
         Command::Link(a) => deploy(g, &env, p, &a, Selector::Link),
-        Command::Unlink(a) => undeploy(g, &env, p, &a, Selector::Link, false),
+        Command::Unlink(a) => undeploy(g, &env, p, &a, Selector::Link, Removing::Selected { ask: false }),
         Command::Init => init_cmd(g, &env, p),
         Command::File(c) => file_cmd(g, &env, p, c),
         Command::Template(c) => template_cmd(g, &env, p, c),
@@ -36,10 +36,17 @@ pub fn run(cli: Cli) -> Result<i32> {
         Command::Status(a) => status_cmd(g, &env, p, &a),
         Command::Check => check_cmd(g, &env, p),
         Command::Doctor => crate::doctor::doctor(&open(g, &env, p)?, p),
-        Command::Undeploy(a) => {
-            let ask = a.removal.paths.paths.is_empty() && !a.yes;
-            undeploy(g, &env, p, &a.removal, Selector::All, ask)
-        }
+        Command::Undeploy(a) => match a.command {
+            // clap parses these before the subcommand, and `orphaned` would drop them.
+            Some(_) if a.yes || a.removal.on_conflict.is_some() => Err(Error::Usage(
+                "put the options after `orphaned`, as in `rustow undeploy orphaned --on-conflict abort`".into(),
+            )),
+            Some(UndeployCommand::Orphaned(r)) => undeploy(g, &env, p, &r, Selector::All, Removing::Orphaned),
+            None => {
+                let ask = a.removal.paths.paths.is_empty() && !a.yes;
+                undeploy(g, &env, p, &a.removal, Selector::All, Removing::Selected { ask })
+            }
+        },
         Command::Cache(CacheCommand::Clean) => cache_clean(g, &env, p),
         Command::State(c) => state_cmd(g, &env, p, c),
         Command::Enc(e) => enc_cmd(g, &env, p, e),
@@ -470,22 +477,41 @@ fn finish(
     saved.map(|()| execute::exit_code(items))
 }
 
-/// Removes managed destinations. With `ask`, a real run that removes
-/// anything shows the list and needs a "yes" first.
+/// Which managed destinations an `undeploy` or `unlink` removes.
+#[derive(Clone, Copy)]
+enum Removing {
+    /// Those the paths select. With `ask`, a real run that removes
+    /// anything shows the list and needs a "yes" first.
+    Selected { ask: bool },
+    /// Of those, only the orphaned ones (`inspect::orphaned`).
+    Orphaned,
+}
+
+/// Removes managed destinations.
 fn undeploy(
     g: &Global,
     env: &Env,
     printer: &mut Printer,
     a: &RemovalArgs,
     selector: Selector,
-    ask: bool,
+    removing: Removing,
 ) -> Result<i32> {
     let (paths, abort) = (&a.paths.paths, a.abort());
-    let ctx = open(g, env, printer)?;
+    let ask = matches!(removing, Removing::Selected { ask: true });
+    let mut ctx = open(g, env, printer)?;
     let held = lock_run(&ctx, printer, g.dry_run, !ask)?;
-    let mut state = State::load(&ctx.state_dir, &ctx.repo_id, &ctx.root)?;
-    let (removals, elsewhere) = plan::plan_removal(&ctx, paths, selector, &state)?;
-    printer.warn(&elsewhere);
+    let mut state = ctx.load_state()?;
+    let (mut removals, elsewhere) = plan::plan_removal(&ctx, paths, selector, &state)?;
+    match removing {
+        Removing::Selected { .. } => printer.warn(&elsewhere),
+        Removing::Orphaned => {
+            let gone = inspect::orphaned(&ctx, &ctx.discover()?, &state, paths)?;
+            removals.retain(|r| gone.contains(&r.dest));
+            if removals.is_empty() && !paths.is_empty() {
+                return Err(Error::Usage(format!("nothing orphaned matches {}", paths.join(", "))));
+            }
+        }
+    }
     let predicted = execute::predict_removal(&removals);
     if let Some(code) = removes_nothing(g.dry_run, (abort, ask), printer, &predicted)? {
         return Ok(code);

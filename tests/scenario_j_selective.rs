@@ -195,6 +195,69 @@ fn undeploy_never_removes_a_source_through_a_symlink_into_the_repository() {
     assert!(fx.ok(&["undeploy", "--yes"]).stdout.contains("0 changed"), "forgotten");
 }
 
+/// `undeploy orphaned` removes the ORPHANED rows of `status`, of any
+/// mode, without a question; a changed one stays, as for `undeploy`.
+#[test]
+fn undeploy_orphaned_removes_only_destinations_whose_source_is_gone() {
+    let fx = mixed();
+    fx.write(".edited", "e\n");
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[vars]\nv = \"t\"\n[[files]]\nsource = \"copied.conf\"\n[[files]]\nsource = \".edited\"\n",
+    );
+    fx.ok(&["apply"]);
+    for gone in ["copied.conf", ".gitconfig.tmpl", ".edited"] {
+        fs::remove_file(fx.repo.join(gone)).unwrap();
+    }
+    fs::write(fx.home_path(".edited"), "mine\n").unwrap();
+
+    let dry = fx.run(&["-n", "undeploy", "orphaned"]);
+    assert_eq!(dry.code, 3, "{dry:?}");
+    assert!(
+        dry.stdout.contains("~/copied.conf") && dry.stdout.contains("~/.gitconfig"),
+        "{dry:?}"
+    );
+    assert!(!dry.stdout.contains(".bashrc"), "{dry:?}");
+    assert_eq!(deployed(&fx), [true, true, true], "a dry run removes nothing");
+
+    let out = fx.run(&["undeploy", "orphaned"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert_eq!(deployed(&fx), [true, false, false], "{out:?}");
+    assert_eq!(read(&fx.home_path(".edited")), "mine\n", "a changed destination stays");
+    let status = fx.run(&["status"]);
+    assert!(status.stdout.contains("ORPHANED ~/.edited"), "{status:?}");
+    assert!(!status.stdout.contains("~/copied.conf"), "forgotten: {status:?}");
+}
+
+/// A path narrows `undeploy orphaned`. A source named `orphaned` is `./orphaned`.
+#[test]
+fn undeploy_orphaned_takes_paths() {
+    let fx = Fixture::new();
+    for name in ["orphaned", ".b", ".c"] {
+        fx.write(name, "x\n");
+    }
+    fx.ok(&["apply"]);
+    fs::remove_file(fx.repo.join(".b")).unwrap();
+    fs::remove_file(fx.repo.join(".c")).unwrap();
+
+    fx.ok(&["undeploy", "orphaned", ".b"]);
+    assert!(fs::symlink_metadata(fx.home_path(".b")).is_err());
+    assert!(is_symlink(&fx.home_path(".c")), "not selected");
+    assert!(is_symlink(&fx.home_path("orphaned")), "its source is there");
+    let out = fx.run(&["undeploy", "orphaned", "orphaned"]);
+    assert_eq!(out.code, 2, "a path with a source is no orphan: {out:?}");
+
+    for before in [&["--yes"][..], &["-c", "abort"]] {
+        let out = fx.run(&[&["undeploy"], before, &["orphaned"]].concat());
+        assert_eq!(out.code, 2, "{before:?}: {out:?}");
+        assert!(out.stderr.contains("after `orphaned`"), "{before:?}: {out:?}");
+    }
+    assert!(is_symlink(&fx.home_path(".c")), "nothing removed");
+
+    fx.ok(&["undeploy", "./orphaned"]);
+    assert!(fs::symlink_metadata(fx.home_path("orphaned")).is_err());
+}
+
 #[test]
 fn undeploy_all_without_terminal_needs_yes() {
     let fx = mixed();

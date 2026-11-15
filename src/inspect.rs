@@ -526,6 +526,16 @@ fn orphan_detail(ctx: &Context, discovery: &Discovery, record: &Record) -> Strin
     format!("{why}; `rustow undeploy {}` removes it", record.source)
 }
 
+/// The destinations of the ORPHANED rows of `status` for `args`.
+pub fn orphaned(ctx: &Context, discovery: &Discovery, state: &State, args: &[String]) -> Result<HashSet<PathBuf>> {
+    let found = orphans(ctx, discovery, state, args)?;
+    Ok(found
+        .into_iter()
+        .filter(|(_, _, above)| above.is_none())
+        .map(|(dest, _, _)| dest.clone())
+        .collect())
+}
+
 /// Report lines for the orphaned destinations a deploy command covers.
 /// Nothing is removed and the exit code does not change.
 pub fn orphan_reports(
