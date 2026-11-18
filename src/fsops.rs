@@ -364,8 +364,9 @@ pub struct Owned {
     pub uid: u32,
     pub gid: u32,
     pub mode: u32,
-    /// An extended POSIX ACL is set: the group bits of `mode` are its mask.
-    pub acl: bool,
+    /// An extended POSIX ACL is set (`Ok(true)`): the group bits of `mode`
+    /// are its mask. `Err` says why rustow cannot tell.
+    pub acl: std::result::Result<bool, String>,
 }
 
 /// Trust rule for the file a symlink will point to: every path on the
@@ -415,10 +416,18 @@ fn check_dir(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result::
 /// private group, and never with an ACL, whose mask these bits are.
 fn group_write(dir: &Owned, owner: u32, private_gid: Option<u32>) -> std::result::Result<(), String> {
     let path = dir.path.display();
-    if dir.acl {
-        return Err(format!(
-            "{path} has an ACL that can give write access to other users; run `setfacl -b {path}`"
-        ));
+    match &dir.acl {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(format!(
+                "{path} has an ACL that can give write access to other users; run `setfacl -b {path}`"
+            ));
+        }
+        Err(why) => {
+            return Err(format!(
+                "cannot read the ACL of {path}, which can give write access to other users: {why}"
+            ));
+        }
     }
     if Some(dir.gid) != private_gid {
         return Err(format!(
@@ -458,12 +467,19 @@ fn private_gid_of(owner: u32) -> Option<u32> {
     KNOWN.with_borrow_mut(|known| *known.entry(owner).or_insert_with(lookup))
 }
 
-/// True when `path` has a POSIX access ACL. Linux keeps its xattr only for
-/// an ACL that says more than the mode bits.
+/// True when `path` has a POSIX access ACL; `Err` when rustow cannot tell.
+/// Linux keeps its xattr only for an ACL that says more than the mode bits.
 /// shortcut: macOS ACLs are not read (they are no xattr); read them with
 /// `acl_get_fd` if the trust rule must see them there.
-pub fn has_acl(path: impl rustix::path::Arg) -> bool {
-    rustix::fs::getxattr_query(path, "system.posix_acl_access").is_ok()
+pub fn has_acl(path: impl rustix::path::Arg) -> std::result::Result<bool, String> {
+    use rustix::io::Errno;
+    match rustix::fs::getxattr_query(path, "system.posix_acl_access") {
+        Ok(_) => Ok(true),
+        // No ACL, or a filesystem that has no ACLs.
+        Err(Errno::NODATA | Errno::OPNOTSUPP) => Ok(false),
+        Err(_) if cfg!(not(target_os = "linux")) => Ok(false),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// The accounts in `passwd` (the text of `/etc/passwd`) whose primary
@@ -1075,7 +1091,7 @@ mod tests {
             uid,
             gid: uid,
             mode,
-            acl: false,
+            acl: Ok(false),
         }
     }
 
@@ -1189,7 +1205,7 @@ mod tests {
     fn chain_refuses_an_acl_whose_mask_allows_write() {
         let acl = |mode| {
             [Owned {
-                acl: true,
+                acl: Ok(true),
                 ..owned("/home/u/dot/f", 1000, mode)
             }]
         };
@@ -1202,6 +1218,36 @@ mod tests {
             check_chain(&acl(0o644), None, 1000, Some(1000)).is_ok(),
             "mask without write"
         );
+    }
+
+    /// An ACL that rustow cannot read can give write access too.
+    #[test]
+    fn chain_refuses_group_write_when_the_acl_is_unknown() {
+        let unknown = |mode| {
+            [Owned {
+                acl: Err("/proc/self/fd: No such file or directory".into()),
+                ..owned("/home/u/dot", 1000, mode)
+            }]
+        };
+        let e = check_chain(&unknown(0o775), None, 1000, Some(1000)).unwrap_err();
+        assert_eq!(
+            e,
+            "cannot read the ACL of /home/u/dot, which can give write access to other users: \
+             /proc/self/fd: No such file or directory"
+        );
+        assert!(
+            check_chain(&unknown(0o755), None, 1000, Some(1000)).is_ok(),
+            "no group write: the mask denies every ACL entry"
+        );
+    }
+
+    /// The walk reads the ACL of an open directory through `/proc`; without
+    /// it, the ACL is unknown, not absent.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn has_acl_cannot_tell_for_a_path_it_cannot_reach() {
+        let (_t, d) = tmp();
+        assert!(has_acl(d.join("missing")).is_err());
     }
 
     #[test]

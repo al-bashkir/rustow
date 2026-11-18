@@ -730,7 +730,9 @@ fn trusted(path: &Path, st: &FileStat, dir: Option<&OwnedFd>, me: u32) -> std::r
         gid: st.st_gid,
         mode: dir.map_or(0, |_| perm(st.st_mode)),
         // An O_PATH fd has no fgetxattr; its /proc link reaches the same inode.
-        acl: dir.is_some_and(|fd| has_acl(format!("/proc/self/fd/{}", fd.as_raw_fd()))),
+        acl: dir.map_or(Ok(false), |fd| {
+            has_acl(format!("/proc/self/fd/{}", fd.as_raw_fd())).map_err(|e| format!("/proc/self/fd: {e}"))
+        }),
     };
     check_dir(&owned, me, private_gid_of(me))
 }
