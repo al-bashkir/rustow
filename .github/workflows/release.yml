@@ -10,6 +10,9 @@ env:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    # Read-only also when the repository default changes.
+    permissions:
+      contents: read
 
   build:
     needs: ci
@@ -54,10 +57,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Every artifact of the run, each in a directory with its name. A step
+      # of the ci job can upload artifacts too; if it takes a name of the
+      # build job first, the build job's upload fails.
       - uses: actions/download-artifact@v8
         with:
-          path: dist
-          merge-multiple: true
+          path: artifacts
+      - name: Take the build job's tarballs
+        run: |
+          mkdir dist
+          # The targets of the build matrix.
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin; do
+            mv "artifacts/$target/rustow-$GITHUB_REF_NAME-$target.tar.gz" dist/
+          done
+          left=$(find artifacts -type f)
+          if [ -n "$left" ]; then
+            printf 'Not from the build job, or a target missing above:\n%s\n' "$left"
+            exit 1
+          fi
       - run: cd dist && sha256sum -- *.tar.gz > SHA256SUMS
       - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes dist/*
         env:
