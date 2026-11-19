@@ -127,7 +127,9 @@ impl Fixture {
             // A test that forgets VISUAL fails fast instead of waiting in vi.
             .env("EDITOR", "false")
             // Never the real sudo: a test that escalates by accident fails fast.
-            .env("RUSTOW_SUDO", "false");
+            .env("RUSTOW_SUDO", "false")
+            // A terminal makes the run interactive; only `run_tty` gives one.
+            .stdin(std::process::Stdio::null());
         // `completions` takes no global option; every other command takes --root-target.
         if args.first() != Some(&"completions") {
             cmd.arg("--root-target").arg(&self.root);
