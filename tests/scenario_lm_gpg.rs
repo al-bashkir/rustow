@@ -747,4 +747,31 @@ fn locked_key_apply_on_a_terminal_uses_pinentry() {
     assert_eq!(out.code, 0, "{out:?}");
     assert!(log.exists(), "pinentry was not asked");
     assert_eq!(read(&fx.home_path("s")), "locked secret\n");
+    // A terminal pinentry (curses, tty) draws on this terminal; without
+    // GPG_TTY it has none and fails with "Inappropriate ioctl for device".
+    assert!(
+        read(&log).contains("OPTION ttyname=/dev/"),
+        "no terminal for the pinentry"
+    );
+}
+
+/// A GPG_TTY that the user set names the pinentry's terminal, as with plain gpg.
+#[test]
+fn gpg_tty_of_the_user_wins_over_the_terminal_on_stdin() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    let log = home.stub_pinentry();
+    let fpr = home.fpr.clone();
+    fx.gpg_config(&home, &[&fpr], "");
+    fx.gpg_encrypt("s.gpg", "locked secret\n", &home);
+    let out = fx.run_tty_env(&["apply"], "", &[("GPG_TTY", "/dev/rustow-user-tty")]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        read(&log).contains("OPTION ttyname=/dev/rustow-user-tty\n"),
+        "{}",
+        read(&log)
+    );
 }

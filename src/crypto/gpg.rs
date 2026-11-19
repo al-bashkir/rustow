@@ -222,7 +222,15 @@ impl Gpg {
             .tempdir()
             .map_err(|e| format!("gpg status directory: {e}"))?;
         let status_file = dir.path().join("status");
-        let mut child = Command::new(&self.program)
+        let mut cmd = Command::new(&self.program);
+        // gpg tells the agent its terminal from GPG_TTY, else from its stdin,
+        // which is a pipe here. A curses or tty pinentry needs that terminal.
+        if std::env::var_os("GPG_TTY").is_none()
+            && let Ok(tty) = nix::unistd::ttyname(std::io::stdin())
+        {
+            cmd.env("GPG_TTY", tty);
+        }
+        let mut child = cmd
             .args(self.base_args(&status_file))
             .args(args)
             .stdin(Stdio::piped())

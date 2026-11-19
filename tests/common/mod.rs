@@ -99,9 +99,13 @@ impl Fixture {
 
     /// Runs with a pseudo terminal on stdin that already holds `input`.
     pub fn run_tty(&self, args: &[&str], input: &str) -> Out {
+        self.run_tty_env(args, input, &[])
+    }
+
+    pub fn run_tty_env(&self, args: &[&str], input: &str, env: &[(&str, &str)]) -> Out {
         let pty = nix::pty::openpty(None, None).unwrap();
         nix::unistd::write(&pty.master, input.as_bytes()).unwrap();
-        let mut cmd = self.command(args, &[]);
+        let mut cmd = self.command(args, env);
         cmd.stdin(fs::File::from(pty.slave));
         output(cmd) // pty.master stays open until rustow exits
     }
@@ -402,7 +406,9 @@ impl GpgHome {
         let mut cmd = Command::new("gpg");
         cmd.arg("--homedir")
             .arg(&self.dir)
-            .args(["--batch", "--no-tty", "--quiet"]);
+            .args(["--batch", "--no-tty", "--quiet"])
+            // This gpg starts the agent: keep the developer's terminal out of its defaults.
+            .env_remove("GPG_TTY");
         cmd
     }
 
@@ -551,7 +557,7 @@ impl GpgHome {
     }
 
     /// Makes the agent use a stub pinentry that answers "pw". Each call
-    /// appends a line to the returned log file.
+    /// appends "called" and then each request it gets to the returned log file.
     pub fn stub_pinentry(&self) -> PathBuf {
         self.stub_pinentry_answering("pw")
     }
@@ -567,8 +573,8 @@ impl GpgHome {
         let script = write_file(
             &self.dir.join("pinentry-stub"),
             &format!(
-                "#!/bin/sh\necho called >> '{}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  case \"$cmd\" in\n    GETPIN) {reply} ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
-                log.display()
+                "#!/bin/sh\necho called >> '{log}'\necho 'OK stub'\nwhile read -r cmd rest; do\n  echo \"$cmd $rest\" >> '{log}'\n  case \"$cmd\" in\n    GETPIN) {reply} ;;\n    BYE) echo OK; exit 0 ;;\n    *) echo OK ;;\n  esac\ndone\n",
+                log = log.display()
             ),
         );
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
