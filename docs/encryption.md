@@ -53,7 +53,7 @@ Install GnuPG:
 Run `rustow doctor` to see which `gpg` rustow finds.
 
 - Scripts, cron and launchd: these often have a short `PATH`. Homebrew installs `gpg` in `/opt/homebrew/bin` (Apple silicon) or `/usr/local/bin` (Intel). Add that directory to `PATH` in the job.
-- Pinentry for `--interactive`: `gpg-agent` starts the pinentry program, not rustow. On Linux, install the pinentry package of your system. In a terminal-only session, set `export GPG_TTY=$(tty)` for the curses pinentry. On macOS, run `brew install pinentry-mac`, add `pinentry-program /opt/homebrew/bin/pinentry-mac` (Intel: `/usr/local/bin/pinentry-mac`) to `~/.gnupg/gpg-agent.conf`, then run `gpgconf --kill gpg-agent`. rustow's `--no-options` applies to `gpg.conf` only, so `gpg-agent.conf` still has effect.
+- Pinentry for `--interactive`: `gpg-agent` starts the pinentry program, not rustow. On Linux, install the pinentry package of your system. A curses or tty pinentry uses the terminal in `GPG_TTY`. When `GPG_TTY` is not set and standard input is a terminal, rustow gives gpg that terminal. On macOS, run `brew install pinentry-mac`, add `pinentry-program /opt/homebrew/bin/pinentry-mac` (Intel: `/usr/local/bin/pinentry-mac`) to `~/.gnupg/gpg-agent.conf`, then run `gpgconf --kill gpg-agent`. rustow's `--no-options` applies to `gpg.conf` only, so `gpg-agent.conf` still has effect.
 
 ```toml
 [encryption]
