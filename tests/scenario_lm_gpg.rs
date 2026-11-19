@@ -707,7 +707,7 @@ fn edit_without_state_reencrypts_to_a_swapped_gpg_recipient() {
 }
 
 /// Spec Scenario L: explicit interactive mode with a controlled pinentry.
-/// A locked key fails without --interactive and works with it.
+/// Without a terminal, a locked key fails without --interactive and works with it.
 #[test]
 fn locked_key_apply_uses_pinentry_only_with_interactive() {
     if !require_gpg() {
@@ -725,6 +725,25 @@ fn locked_key_apply_uses_pinentry_only_with_interactive() {
     assert!(!log.exists(), "pinentry started without --interactive");
     assert!(!fx.home_path("s").exists());
     let out = fx.run(&["--interactive", "apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(log.exists(), "pinentry was not asked");
+    assert_eq!(read(&fx.home_path("s")), "locked secret\n");
+}
+
+/// On a terminal, a run is interactive without the flag: a person is there
+/// to answer the pinentry.
+#[test]
+fn locked_key_apply_on_a_terminal_uses_pinentry() {
+    if !require_gpg() {
+        return;
+    }
+    let fx = Fixture::new();
+    let home = fx.gpg_home("locked", true);
+    let log = home.stub_pinentry();
+    let fpr = home.fpr.clone();
+    fx.gpg_config(&home, &[&fpr], "");
+    fx.gpg_encrypt("s.gpg", "locked secret\n", &home);
+    let out = fx.run_tty(&["apply"], "");
     assert_eq!(out.code, 0, "{out:?}");
     assert!(log.exists(), "pinentry was not asked");
     assert_eq!(read(&fx.home_path("s")), "locked secret\n");

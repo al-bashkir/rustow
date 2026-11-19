@@ -250,7 +250,8 @@ fn global_opts(g: &Global) -> GlobalOpts {
 
 fn open(g: &Global, env: &Env, printer: &mut Printer) -> Result<Context> {
     let mut ctx = Context::open(&global_opts(g), env)?;
-    ctx.interactive = g.interactive;
+    // A person at a terminal can answer a passphrase prompt; a script or a timer cannot.
+    ctx.interactive = g.interactive || std::io::IsTerminal::is_terminal(&std::io::stdin());
     printer.set_home(&ctx.home);
     for notice in &ctx.notices {
         printer.notice(notice);

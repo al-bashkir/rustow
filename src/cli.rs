@@ -174,7 +174,7 @@ pub struct Global {
     /// Disable colors (also: NO_COLOR)
     #[arg(long, global = true)]
     pub no_color: bool,
-    /// Allow passphrase prompts (pinentry, terminal)
+    /// Allow passphrase prompts (pinentry, terminal); on when stdin is a terminal
     #[arg(short, long, global = true)]
     pub interactive: bool,
 }

@@ -21,7 +21,7 @@ To release, set `version` in `Cargo.toml`, commit, then push a tag `v<version>`.
 
 - `src/`: the code. See `docs/architecture.md` for the modules.
 - `tests/scenario_*.rs`: integration tests. They run the built binary.
-- `tests/common/mod.rs`: the `Fixture`. It makes a temporary HOME with the repository at `~/dotfiles`, a temporary root target and a temporary `XDG_STATE_HOME`. `EDITOR` is `false`.
+- `tests/common/mod.rs`: the `Fixture`. It makes a temporary HOME with the repository at `~/dotfiles`, a temporary root target and a temporary `XDG_STATE_HOME`. `EDITOR` is `false`. Standard input is `/dev/null`. `run_tty` gives a terminal instead, and that makes the run interactive.
 - `tests/examples.rs`: checks `examples/dotfiles`.
 - `docs/`: user documentation. The code and the tests are the source of truth. Describe only implemented behavior.
 

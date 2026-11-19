@@ -10,7 +10,7 @@ rustow supports two backends. A source with the outer suffix `.age` uses age. A 
 4. Run `rustow apply`. rustow decrypts the file into a private cache and links the destination to it.
 5. To change the file later, run `rustow enc edit .ssh/secret.conf.age`.
 
-age needs no extra program. GnuPG needs `gpg` on your machine. Scripts and timers never see a passphrase prompt unless you pass `--interactive`.
+age needs no extra program. GnuPG needs `gpg` on your machine. rustow asks for a passphrase only when standard input is a terminal or when you pass `--interactive`. Scripts and timers without a terminal never see a prompt.
 
 ## age
 
@@ -31,7 +31,7 @@ identity_files = ["~/.config/rustow/age/identity.txt"]
 - An identity file path is absolute or starts with `~/`.
 - The identity file must be a regular file that you own. Group and others must have no access. Fix with `chmod 600`.
 - The identity file must be outside the repository and the cache.
-- A passphrase-protected identity file asks for its passphrase on the terminal only with the global `--interactive` flag. See [Interactive and unattended runs](#interactive-and-unattended-runs).
+- A passphrase-protected identity file asks for its passphrase on the terminal only in an interactive run. See [Interactive and unattended runs](#interactive-and-unattended-runs).
 - rustow rejects scrypt-only age files.
 - rustow reads binary age files and armored age files (`age -a`, which start with `-----BEGIN AGE ENCRYPTED FILE-----`). This applies to `.age` sources and to passphrase-protected identity files. `enc` and `enc edit` write binary age files.
 - A failure message tells "no configured age identity can decrypt it" apart from "not valid age ciphertext".
@@ -70,21 +70,23 @@ homedir = "~/.gnupg"
 - rustow never fetches keys. It runs `gpg` with `--no-options`, so `gpg.conf` has no effect.
 - rustow does not change trust. The key validity must be marginal, full or ultimate. rustow checks this before it encrypts or opens the editor. An untrusted key gives "not trusted" (exit 4).
 - rustow checks the gpg status records. Symmetric-only, unprotected, truncated or mismatched ciphertext is refused.
-- A locked key fails fast unless you use `--interactive`. See [Interactive and unattended runs](#interactive-and-unattended-runs).
+- A locked key fails fast in an unattended run. See [Interactive and unattended runs](#interactive-and-unattended-runs).
 
 ## Interactive and unattended runs
 
-By default rustow never asks for a passphrase, so it can run from scripts and timers.
+A run is interactive when standard input is a terminal, or when you pass the global `--interactive` flag. Each other run is unattended: rustow never asks for a passphrase, so it can run from scripts and timers. To make a run in a terminal unattended, give it another standard input, for example `rustow apply </dev/null`.
 
-- GnuPG: rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once with "the secret key is locked (unlock it in gpg-agent or rerun with --interactive)". With `--interactive`, a wrong passphrase fails with "bad passphrase for the secret key". A pinentry that is cancelled or cannot ask (for example, no terminal, or a window that is too small) fails with "the passphrase entry failed or was cancelled". A missing key fails with "no usable secret key for any recipient in the keyring". rustow reads these cases from the gpg status output. It adds the first line that gpg prints, after "; gpg: ".
-- age: a passphrase-protected identity file fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)". With `--interactive`, a wrong passphrase, or no terminal to ask on (for example, in cron), fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or no terminal: --interactive asks for the passphrase on the terminal)".
+- GnuPG: in an unattended run, rustow runs `gpg --batch --no-tty --pinentry-mode error`. A key that `gpg-agent` has already unlocked works. A locked key fails at once with "the secret key is locked (unlock it in gpg-agent or rerun with --interactive)". In an interactive run, a wrong passphrase fails with "bad passphrase for the secret key". A pinentry that is cancelled or cannot ask (for example, no terminal, or a window that is too small) fails with "the passphrase entry failed or was cancelled". A missing key fails with "no usable secret key for any recipient in the keyring". rustow reads these cases from the gpg status output. It adds the first line that gpg prints, after "; gpg: ".
+- age: a passphrase-protected identity file fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or rerun with --interactive)". In an interactive run, a wrong passphrase, or no terminal to ask on (for example, in cron), fails with "could not unlock a passphrase-protected identity file (wrong passphrase, or no terminal: --interactive asks for the passphrase on the terminal)".
 - The failed item is an error. `apply`, `diff` and `enc edit` exit with 4. `status` shows ERROR. `enc` needs no private key: it writes the encrypted file and prints "not verified" with the reason.
-- With the global `--interactive` flag, rustow runs gpg with `--pinentry-mode ask`, so `gpg-agent` starts its pinentry. For age, rustow asks for the identity passphrase on the terminal. A signal (Ctrl-C) at that prompt ends rustow at once with 130, and nothing changed.
-- The rule is the same for every command. `enc edit` does not imply `--interactive`. Without it, a locked key fails with exit 4 before the editor starts. The editor itself always runs on your terminal.
+- In an interactive run, rustow runs gpg with `--pinentry-mode ask`, so `gpg-agent` starts its pinentry. For age, rustow asks for the identity passphrase on the terminal. A signal (Ctrl-C) at that prompt ends rustow at once with 130, and nothing changed.
+- The rule is the same for every command. In an unattended run, a locked key makes `enc edit` fail with exit 4 before the editor starts. The editor itself always runs on your terminal.
+- Without a terminal on standard input, `--interactive` still lets `gpg-agent` start its pinentry, for example a graphical one. The age prompt needs a terminal.
 
 ```sh
-rustow --interactive apply
-rustow --interactive enc edit .ssh/secret.conf.gpg
+rustow apply                # on a terminal: asks for the passphrase
+rustow apply </dev/null     # never asks
+rustow --interactive apply  # asks also when standard input is not a terminal
 ```
 
 ## Mixed age and GnuPG repositories
@@ -107,7 +109,7 @@ rustow enc --backend gpg .ssh/secret.conf
 `enc` writes `PATH.age` or `PATH.gpg`. It does not overwrite an existing file (exit 3). It verifies the new file: it decrypts it and compares the result with the plaintext. The result is one of these:
 
 - Verified.
-- Not verified: rustow prints "not verified" and the reason, and exits with 0. The reason is "no matching private key available here", or "the identity or key is locked; run with --interactive to verify". With `--interactive`, a wrong passphrase, or a passphrase entry that failed or was cancelled, gives "the identity or key could not be unlocked".
+- Not verified: rustow prints "not verified" and the reason, and exits with 0. The reason is "no matching private key available here", or "the identity or key is locked; run with --interactive to verify". In an interactive run, a wrong passphrase, or a passphrase entry that failed or was cancelled, gives "the identity or key could not be unlocked".
 - Failed: the new file does not decrypt, or it decrypts to other bytes. rustow exits with 4 and keeps the plaintext.
 
 It moves `[[files]]`, `[[template_rules]]` and `[[file_rules]]` entries, with their `destination`, and the `file add` and copy-mode `link` registrations in the state, to the new name. It also renames the item of a `sources` list. It keeps the comments around `source` and CRLF line endings in `rustow.toml`. It removes the plaintext only if the plaintext did not change meanwhile.

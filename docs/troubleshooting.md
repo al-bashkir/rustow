@@ -99,7 +99,7 @@ Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file t
 - "no configured age identity can decrypt it": add the right identity file to `identity_files`.
 - "not valid age ciphertext": the file is damaged or is not age.
 - Identity file refused: run `chmod 600` on it. It must be yours, outside the repository and the cache.
-- Passphrase-protected identity: use `--interactive` in a terminal. This is also necessary for `enc edit`. Without a terminal, `--interactive` cannot ask: the message says "no terminal".
+- Passphrase-protected identity: run rustow in a terminal. There it asks for the passphrase, also for `enc edit`. Without a terminal, `--interactive` cannot ask: the message says "no terminal".
 
 ## GnuPG
 
@@ -107,8 +107,8 @@ Run rustow as yourself, not with `sudo`. rustow asks sudo for each system file t
 - Recipient refused: use full fingerprints.
 - "<fpr> is a subkey fingerprint; configure the primary key fingerprint <primary>": put the primary fingerprint in `recipients`.
 - "not trusted": set the key trust in your keyring. rustow does not change it.
-- Locked key: unlock `gpg-agent`, or use `--interactive` (also for `enc edit`).
-- "the passphrase entry failed or was cancelled" (with `--interactive`): the pinentry was cancelled, or it could not ask, for example without a terminal or in a window that is too small. The first gpg line after "; gpg: " gives the cause. In a terminal, set `export GPG_TTY=$(tty)`, or unlock the key in `gpg-agent` first.
+- Locked key: unlock `gpg-agent`, run rustow in a terminal, or use `--interactive` (also for `enc edit`).
+- "the passphrase entry failed or was cancelled" (in an interactive run): the pinentry was cancelled, or it could not ask, for example without a terminal or in a window that is too small. The first gpg line after "; gpg: " gives the cause. In a terminal, set `export GPG_TTY=$(tty)`, or unlock the key in `gpg-agent` first.
 - "not OpenPGP data (empty, damaged or another format)": the `.gpg` file is not OpenPGP. It can be an age file with the wrong suffix.
 - "not public-key encrypted OpenPGP data (no recipient key ids)": the file has no recipient. rustow decrypts only data encrypted to public keys.
 - "gpg gave no status output; the gpg run failed": gpg did not start or stopped early. Run `rustow doctor` and check the GnuPG home.
