@@ -124,7 +124,7 @@ fn fold_candidates(
         chosen: selected.iter().filter(|s| foldable(ctx, s)).map(|s| &s.path).collect(),
         moved_into: dirs_above(
             (discovery.sources.iter())
-                .filter(|s| is_home(s) && ctx.config.destinations.contains_key(&s.path))
+                .filter(|s| is_home(s) && !foldable(ctx, s))
                 .map(|s| &s.dest),
         ),
         ..Contents::default()
@@ -267,8 +267,10 @@ struct Contents<'a> {
     linked: BTreeSet<&'a RelPath>,
     /// The ones that this run selects: a new fold may hold only these.
     chosen: BTreeSet<&'a RelPath>,
-    /// The directories above the destination of each home source with a
-    /// `destination`: none of them folds.
+    /// The directories above the destination of each home source that no
+    /// fold holds: none of them folds. For a source that did not move,
+    /// `holds_only` refuses them too; this catches a moved one, from a
+    /// `destination` or a template's `meta.destination`.
     moved_into: BTreeSet<RelPath>,
     /// Each directory that a walk reached.
     walked: BTreeSet<RelPath>,
