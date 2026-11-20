@@ -409,21 +409,21 @@ fn entry_sources(
     if sources.is_some() && destination.is_some() {
         return Err("destination needs source, not sources".into());
     }
-    Ok((rule_sources(source, sources)?, parse_destination(destination)?))
+    let paths = rule_sources(source, sources)?;
+    Ok((paths, destination.as_deref().map(parse_destination).transpose()?))
 }
 
-/// A `destination`: relative to the target root, and with no component
-/// that a temporary file of rustow could have.
-fn parse_destination(text: Option<String>) -> std::result::Result<Option<RelPath>, String> {
-    let Some(text) = text else { return Ok(None) };
-    let dest = RelPath::parse(&text).map_err(|e| format!("destination: {e}"))?;
+/// A `destination` (also `meta.destination`): relative to the target
+/// root, and with no component that a temporary file of rustow could have.
+pub fn parse_destination(text: &str) -> std::result::Result<RelPath, String> {
+    let dest = RelPath::parse(text).map_err(|e| format!("destination: {e}"))?;
     if dest.components().any(|c| c.starts_with(fsops::TEMP_PREFIX)) {
         return Err(format!(
             "destination: '{dest}' uses the reserved prefix {}",
             fsops::TEMP_PREFIX
         ));
     }
-    Ok(Some(dest))
+    Ok(dest)
 }
 
 /// One value per source of the entries of `table`: an entry with several
@@ -651,7 +651,8 @@ impl RawEntry {
     fn validate(self) -> Parsed<Metadata> {
         let path = RelPath::parse(&self.source).map_err(|e| format!("source: {e}"))?;
         let meta = metadata(self.mode, self.owner, self.group)?;
-        Ok((vec![path], (meta, parse_destination(self.destination)?)))
+        let dest = self.destination.as_deref().map(parse_destination).transpose()?;
+        Ok((vec![path], (meta, dest)))
     }
 }
 
