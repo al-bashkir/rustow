@@ -8,8 +8,9 @@ use minijinja::syntax::SyntaxConfig;
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 use serde_json::{Value, json};
 
-use crate::config::{LARGEST_ID, Metadata, Owner, owner_id, parse_mode, parse_owner};
+use crate::config::{LARGEST_ID, Metadata, Owner, owner_id, parse_destination, parse_mode, parse_owner};
 use crate::hash::Hash;
+use crate::paths::RelPath;
 
 /// The built-in facts about this machine that templates and meta conditions read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,18 +244,27 @@ impl std::fmt::Display for Condition {
     }
 }
 
-/// What a template's meta block says: metadata settings and deploy conditions.
+/// How a template deploys: `meta.type`, or a copy when the block sets metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemplateType {
+    Link,
+    /// A copy with the metadata of the block (empty for `meta.type = "copy"` alone).
+    Copy(Metadata),
+}
+
+/// What a template's meta block says: how and where it deploys, and when.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TemplateMeta {
-    pub settings: Metadata,
+    /// None when the block sets no type and no metadata.
+    pub kind: Option<TemplateType>,
+    /// `meta.destination`, relative to the target root of the source's scope.
+    pub destination: Option<RelPath>,
     pub conditions: Vec<Condition>,
 }
 
-impl TemplateMeta {
-    pub fn has_settings(&self) -> bool {
-        self.settings != Metadata::default()
-    }
+const LINK_METADATA: &str = "meta.type = \"link\" cannot have a mode, an owner or a group";
 
+impl TemplateMeta {
     /// The first condition that is false on `host`.
     pub fn failed(&self, host: &Host) -> Option<&Condition> {
         self.conditions.iter().find(|c| host.get(c.fact) != c.value)
@@ -338,9 +348,49 @@ fn meta_value(s: &str) -> Option<(MetaValue<'_>, &str)> {
 
 /// Adds one meta statement to `meta`; the error is without the line.
 fn apply(meta: &mut TemplateMeta, stmt: &Stmt) -> Result<(), String> {
-    match Fact::parse(stmt.key) {
-        Some(fact) => add_condition(meta, fact, stmt),
-        None => add_setting(&mut meta.settings, stmt),
+    if let Some(fact) = Fact::parse(stmt.key) {
+        return add_condition(meta, fact, stmt);
+    }
+    if stmt.test {
+        return Err(format!("meta.{} is a setting; use =", stmt.key));
+    }
+    match stmt.key {
+        "type" => set_type(&mut meta.kind, stmt),
+        "destination" => set_destination(meta, stmt),
+        "mode" => set_mode(&mut meta.kind, stmt),
+        _ => add_owner(&mut meta.kind, stmt),
+    }
+}
+
+fn set_destination(meta: &mut TemplateMeta, stmt: &Stmt) -> Result<(), String> {
+    let dest = parse_destination(text_value(stmt)?).map_err(|e| format!("meta.{e}"))?;
+    meta.destination = Some(dest);
+    Ok(())
+}
+
+fn set_mode(kind: &mut Option<TemplateType>, stmt: &Stmt) -> Result<(), String> {
+    copy_metadata(kind)?.mode = Some(parse_mode(text_value(stmt)?)?);
+    Ok(())
+}
+
+/// `meta.type`; "copy" keeps the metadata that lines above it set.
+fn set_type(kind: &mut Option<TemplateType>, stmt: &Stmt) -> Result<(), String> {
+    match (text_value(stmt)?, kind.is_some()) {
+        ("copy", _) => copy_metadata(kind).map(drop),
+        ("link", false) => {
+            *kind = Some(TemplateType::Link);
+            Ok(())
+        }
+        ("link", true) => Err(LINK_METADATA.into()),
+        _ => Err("meta.type must be \"link\" or \"copy\"".into()),
+    }
+}
+
+/// The metadata of a copy: a setting makes the template one, and a link has none.
+fn copy_metadata(kind: &mut Option<TemplateType>) -> Result<&mut Metadata, String> {
+    match kind.get_or_insert_with(|| TemplateType::Copy(Metadata::default())) {
+        TemplateType::Copy(m) => Ok(m),
+        TemplateType::Link => Err(LINK_METADATA.into()),
     }
 }
 
@@ -353,18 +403,12 @@ fn add_condition(meta: &mut TemplateMeta, fact: Fact, stmt: &Stmt) -> Result<(),
     Ok(())
 }
 
-fn add_setting(s: &mut Metadata, stmt: &Stmt) -> Result<(), String> {
+/// `meta.uid`, `meta.owner`, `meta.gid` or `meta.group`; any other key is unknown.
+fn add_owner(kind: &mut Option<TemplateType>, stmt: &Stmt) -> Result<(), String> {
     let key = stmt.key;
-    if stmt.test {
-        return Err(format!("meta.{key} is a setting; use ="));
-    }
     let (slot, id_key, name_key) = match key {
-        "mode" => {
-            s.mode = Some(parse_mode(text_value(stmt)?)?);
-            return Ok(());
-        }
-        "uid" | "owner" => (&mut s.owner, "uid", "owner"),
-        "gid" | "group" => (&mut s.group, "gid", "group"),
+        "uid" | "owner" => (&mut copy_metadata(kind)?.owner, "uid", "owner"),
+        "gid" | "group" => (&mut copy_metadata(kind)?.group, "gid", "group"),
         _ => return Err(format!("unknown meta key 'meta.{key}'")),
     };
     *slot = Some(owner_value(stmt, slot.is_some(), id_key, name_key)?);
@@ -517,12 +561,12 @@ mod tests {
         assert_eq!(b.body, "body\n");
         assert_eq!(b.lines, 4);
         assert_eq!(
-            b.meta.settings,
-            Metadata {
+            b.meta.kind,
+            Some(TemplateType::Copy(Metadata {
                 mode: Some(0o600),
                 owner: Some(Owner::Id(1001)),
                 group: Some(Owner::Name("wheel".into()))
-            }
+            }))
         );
         assert_eq!(
             b.meta.conditions,
@@ -531,14 +575,68 @@ mod tests {
                 value: "linux".into()
             }]
         );
-        assert!(b.meta.has_settings());
         assert!(b.meta.failed(&host()).is_none());
+    }
+
+    #[test]
+    fn type_and_destination_say_how_and_where() {
+        let b =
+            split_meta("{%- meta.destination = \".config/app/app.conf\" %}\n{%- meta.type = \"link\" %}\n").unwrap();
+        assert_eq!(b.meta.kind, Some(TemplateType::Link));
+        assert_eq!(
+            b.meta.destination,
+            Some(RelPath::parse(".config/app/app.conf").unwrap())
+        );
+        let copy = |text| split_meta(text).unwrap().meta.kind;
+        assert_eq!(
+            copy("{%- meta.type = \"copy\" %}\n"),
+            Some(TemplateType::Copy(Metadata::default()))
+        );
+        let mode = Some(TemplateType::Copy(Metadata {
+            mode: Some(0o600),
+            ..Metadata::default()
+        }));
+        assert_eq!(copy("{%- meta.type = \"copy\" %}\n{%- meta.mode = \"0600\" %}\n"), mode);
+        assert_eq!(copy("{%- meta.mode = \"0600\" %}\n{%- meta.type = \"copy\" %}\n"), mode);
+    }
+
+    #[test]
+    fn a_link_has_no_metadata() {
+        for text in [
+            "{%- meta.type = \"link\" %}\n{%- meta.mode = \"0600\" %}\n",
+            "{%- meta.type = \"link\" %}\n{%- meta.gid = 1 %}\n",
+            "{%- meta.owner = \"root\" %}\n{%- meta.type = \"link\" %}\n",
+        ] {
+            assert_eq!(
+                split_meta(text).unwrap_err(),
+                "line 2: meta.type = \"link\" cannot have a mode, an owner or a group",
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn type_and_destination_values_are_checked() {
+        let e = |text: &str| split_meta(text).unwrap_err();
+        assert_eq!(
+            e("{%- meta.type = \"hard\" %}\n"),
+            "line 1: meta.type must be \"link\" or \"copy\""
+        );
+        assert_eq!(e("{%- meta.type = 1 %}\n"), "line 1: meta.type needs a quoted string");
+        assert_eq!(
+            e("{%- meta.destination == \"x\" %}\n"),
+            "line 1: meta.destination is a setting; use ="
+        );
+        for bad in ["/etc/x", "a/../b", "a/.rustow-tmp-x", ""] {
+            let got = e(&format!("{{%- meta.destination = \"{bad}\" %}}\n"));
+            assert!(got.starts_with("line 1: meta.destination: "), "{bad:?} -> {got}");
+        }
     }
 
     #[test]
     fn false_condition_is_reported() {
         let b = split_meta("{%- meta.hostname == \"pc\" %}\nx").unwrap();
-        assert!(!b.meta.has_settings());
+        assert_eq!(b.meta.kind, None);
         assert_eq!(b.meta.failed(&host()).unwrap().to_string(), "meta.hostname == \"pc\"");
     }
 
@@ -593,7 +691,11 @@ mod tests {
     #[test]
     fn owner_names_the_owner_like_template_rules() {
         let b = split_meta("{%- meta.owner = \"root\" %}\n").unwrap();
-        assert_eq!(b.meta.settings.owner, Some(Owner::Name("root".into())));
+        let root = Metadata {
+            owner: Some(Owner::Name("root".into())),
+            ..Metadata::default()
+        };
+        assert_eq!(b.meta.kind, Some(TemplateType::Copy(root)));
         assert_eq!(
             split_meta("{%- meta.uid = 0 %}\n{%- meta.owner = \"root\" %}\n").unwrap_err(),
             "line 2: meta.uid and meta.owner cannot both be set"

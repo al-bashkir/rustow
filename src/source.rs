@@ -7,7 +7,7 @@ use crate::config::{Backend, Config, DefaultMode, Metadata};
 use crate::error::{Error, Result};
 use crate::ignore::{Ignore, ROOT_DIR};
 use crate::paths::{RelPath, Scope};
-use crate::template::{Host, TemplateMeta, split_meta};
+use crate::template::{Host, TemplateMeta, TemplateType, split_meta};
 
 /// The one final deployment mode of a source. Encrypted templates are
 /// `Template*` with a backend; ordinary links and copies never carry one.
@@ -154,6 +154,7 @@ pub enum SkipKind {
 
 const META_ERROR: &str = "template meta block, ";
 const META_CONFLICT: &str = "set metadata either in the template meta block or in [[template_rules]], not both";
+const DEST_CONFLICT: &str = "set the destination either in the template meta block or in rustow.toml, not both";
 
 impl Skipped {
     /// A path in the repository that cannot deploy.
@@ -168,7 +169,7 @@ impl Skipped {
     /// A mistake in a template's meta block (or its clash with a rule):
     /// `check` reports it as a problem, not only as a warning.
     pub fn is_meta_problem(&self) -> bool {
-        self.reason.starts_with(META_ERROR) || self.reason == META_CONFLICT
+        self.reason.starts_with(META_ERROR) || [META_CONFLICT, DEST_CONFLICT].contains(&self.reason.as_str())
     }
 }
 
@@ -366,10 +367,7 @@ fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Disco
     let placed = match text.as_deref().map(split_meta) {
         None => Placed::Deploy(source),
         Some(Err(e)) => Placed::Skip(format!("{META_ERROR}{e}")),
-        Some(Ok(block)) => {
-            let has_rule = cfg.template_meta(&path).is_some();
-            apply_meta(source, block.meta, has_rule, host)
-        }
+        Some(Ok(block)) => apply_meta(source, block.meta, cfg, host),
     };
     match placed {
         Placed::Deploy(s) => out.sources.push(s),
@@ -378,23 +376,44 @@ fn place(repo: &Path, source: Source, cfg: &Config, host: &Host, out: &mut Disco
     }
 }
 
-/// The meta block's effect on one plaintext template. Each setting has
-/// one home, so meta settings and a `[[template_rules]]` entry conflict.
-fn apply_meta(source: Source, meta: TemplateMeta, has_rule: bool, host: &Host) -> Placed {
-    if meta.has_settings() && has_rule {
-        return Placed::Skip(META_CONFLICT.into());
+/// The meta block's effect on one plaintext template. An explicit type
+/// wins over `defaults.mode`.
+fn apply_meta(source: Source, meta: TemplateMeta, cfg: &Config, host: &Host) -> Placed {
+    if let Some(why) = meta_mistake(&source, &meta, cfg) {
+        return Placed::Skip(why);
     }
     if let Some(c) = meta.failed(host) {
         return Placed::Inactive(format!("{c} is false here"));
     }
-    if meta.has_settings() {
-        let backend = source.mode.backend();
-        return Placed::Deploy(Source {
-            mode: Mode::TemplateCopy(backend, meta.settings),
-            ..source
-        });
+    let backend = source.mode.backend();
+    let mode = match meta.kind {
+        None => source.mode,
+        Some(TemplateType::Link) => Mode::TemplateLink(backend),
+        Some(TemplateType::Copy(m)) => Mode::TemplateCopy(backend, m),
+    };
+    Placed::Deploy(Source {
+        dest: meta.destination.unwrap_or(source.dest),
+        mode,
+        ..source
+    })
+}
+
+/// Why a valid meta block cannot apply to this source, on any host. Each
+/// setting has one home, so a type or metadata and a `[[template_rules]]`
+/// entry with metadata conflict, and so do two destinations. A system
+/// file never links.
+fn meta_mistake(source: &Source, meta: &TemplateMeta, cfg: &Config) -> Option<String> {
+    if meta.kind.is_some() && cfg.template_meta(&source.path).is_some() {
+        Some(META_CONFLICT.into())
+    } else if meta.destination.is_some() && cfg.destinations.contains_key(&source.path) {
+        Some(DEST_CONFLICT.into())
+    } else if meta.kind == Some(TemplateType::Link) && source.scope == Scope::Root {
+        Some(format!(
+            "{META_ERROR}meta.type = \"link\": system files deploy only as copies"
+        ))
+    } else {
+        None
     }
-    Placed::Deploy(source)
 }
 
 /// Sorts one walked entry (its path, and whether the name is UTF-8) into

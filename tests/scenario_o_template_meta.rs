@@ -162,3 +162,72 @@ fn check_fails_on_a_broken_meta_block_but_apply_only_warns() {
         "{applied:?}"
     );
 }
+
+/// `meta.destination` moves the template; without settings it stays a link.
+#[test]
+fn meta_destination_moves_a_template() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n[vars]\nname = \"x\"\n");
+    fx.write(
+        "t/greet.tmpl",
+        "{%- meta.destination = \".config/greet/greet.conf\" %}\nhello {{ vars.name }}\n",
+    );
+    fx.ok(&["apply"]);
+    let dest = fx.home_path(".config/greet/greet.conf");
+    assert!(is_symlink(&dest), "template+link");
+    assert_eq!(read(&dest), "hello x\n");
+    assert!(!fx.home_path("t").exists(), "nothing at the source path");
+}
+
+#[test]
+fn meta_type_copy_makes_a_copy_without_settings() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    fx.write(".x.tmpl", "{%- meta.type = \"copy\" %}\nx\n");
+    fx.ok(&["apply"]);
+    let p = fx.home_path(".x");
+    assert!(is_regular(&p));
+    assert_eq!(read(&p), "x\n");
+}
+
+/// An explicit `meta.type = "link"` wins over `defaults.mode = "copy"`.
+#[test]
+fn meta_type_link_links_in_copy_mode() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n[defaults]\nmode = \"copy\"\n");
+    fx.write(".l.tmpl", "{%- meta.type = \"link\" %}\nl\n");
+    fx.write(".c.tmpl", "c\n");
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".l")));
+    assert_eq!(read(&fx.home_path(".l")), "l\n");
+    assert!(is_regular(&fx.home_path(".c")), "the default still copies");
+}
+
+/// A type or a destination that cannot apply is a meta problem: `check`
+/// fails, and `apply` skips the template with a warning.
+#[test]
+fn check_reports_a_type_or_destination_that_cannot_apply() {
+    let fx = Fixture::new();
+    fx.write(
+        "rustow.toml",
+        "version = 1\n[[template_rules]]\nsource = \"d.tmpl\"\ndestination = \".d\"\n\
+         [[template_rules]]\nsource = \"m.tmpl\"\nmode = \"0600\"\n",
+    );
+    fx.write("rustowroot/etc/s.conf.tmpl", "{%- meta.type = \"link\" %}\ns\n");
+    fx.write("d.tmpl", "{%- meta.destination = \".e\" %}\nd\n");
+    fx.write("m.tmpl", "{%- meta.type = \"copy\" %}\nm\n");
+    let out = fx.run(&["check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    for want in [
+        "problem: rustowroot/etc/s.conf.tmpl: template meta block, meta.type = \"link\": system files deploy only as copies",
+        "problem: d.tmpl: set the destination either in the template meta block or in rustow.toml, not both",
+        "problem: m.tmpl: set metadata either in the template meta block or in [[template_rules]], not both",
+    ] {
+        assert!(out.stdout.contains(want), "{want}\n{out:?}");
+    }
+    let applied = fx.run(&["apply"]);
+    assert_eq!(applied.code, 0, "{applied:?}");
+    assert!(!fx.root_path("etc/s.conf").exists());
+    assert!(!fx.home_path(".d").exists() && !fx.home_path(".e").exists());
+    assert!(!fx.home_path("m").exists());
+}

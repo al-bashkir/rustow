@@ -139,6 +139,22 @@ fn a_directory_that_a_source_moves_into_never_folds() {
     );
 }
 
+/// The same for a template that its meta block moves.
+#[test]
+fn a_directory_that_a_template_moves_into_never_folds() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    fx.write("t/run.tmpl", "{%- meta.destination = \".config/app/run\" %}\nr\n");
+    fx.write(".config/app/conf", "c\n");
+    fx.ok(&["apply"]);
+    assert!(!is_symlink(&fx.home_path(".config/app")), "not folded");
+    assert_eq!(read(&fx.home_path(".config/app/run")), "r\n");
+    assert!(
+        !fx.repo.join(".config/app/run").exists(),
+        "nothing written into the repository"
+    );
+}
+
 /// A fold from an earlier run unfolds when a source moves into it.
 #[test]
 fn a_source_that_moves_into_a_fold_unfolds_it() {
