@@ -34,7 +34,7 @@ The destination name drops the `.tmpl`, `.age` or `.gpg` suffix.
 rustow deploys a **copy** instead of a link in these cases:
 
 - You register the file with `rustow file add <path>`, or list it in `[[files]]` in `rustow.toml`. See [file management](file-management.md).
-- A template has a `[[template_rules]]` entry or a meta block. Then it needs a mode, an owner or a group, so it must be a file. See [templates](templates.md).
+- A template sets a mode, an owner or a group, in a `[[template_rules]]` entry or in its meta block. Then it must be a file. A meta block can also ask for a copy with `meta.type = "copy"`. See [templates](templates.md).
 - The file is under `rustowroot/`. System files are never links.
 - You set `mode = "copy"` in `[defaults]`. Then you add each file by hand. See [copy mode](configuration.md#copy-mode).
 

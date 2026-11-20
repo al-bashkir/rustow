@@ -64,14 +64,14 @@ ignore = [".config/foot/"]
 | `state_dir`          | none             | State directory. Default: `$XDG_STATE_HOME/rustow`, else `~/.local/state/rustow`.                                                                                                                             |
 | `create_directories` | `true`           | Create missing parent directories. Their mode is 0755, or 0700 in `~/.ssh` and `~/.gnupg` and for encrypted home sources. The umask does not change it.                                                       |
 | `fold_directories`   | `true`           | Fold plain directories into one symlink. Never a directory directly under the home target or under `~/.local`. See below.                                                                                     |
-| `mode`               | `"symlink"`      | `"symlink"` or `"copy"`. With `"copy"`, `apply` makes no new symlink. See [copy mode](#copy-mode).                                                                                                            |
+| `mode`               | `"symlink"`      | `"symlink"` or `"copy"`. With `"copy"`, `apply` makes no new symlink, except for a template with `meta.type = "link"`. See [copy mode](#copy-mode).                                                           |
 
 ### Copy mode
 
 With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys only:
 
 - the registered copies: `rustow file add <path>` or `[[files]]`,
-- the templates, as copies. A `[[template_rules]]` entry can set their metadata,
+- the templates, as copies. A `[[template_rules]]` entry can set their metadata. A template with `meta.type = "link"` in its [meta block](templates.md#meta-block) deploys as a link,
 - the registered links. `rustow link <path>` makes a link and registers it in the state file.
 
 `apply` skips each other plain or encrypted home file. It prints no warning for it, and `status` shows no row for it.
@@ -84,7 +84,7 @@ With `mode = "copy"`, you add files one by one, as with chezmoi. `apply` deploys
 - `rustow enc <path>` moves the registration to the encrypted name. A registered link then deploys as decrypt+link.
 - A path argument that names only files that are not linked exits 2, for example `rustow apply .vimrc`.
 
-The state file is per machine and per user. On a new machine, run `rustow link <path>` and `rustow file add <path>` again, move the registrations with `rustow state export` and `rustow state import`, or list the copies in `[[files]]`. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before are not registered. `apply` does not change them, and `status` does not show them. Run `rustow link <path>` to register one, or `rustow unlink <path>` to remove it. Templates that rustow linked before become copies on the next `apply`.
+The state file is per machine and per user. On a new machine, run `rustow link <path>` and `rustow file add <path>` again, move the registrations with `rustow state export` and `rustow state import`, or list the copies in `[[files]]`. When you change `mode` from `"symlink"` to `"copy"`, the links that rustow made before are not registered. `apply` does not change them, and `status` does not show them. Run `rustow link <path>` to register one, or `rustow unlink <path>` to remove it. Templates that rustow linked before become copies on the next `apply`, unless their meta block sets `meta.type = "link"`.
 
 `rustowroot/` sources work the same in both modes.
 
@@ -226,7 +226,7 @@ An entry that cannot apply gives a warning, and rustow ignores the entry. This h
 
 ## `destination`
 
-A `[[files]]`, `[[template_rules]]` or `[[file_rules]]` entry can set `destination`. Use it to keep a file in one place in the repository and deploy it to another place:
+A `[[files]]`, `[[template_rules]]` or `[[file_rules]]` entry can set `destination`. A template can also set it in its [meta block](templates.md#meta-block), as `meta.destination`, with the same rules. Use it to keep a file in one place in the repository and deploy it to another place:
 
 ```toml
 [[file_rules]]                     # a symlink
@@ -247,7 +247,7 @@ destination = ".gitconfig"
 - rustow keeps the name that you write. It does not remove the `.tmpl`, `.age` or `.gpg` suffix from it.
 - Use `destination` only with `source`. With `sources`, it is a configuration error (exit 2).
 - An absolute path, `..`, or a component that starts with `.rustow-tmp-` is a configuration error (exit 2).
-- Set the destination of a source in one entry only. A destination for the same source in two entries is a configuration error (exit 2).
+- Set the destination of a source in one entry only. A destination for the same source in two entries is a configuration error (exit 2). A template with a destination in its meta block and in `rustow.toml` is skipped with a warning, and `rustow check` reports it as a problem.
 - `destination` names one file. On a `[[file_rules]]` directory, rustow ignores it with a warning: "rustow.toml [[file_rules]] entry is a directory, not a file".
 - In `[[file_rules]]`, `destination` alone is enough. `fold_directories` is then optional. In `[[template_rules]]`, `destination` alone is enough too, and the template stays a symlink. Add `mode`, `owner` or `group` to make it a copy.
 - Two sources with one destination are a collision, as without `destination`: both items are conflicts (exit 3), and `check` reports it.
@@ -304,7 +304,7 @@ A rule without conditions, an unknown key or a bad pattern is a configuration er
 
 A system file under `rustowroot/` never deploys as a link. An ordinary or encrypted system file that is not in `[[files]]` does not deploy: rustow skips it with a warning. See [system files](system-files.md).
 
-In [copy mode](#copy-mode), a home template is template+copy. A Link or DecryptLink source deploys only when `rustow link <path>` registered it.
+In [copy mode](#copy-mode), a home template is template+copy, unless its meta block sets `meta.type = "link"`. A Link or DecryptLink source deploys only when `rustow link <path>` registered it.
 
 Encrypted templates (`name.tmpl.age`) also work. There is exactly one outer `.age` or `.gpg`. rustow skips nested names such as `x.age.gpg` with a warning. The destination name drops the encryption suffix, then the template extension.
 

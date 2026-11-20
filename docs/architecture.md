@@ -58,6 +58,8 @@ Link, FileCopy, DecryptLink, DecryptCopy, TemplateLink, TemplateCopy. The labels
 | TemplateLink                        | TemplateLink | TemplateCopy with empty metadata            |
 | FileCopy, DecryptCopy, TemplateCopy | unchanged    | unchanged                                   |
 
+`source::place` then reads the meta block of each plaintext template (`apply_meta`). `meta.type` and the metadata settings set the mode, and `meta.destination` sets `Source::dest`. An explicit `meta.type = "link"` is a TemplateLink also in copy mode. Under `rustowroot/`, `meta_mistake` skips it, so the scope rule holds. `fold` keeps each directory above a home destination that no fold holds unfolded (`moved_into`), so a moved template never writes into the repository.
+
 With `defaults.mode = "copy"`, `scoped_mode` also makes a home TemplateLink a TemplateCopy with empty metadata. A home Link or DecryptLink stays a link source. `app::selected` decides if the command deploys it (`may_link`): only `rustow link <path>`, or a link registration in the state (`State::is_link`). `app::prepare` adds the registrations for `rustow link <path>`; `unlink` removes them.
 
 `State::registrations` maps each registered source to one `state::Registration`: `Copy` (`file add`) or `Link` (copy-mode `link <path>`). So a source cannot have both. The state file keeps the JSON lists `files` and `links` (`state::Lists`); a source in both lists loads as a copy, and the next save writes it once. `file add` replaces a link registration. `rustow link <path>` of a registered copy is a usage error that names `rustow file remove` (`app::nothing_deployed`). `state import` follows the same rule.

@@ -68,31 +68,31 @@ A relative path in `--repo`, `RUSTOW_REPO`, `--target` or `--root-target` starts
 
 ## Commands
 
-| Command                         | Purpose                                                                                                                                |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `apply [PATH]...`               | Deploy all eligible sources. In [copy mode](configuration.md#copy-mode), it makes no new symlink.                                      |
-| `link [PATH]...`                | Deploy ordinary plaintext symlinks only. System files are never symlinks. In copy mode, only a path argument makes a new link.         |
-| `unlink [PATH]...`              | Remove managed link-mode symlinks (and folded directory links), and their copy-mode registrations.                                     |
-| `init`                          | Prepare the repository. Deploys nothing.                                                                                               |
-| `file add\|remove [PATH]...`    | Register copy sources in the state, or unregister them from the state and `[[files]]`.                                                 |
-| `file list`                     | List registered sources.                                                                                                               |
-| `file apply`                    | Deploy registered copies only.                                                                                                         |
-| `file diff`                     | Diff registered copies.                                                                                                                |
-| `template list`                 | List templates and how they deploy.                                                                                                    |
-| `template apply`                | Deploy templates only (also encrypted).                                                                                                |
-| `diff [PATH]...`                | Show differences. May print secrets.                                                                                                   |
-| `status [--ignored] [PATH]...`  | Show the state of each destination.                                                                                                    |
-| `check`                         | Validate offline.                                                                                                                      |
-| `doctor`                        | Report on the environment.                                                                                                             |
-| `undeploy [-y] [PATH]...`       | Remove managed destinations of any mode. Without a path, asks first.                                                                   |
-| `undeploy orphaned [PATH]...`   | Remove only the ORPHANED destinations. Does not ask. A source named `orphaned` is `./orphaned`.                                        |
-| `cache clean`                   | Remove unused cache entries and stale edit workspaces.                                                                                 |
-| `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON. `-` prints them.                                           |
-| `state import FILE`             | Add the registrations in FILE (`-` for stdin) to this machine.                                                                         |
-| `state adopt OLD_ROOT`          | Take over the state of this repository from its path before a move.                                                                    |
-| `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                                                                                      |
-| `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                                                                              |
-| `completions <SHELL>`           | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). See [shell completions](installation.md#shell-completions). |
+| Command                         | Purpose                                                                                                                                            |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apply [PATH]...`               | Deploy all eligible sources. In [copy mode](configuration.md#copy-mode), it makes no new symlink, except for a template with `meta.type = "link"`. |
+| `link [PATH]...`                | Deploy ordinary plaintext symlinks only. System files are never symlinks. In copy mode, only a path argument makes a new link.                     |
+| `unlink [PATH]...`              | Remove managed link-mode symlinks (and folded directory links), and their copy-mode registrations.                                                 |
+| `init`                          | Prepare the repository. Deploys nothing.                                                                                                           |
+| `file add\|remove [PATH]...`    | Register copy sources in the state, or unregister them from the state and `[[files]]`.                                                             |
+| `file list`                     | List registered sources.                                                                                                                           |
+| `file apply`                    | Deploy registered copies only.                                                                                                                     |
+| `file diff`                     | Diff registered copies.                                                                                                                            |
+| `template list`                 | List templates and how they deploy.                                                                                                                |
+| `template apply`                | Deploy templates only (also encrypted).                                                                                                            |
+| `diff [PATH]...`                | Show differences. May print secrets.                                                                                                               |
+| `status [--ignored] [PATH]...`  | Show the state of each destination.                                                                                                                |
+| `check`                         | Validate offline.                                                                                                                                  |
+| `doctor`                        | Report on the environment.                                                                                                                         |
+| `undeploy [-y] [PATH]...`       | Remove managed destinations of any mode. Without a path, asks first.                                                                               |
+| `undeploy orphaned [PATH]...`   | Remove only the ORPHANED destinations. Does not ask. A source named `orphaned` is `./orphaned`.                                                    |
+| `cache clean`                   | Remove unused cache entries and stale edit workspaces.                                                                                             |
+| `state export [FILE]`           | Print (or write) the `file add` and copy-mode `link` registrations as JSON. `-` prints them.                                                       |
+| `state import FILE`             | Add the registrations in FILE (`-` for stdin) to this machine.                                                                                     |
+| `state adopt OLD_ROOT`          | Take over the state of this repository from its path before a move.                                                                                |
+| `enc [--backend age\|gpg] PATH` | Encrypt a source.                                                                                                                                  |
+| `enc edit [--reencrypt] PATH`   | Edit an encrypted source.                                                                                                                          |
+| `completions <SHELL>`           | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`). See [shell completions](installation.md#shell-completions).             |
 
 Path arguments are repository-relative. They are never relative to the current directory. A path argument that matches only sources of other modes is a usage error (exit 2). A path argument that names a [skipped source](#skipped-sources) is a usage error (exit 2) with the reason, for example "source 'rustowroot/etc/x': system files deploy only as copies; register it with `rustow file add rustowroot/etc/x`". A directory argument that holds skipped sources deploys the other sources and prints a warning for each skipped one.
 

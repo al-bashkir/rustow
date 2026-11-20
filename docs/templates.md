@@ -9,12 +9,14 @@ A template is a source file whose name ends in the template extension (default `
 - An undefined variable is an error, so a typo never gives an empty value.
 - Run `rustow check` to render the templates offline. Run `rustow diff` to see what would change.
 - By default the result is a symlink to a cache file. To set the mode or the owner, use a `[[template_rules]]` entry or a [meta block](#meta-block). Then the result is a copy.
+- The meta block can also choose a link or a copy (`meta.type`) and the path of the result (`meta.destination`).
 
 ## Deployment
 
 - Without a rule, a home template deploys as `template+link`. rustow writes the rendered file to the cache and links to it.
 - With a `[[template_rules]]` entry, a template deploys as `template+copy`. The rule sets `mode`, `owner` and `group`.
 - With settings in its [meta block](#meta-block), a template deploys as `template+copy` with those settings.
+- With `meta.type = "link"` or `meta.type = "copy"` in its meta block, a template deploys as `template+link` or `template+copy`.
 - A system template under `rustowroot/` always deploys as `template+copy`, also without a rule. See [system files](system-files.md).
 
 ```toml
@@ -43,21 +45,33 @@ other content
 {%- endif %}
 ```
 
+This template deploys as a copy to `~/.config/app/app.conf`, wherever it is in the repository:
+
+```jinja
+{%- meta.destination = ".config/app/app.conf" %}
+{%- meta.type = "copy" %}
+color = {{ vars.color }}
+```
+
 The meta block is the group of `meta.` lines at the start of the file. It stops at the first line that is not a meta line. rustow reads it and removes it before rendering, so it is never in the output. A line has this form: `{%` or `{%-`, then `meta.<key>`, then `=` or `==`, then a value in double quotes or a whole number, then `%}` or `-%}`. Spaces between the parts and a CRLF line end are allowed. A `meta.` line lower in the file is not part of the block: MiniJinja reports it as a syntax error.
 
-| Key                                            | Form         | Meaning                                                               |
-| ---------------------------------------------- | ------------ | --------------------------------------------------------------------- |
-| `mode`                                         | `= "0600"`   | File mode. The same rules as `mode` in `[[template_rules]]`.          |
-| `uid`                                          | `= 1001`     | Owner, by numeric id.                                                 |
-| `owner`                                        | `= "name"`   | Owner, by name. The same as `owner` in `[[template_rules]]`.          |
-| `gid`                                          | `= 1001`     | Group, by numeric id.                                                 |
-| `group`                                        | `= "name"`   | Group, by name.                                                       |
-| `os`, `arch`, `family`, `hostname`, `username` | `== "value"` | Condition. Compared with the [variable](#variables) of the same name. |
+| Key                                            | Form         | Meaning                                                                         |
+| ---------------------------------------------- | ------------ | ------------------------------------------------------------------------------- |
+| `mode`                                         | `= "0600"`   | File mode. The same rules as `mode` in `[[template_rules]]`.                    |
+| `uid`                                          | `= 1001`     | Owner, by numeric id.                                                           |
+| `owner`                                        | `= "name"`   | Owner, by name. The same as `owner` in `[[template_rules]]`.                    |
+| `gid`                                          | `= 1001`     | Group, by numeric id.                                                           |
+| `group`                                        | `= "name"`   | Group, by name.                                                                 |
+| `type`                                         | `= "link"`   | Deploy as `template+link`. `= "copy"`: deploy as `template+copy`.               |
+| `destination`                                  | `= "path"`   | The path of the deployed file. See [destination](configuration.md#destination). |
+| `os`, `arch`, `family`, `hostname`, `username` | `== "value"` | Condition. Compared with the [variable](#variables) of the same name.           |
 
-- **Settings** (`mode`, `uid`, `owner`, `gid`, `group`) make the template deploy as `template+copy` with that metadata. A template must not have both settings in its meta block and a `[[template_rules]]` entry. If it has both, rustow skips it with a warning: "set metadata either in the template meta block or in [[template_rules]], not both". A meta block with conditions only can have a rule. Only root can give a home file to another user, or to a group that you are not in: run as another user, `apply` fails on such a template with "set owner of <path>: Operation not permitted", and `status` shows the same ERROR.
+- **Settings** (`mode`, `uid`, `owner`, `gid`, `group`) make the template deploy as `template+copy` with that metadata. A template must not have both a type or settings in its meta block and a `[[template_rules]]` entry that sets `mode`, `owner` or `group`. If it has both, rustow skips it with a warning: "set metadata either in the template meta block or in [[template_rules]], not both". A meta block with conditions only can have a rule. Only root can give a home file to another user, or to a group that you are not in: run as another user, `apply` fails on such a template with "set owner of <path>: Operation not permitted", and `status` shows the same ERROR.
+- **Type** `"copy"` without settings makes a copy with no explicit metadata: a new copy gets 0644, and an update keeps the mode of the file. Type `"link"` makes a link also with `defaults.mode = "copy"`. A link has no mode, owner or group: `meta.type = "link"` together with `mode`, `uid`, `owner`, `gid` or `group` is a mistake. A system template under `rustowroot/` cannot be a link: there `meta.type = "link"` is a mistake too. Without `meta.type`, the template deploys as the sections above say. When a copy that rustow deployed becomes a link, `apply` reports a conflict (exit 3), because the copy can hold your edits. `apply --force` replaces it with the link.
+- **Destination** has the rules of [`destination`](configuration.md#destination) in `rustow.toml`: the full path of the deployed file, relative to the target of the source's scope. rustow keeps the name that you write. A template must not have both `meta.destination` and a `destination` in `rustow.toml`. If it has both, rustow skips it with a warning: "set the destination either in the template meta block or in rustow.toml, not both". A `[[template_rules]]` entry without `destination` can still set the metadata.
 - **Conditions** must all be true. If one is false, the template is not for this machine. rustow does not deploy it, prints no warning and keeps the exit code. `status` shows it as SKIPPED, for example "meta.os == "linux" is false here". A path argument that names it is not an error. `check` does not render it and does not test it for collisions.
 - If the template was deployed on this machine before, for example before you changed its condition, its destination is ORPHANED with the false condition in the detail. rustow removes nothing. `rustow undeploy <source>` removes it.
-- A key set twice, an unknown key, `=` on a condition, `==` on a setting, a wrong value type, an id above 4294967294, `uid` with `owner` or `gid` with `group`: rustow skips the template with a warning that names the line, for example "template meta block, line 2: meta.mode is set twice". `rustow check` reports these mistakes, and settings together with a rule, as problems (exit 1), because `apply` would stop managing the template.
+- A key set twice, an unknown key, `=` on a condition, `==` on a setting, a wrong value type, an id above 4294967294, `uid` with `owner` or `gid` with `group`, a `type` other than `"link"` or `"copy"`, `type = "link"` with metadata, a `destination` that `rustow.toml` would refuse: rustow skips the template with a warning that names the line, for example "template meta block, line 2: meta.mode is set twice". `rustow check` reports these mistakes as problems (exit 1), because `apply` would stop managing the template. The same is true for a type or settings together with a rule that sets metadata, for two destinations, and for `meta.type = "link"` on a system template.
 - An `owner` or `group` name that this system does not know is an error of that item in `apply` ("unknown user 'x'"). `rustow check` reports it as a problem: "<template>: template meta block: unknown user 'x'".
 - Render errors count lines from the top of the file, meta lines included.
 - Encrypted templates (`.tmpl.age`, `.tmpl.gpg`) have no meta block: rustow does not decrypt them to read it. Use `[[template_rules]]`. A meta line in an encrypted template is a render error.
