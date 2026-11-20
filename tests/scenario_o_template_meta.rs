@@ -231,3 +231,20 @@ fn check_reports_a_type_or_destination_that_cannot_apply() {
     assert!(!fx.home_path(".d").exists() && !fx.home_path(".e").exists());
     assert!(!fx.home_path("m").exists());
 }
+
+/// A copy that becomes a link replaces a file that the user may have
+/// edited: `apply` reports a conflict, and `--force` makes the link.
+#[test]
+fn meta_type_copy_to_link_needs_force() {
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    fx.write(".x.tmpl", "{%- meta.type = \"copy\" %}\nx\n");
+    fx.ok(&["apply"]);
+    fx.write(".x.tmpl", "{%- meta.type = \"link\" %}\nx\n");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(is_regular(&fx.home_path(".x")));
+    fx.ok(&["apply", "--force"]);
+    assert!(is_symlink(&fx.home_path(".x")));
+    assert_eq!(read(&fx.home_path(".x")), "x\n");
+}
