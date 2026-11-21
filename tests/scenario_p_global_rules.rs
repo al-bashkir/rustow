@@ -234,3 +234,48 @@ fn bad_rules_are_configuration_errors_without_values() {
         assert!(!out.stderr.contains("S3CRET"), "{rule}: {out:?}");
     }
 }
+
+/// A rule ignores `.gitconfig` on this host, and `.gitconfig.work` deploys
+/// to `~/.gitconfig` instead: the new source takes over the destination,
+/// with the old link still there or already gone.
+#[test]
+fn a_source_that_takes_over_an_ignored_destination_deploys() {
+    for gone in [false, true] {
+        let fx = Fixture::new();
+        fx.write(".gitconfig", "g\n");
+        fx.ok(&["apply"]);
+        if gone {
+            fs::remove_file(fx.home_path(".gitconfig")).unwrap();
+        }
+        fx.write(".gitconfig.work", "w\n");
+        let takeover = "version = 1\n[[file_rules]]\nsource = \".gitconfig.work\"\ndestination = \".gitconfig\"\n";
+        fx.write("rustow.toml", &with_rule(takeover, "\"/.gitconfig\""));
+        let dry = fx.ok(&["apply", "--dry-run"]);
+        assert!(!dry.stdout.contains("remove"), "gone={gone}: {dry:?}");
+        let out = fx.ok(&["apply"]);
+        assert_eq!(read(&fx.home_path(".gitconfig")), "w\n", "gone={gone}: {out:?}");
+        let st = fx.ok(&["status"]);
+        assert!(!st.stdout.contains("UNWANTED"), "gone={gone}: {st:?}");
+        let record = &fx.state_json()["entries"][fx.home_path(".gitconfig").to_str().unwrap()];
+        assert_eq!(record["source"], ".gitconfig.work", "gone={gone}");
+    }
+}
+
+#[test]
+fn abort_stops_the_run_on_a_changed_ignored_copy() {
+    let config = "version = 1\n[[files]]\nsource = \".gitconfig\"\n";
+    let fx = Fixture::new();
+    fx.write("rustow.toml", config);
+    fx.write(".gitconfig", "g\n");
+    fx.ok(&["apply"]);
+    fs::write(fx.home_path(".gitconfig"), "mine\n").unwrap();
+    fx.write(".bashrc", "b\n");
+    fx.write("rustow.toml", &with_rule(config, "\"/.gitconfig\""));
+    let out = fx.run(&["apply", "--on-conflict", "abort"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(
+        fx.home_path(".bashrc").symlink_metadata().is_err(),
+        "nothing changed: {out:?}"
+    );
+    assert_eq!(read(&fx.home_path(".gitconfig")), "mine\n");
+}

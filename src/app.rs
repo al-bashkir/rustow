@@ -420,7 +420,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, a: &DeployArgs, selector
     printer.warn(ctx.skipped(&discovery, paths)?);
     printer.warn(&discovery.rule_warnings);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
-    let unwanted = plan::plan_unwanted(&ctx, paths, selector, &state)?;
+    let unwanted = plan::plan_unwanted(&ctx, &discovery, paths, selector, &state)?;
     let removing = execute::predict_removal(&unwanted);
     let policy = a.conflict.policy();
     if stops(g.dry_run, policy, &plan, &removing) {

@@ -287,7 +287,7 @@ A path that a matching rule ignores is not for this host:
 - rustow does not deploy it and prints no warning. A `[[files]]`, `[[template_rules]]` or `[[file_rules]]` entry for it gives no warning either.
 - `status --ignored` shows it as IGNORED.
 - A path argument that names it exits 2: "'.gitconfig' is ignored by [[global_rules]] #2 (hostname == "work")".
-- If it was deployed before, `status` shows it as UNWANTED, for example "UNWANTED ~/.gitconfig <- .gitconfig (link): ignored by [[global_rules]] #2 (hostname == "work"); `rustow apply` removes it". `rustow apply` removes the destination and its record, as `rustow undeploy` does. A destination that changed since rustow deployed it stays, and `apply` reports a conflict. When the rule stops matching, `apply` deploys it again.
+- If it was deployed before, `status` shows it as UNWANTED, for example "UNWANTED ~/.gitconfig <- .gitconfig (link): ignored by [[global_rules]] #2 (hostname == "work"); `rustow apply` removes it". `rustow apply` removes the destination and its record, as `rustow undeploy` does. A destination that changed since rustow deployed it stays, and `apply` reports a conflict. When the rule stops matching, `apply` deploys it again. When another source now deploys to the same path, for example with a [`destination`](#destination), it is not UNWANTED: `apply` deploys that source there.
 
 A rule without conditions, an unknown key or a bad pattern is a configuration error (exit 2). The message names the rule by its number in the file, from 1. It never shows a `vars` value.
 

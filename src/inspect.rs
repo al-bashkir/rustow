@@ -310,7 +310,7 @@ pub fn status(
             }),
     );
     rows.extend(
-        plan::unwanted(ctx, &prefixes(args)?, Selector::All, state)
+        plan::unwanted(ctx, discovery, &prefixes(args)?, Selector::All, state)
             .into_iter()
             .map(|(dest, record, rule)| Row {
                 source: record.source.to_string(),
