@@ -34,6 +34,10 @@ The destination is correct but not recorded. `rustow apply` records it. It write
 
 The state records a destination whose source is gone, or whose source deploys to another destination now. `status` and the deploy commands show it, for example "orphaned ~/.x <- .x (link): source removed; `rustow undeploy .x` removes it". Run the `rustow undeploy` command in the message. `rustow undeploy orphaned` removes every ORPHANED destination at once. A destination that changed since rustow deployed it stays. `rustow undeploy` with no path removes every managed destination, after it asks you.
 
+## UNWANTED
+
+The state records a destination whose source a matching `[[global_rules]]` entry now ignores, so it is not for this host. `rustow apply` removes it. If the destination changed since rustow deployed it, it stays and `apply` reports a conflict: move your changes away, then run `rustow apply` again. To keep the destination on this host, remove the pattern from the rule.
+
 ## Exit code 4
 
 - "another rustow process": a second run holds the lock. Wait for it.
