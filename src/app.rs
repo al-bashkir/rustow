@@ -436,7 +436,7 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, a: &DeployArgs, selector
         cache_dir: &ctx.cache_dir,
         stop: &stop,
     };
-    let mut items = execute::execute(plan, &run, &mut state);
+    let mut items = execute::execute(plan, Vec::new(), &run, &mut state);
     items.extend(orphaned);
     finish(&ctx, &mut state, held.as_ref(), printer, &items)
 }

@@ -220,10 +220,11 @@ pub struct Run<'a> {
     pub stop: &'a AtomicBool,
 }
 
-/// Executes every item the policy allows and records successes in `state`.
-/// The `sudo` deploys wait for one sudo helper call at the end.
-pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
-    let mut out = Vec::with_capacity(plan.items.len());
+/// Executes every item the policy allows, then `removals`, and records
+/// the results in `state`. The `sudo` deploys and removals wait for one
+/// sudo helper call at the end.
+pub fn execute(plan: Plan, removals: Vec<Removal>, run: &Run, state: &mut State) -> Vec<ItemReport> {
+    let mut out = Vec::with_capacity(plan.items.len() + removals.len());
     let mut queued = Vec::new();
     for item in plan.items {
         let (action, detail, sudo) = execute_item(&item, run, state);
@@ -232,8 +233,9 @@ pub fn execute(plan: Plan, run: &Run, state: &mut State) -> Vec<ItemReport> {
             queued.push((out.len() - 1, item));
         }
     }
-    if !queued.is_empty() {
-        run_sudo(&queued, run, state, &mut out);
+    let removing = start_removals(removals, run.stop, state, run.cache_dir, &mut out);
+    if !queued.is_empty() || !removing.jobs.is_empty() {
+        run_sudo(&queued, removing, run, state, &mut out);
     }
     // An item that moved nothing away (it failed, or found nothing to save) left its backup directories empty.
     fsops::remove_empty_tree(run.backup_dir);
@@ -275,10 +277,16 @@ fn failed(e: Error) -> (Action, Option<String>) {
     }
 }
 
-/// Writes the queued destinations through one sudo helper call, then
-/// records each success and reports each failure.
+/// Writes the queued destinations and makes the waiting removals through
+/// one sudo helper call, then records each success and reports each failure.
 /// Each job's temporary name is in the journal before the helper starts.
-fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mut [ItemReport]) {
+fn run_sudo(
+    queued: &[(usize, PlanItem)],
+    removing: SudoRemovals,
+    run: &Run,
+    state: &mut State,
+    out: &mut [ItemReport],
+) {
     let (mut deploys, mut jobs) = (Vec::new(), Vec::new());
     for (index, item) in queued {
         let Step::Deploy(d) = &item.step else { continue };
@@ -297,12 +305,14 @@ fn run_sudo(queued: &[(usize, PlanItem)], run: &Run, state: &mut State, out: &mu
             Err(e) => sudo_report(&mut out[*index], Err(e), || {}),
         }
     }
-    let results = sudo_batch(&jobs, run.stop, state);
-    for ((index, item, d), result) in deploys.into_iter().zip(results) {
+    jobs.extend(removing.jobs);
+    let mut results = sudo_batch(&jobs, run.stop, state).into_iter();
+    for ((index, item, d), result) in deploys.into_iter().zip(results.by_ref()) {
         sudo_report(&mut out[index], result, || {
             state.entries.insert(item.dest.clone(), d.record.clone());
         });
     }
+    removed_by_sudo(removing.slots, results, state, out);
 }
 
 /// Runs the jobs through one sudo helper call and applies the directories
@@ -743,6 +753,30 @@ fn verify(dir: &Dir, name: &OsStr, d: &Deploy) -> Result<()> {
 /// The `sudo` removals wait for one sudo helper call at the end.
 pub fn remove(removals: Vec<Removal>, stop: &AtomicBool, state: &mut State, cache_dir: &Path) -> Vec<ItemReport> {
     let mut out = Vec::with_capacity(removals.len());
+    let removing = start_removals(removals, stop, state, cache_dir, &mut out);
+    if !removing.jobs.is_empty() {
+        let results = sudo_batch(&removing.jobs, stop, state);
+        removed_by_sudo(removing.slots, results, state, &mut out);
+    }
+    out
+}
+
+/// The removals that wait for the sudo helper: the report index and state
+/// key of each, and its job, in the same order.
+struct SudoRemovals {
+    slots: Vec<(usize, PathBuf)>,
+    jobs: Vec<Job<&'static Deploy>>,
+}
+
+/// Makes each removal that the user can make and reports it in `out`; the
+/// others wait for the sudo helper.
+fn start_removals(
+    removals: Vec<Removal>,
+    stop: &AtomicBool,
+    state: &mut State,
+    cache_dir: &Path,
+    out: &mut Vec<ItemReport>,
+) -> SudoRemovals {
     let (mut jobs, mut slots) = (Vec::new(), Vec::new());
     for r in removals {
         let (action, detail, job) = remove_item(&r, stop, state, cache_dir);
@@ -758,15 +792,22 @@ pub fn remove(removals: Vec<Removal>, stop: &AtomicBool, state: &mut State, cach
             detail,
         });
     }
-    if !jobs.is_empty() {
-        let results = sudo_batch(&jobs, stop, state);
-        for ((index, dest), result) in slots.into_iter().zip(results) {
-            sudo_report(&mut out[index], result, || {
-                state.entries.remove(&dest);
-            });
-        }
+    SudoRemovals { slots, jobs }
+}
+
+/// Puts the helper result of each waiting removal into its report; a
+/// success drops the record.
+fn removed_by_sudo(
+    slots: Vec<(usize, PathBuf)>,
+    results: impl IntoIterator<Item = Result<Option<String>>>,
+    state: &mut State,
+    out: &mut [ItemReport],
+) {
+    for ((index, dest), result) in slots.into_iter().zip(results) {
+        sudo_report(&mut out[index], result, || {
+            state.entries.remove(&dest);
+        });
     }
-    out
 }
 
 /// Removes one item, or returns the sudo job that removes it.
@@ -998,7 +1039,7 @@ pub(crate) mod tests {
             cache_dir: &dir.join("cache"),
             stop: &stop,
         };
-        execute(plan, &run, &mut State::default())
+        execute(plan, Vec::new(), &run, &mut State::default())
     }
 
     #[test]
