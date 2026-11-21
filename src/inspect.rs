@@ -15,7 +15,7 @@ use crate::execute::{Action, ItemReport, deploy_conflict};
 use crate::fsops::{self, FileMeta, Observed};
 use crate::hash::Hash;
 use crate::paths::RelPath;
-use crate::plan::{Conflict, Content, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
+use crate::plan::{self, Conflict, Content, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
 use crate::report::{self, Printer, shown};
 use crate::source::{
@@ -309,6 +309,17 @@ pub fn status(
                 detail: Some(above.map_or_else(|| orphan_detail(ctx, discovery, record), |s| s.reason.clone())),
             }),
     );
+    rows.extend(
+        plan::unwanted(ctx, &prefixes(args)?, Selector::All, state)
+            .into_iter()
+            .map(|(dest, record, rule)| Row {
+                source: record.source.to_string(),
+                dest: Some(dest.clone()),
+                mode: shown_label(&record.mode, record.backend),
+                status: "UNWANTED",
+                detail: Some(format!("ignored by {rule}; `rustow apply` removes it")),
+            }),
+    );
     // An inactive template that is already an ORPHANED row gets no second row.
     let orphaned: Vec<String> = rows
         .iter()
@@ -481,10 +492,9 @@ fn prefixes(args: &[String]) -> Result<Vec<RelPath>> {
 
 /// Recorded destinations in the current targets whose source no longer
 /// exists or deploys to another destination now. A source that a matching
-/// `[[global_rules]]` entry ignores is not for this host, so its record and
-/// destination stay as they are. A source below a skipped path (an
-/// unreadable directory) comes with that path: rustow cannot tell if it is
-/// still there.
+/// `[[global_rules]]` entry ignores is UNWANTED instead (`plan::unwanted`).
+/// A source below a skipped path (an unreadable directory) comes with that
+/// path: rustow cannot tell if it is still there.
 fn orphans<'a, 'd>(
     ctx: &Context,
     discovery: &'d Discovery,
@@ -507,7 +517,7 @@ fn orphans<'a, 'd>(
     for (dest, record) in &state.entries {
         let moved = dests.get(&record.source).is_some_and(|now| now != dest);
         let known = source_exists(ctx, &paths, record) && !moved;
-        let not_for_host = ctx.ignore.ignoring_rule(&record.source, record.folded_dir).is_some();
+        let not_for_host = plan::unwanted_by(ctx, record).is_some();
         let selected = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
         if known || not_for_host || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;

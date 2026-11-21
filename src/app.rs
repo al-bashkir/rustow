@@ -420,9 +420,12 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, a: &DeployArgs, selector
     printer.warn(ctx.skipped(&discovery, paths)?);
     printer.warn(&discovery.rule_warnings);
     let orphaned = inspect::orphan_reports(&ctx, &discovery, &state, paths, selector)?;
+    let unwanted = plan::plan_unwanted(&ctx, paths, selector, &state)?;
+    let removing = execute::predict_removal(&unwanted);
     let policy = a.conflict.policy();
-    if g.dry_run || (policy == Policy::Abort && execute::blocked(&plan, policy)) {
-        return Ok(unrun(&plan, policy, orphaned, g.dry_run, printer));
+    if stops(g.dry_run, policy, &plan, &removing) {
+        let others = removing.into_iter().chain(orphaned).collect();
+        return Ok(unrun(&plan, policy, others, g.dry_run, printer));
     }
     let stop = interrupt_flag()?;
     let backup_dir =
@@ -436,19 +439,27 @@ fn deploy(g: &Global, env: &Env, printer: &mut Printer, a: &DeployArgs, selector
         cache_dir: &ctx.cache_dir,
         stop: &stop,
     };
-    let mut items = execute::execute(plan, Vec::new(), &run, &mut state);
+    let mut items = execute::execute(plan, unwanted, &run, &mut state);
     items.extend(orphaned);
     finish(&ctx, &mut state, held.as_ref(), printer, &items)
 }
 
-/// Prints what each item of `plan` would do under `policy`, for a dry run
-/// or a run that the abort policy stopped, and gives the exit code.
-fn unrun(plan: &Plan, policy: Policy, orphaned: Vec<ItemReport>, dry_run: bool, printer: &Printer) -> i32 {
+/// True when a deploy run must change nothing: a dry run, or a conflict or
+/// failure under the abort policy, in `plan` or in the predicted `removing`.
+fn stops(dry_run: bool, policy: Policy, plan: &Plan, removing: &[ItemReport]) -> bool {
+    let blocked = || execute::blocked(plan, policy) || execute::exit_code(removing) != 0;
+    dry_run || (policy == Policy::Abort && blocked())
+}
+
+/// Prints what each item of `plan` would do under `policy`, then `others`
+/// (predicted removals and orphans), for a dry run or a run that the abort
+/// policy stopped, and gives the exit code.
+fn unrun(plan: &Plan, policy: Policy, others: Vec<ItemReport>, dry_run: bool, printer: &Printer) -> i32 {
     let predicted = plan.items.iter().map(|i| {
         let (action, detail) = execute::predict(i, policy);
         ItemReport::of(i, action, detail)
     });
-    let items: Vec<ItemReport> = predicted.chain(orphaned).collect();
+    let items: Vec<ItemReport> = predicted.chain(others).collect();
     printer.items(&items, if dry_run { RunKind::DryRun } else { RunKind::Blocked });
     execute::exit_code(&items)
 }

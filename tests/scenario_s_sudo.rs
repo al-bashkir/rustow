@@ -320,6 +320,23 @@ fn undeploy_removes_system_files_and_their_new_directories_through_sudo() {
 }
 
 #[test]
+fn apply_writes_and_removes_system_files_through_one_sudo_call() {
+    let s = Sudo::new(FAKE);
+    assert_eq!(s.run(&["apply"]).code, 0);
+    assert_eq!(s.calls(), 1);
+    let config = read(&s.fx.repo.join("rustow.toml")).replace("v = \"t\"", "v = \"u\"");
+    s.fx.write(
+        "rustow.toml",
+        &format!("{config}[[global_rules]]\nfamily = \"unix\"\nignore = [\"/rustowroot/etc/app.conf\"]\n"),
+    );
+    let out = s.run(&["apply"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert_eq!(s.calls(), 2, "one sudo call for the write and the removal");
+    assert!(!s.fx.root_path("etc/app.conf").exists(), "{out:?}");
+    assert_eq!(read(&s.fx.root_path("etc/t.conf")), "u\n");
+}
+
+#[test]
 fn a_failing_sudo_fails_the_items_and_writes_nothing() {
     let s =
         Sudo::new("#!/bin/sh\necho \"$*\" >> \"$FAKE_SUDO_LOG\"\necho 'sudo: a password is required' >&2\nexit 1\n");

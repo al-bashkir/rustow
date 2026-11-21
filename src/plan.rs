@@ -1446,6 +1446,40 @@ pub fn plan_removal(
     Ok((out, elsewhere))
 }
 
+/// The matching `[[global_rules]]` entry that ignores the source of
+/// `record`: its destination is not for this host.
+pub fn unwanted_by<'c>(ctx: &'c Context, record: &Record) -> Option<&'c str> {
+    ctx.ignore.ignoring_rule(&record.source, record.folded_dir)
+}
+
+/// The recorded destinations under the current targets, at or below
+/// `prefixes` (all when empty) and in a mode of `selector`, that are not
+/// for this host (`unwanted_by`), each with the rule that ignores it.
+pub fn unwanted<'s, 'c>(
+    ctx: &'c Context,
+    prefixes: &[RelPath],
+    selector: Selector,
+    state: &'s State,
+) -> Vec<(&'s PathBuf, &'s Record, &'c str)> {
+    (state.entries.iter())
+        .filter(|(dest, r)| dest.starts_with(ctx.target_root(r.scope)) && selects(prefixes, selector, r))
+        .filter_map(|(dest, r)| Some((dest, r, unwanted_by(ctx, r)?)))
+        .collect()
+}
+
+/// Plans removal of the destinations that are not for this host
+/// (`unwanted`) and that `args` and `selector` select.
+pub fn plan_unwanted(ctx: &Context, args: &[String], selector: Selector, state: &State) -> Result<Vec<Removal>> {
+    let prefixes = parse_prefixes(ctx, args)?;
+    Ok(unwanted(ctx, &prefixes, selector, state)
+        .into_iter()
+        .filter_map(|(dest, record, _)| {
+            let rel = dest.strip_prefix(ctx.target_root(record.scope)).ok()?;
+            Some(removal(ctx, dest, record, rel, &state.created_dirs))
+        })
+        .collect())
+}
+
 /// A warning for each record that `args` select (all when empty) and whose
 /// destination is not under the current target of its scope: with these
 /// targets, no command shows or removes it.
