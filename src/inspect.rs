@@ -480,9 +480,11 @@ fn prefixes(args: &[String]) -> Result<Vec<RelPath>> {
 }
 
 /// Recorded destinations in the current targets whose source no longer
-/// exists or deploys to another destination now. A source below a skipped
-/// path (an unreadable directory) comes with that path: rustow cannot tell
-/// if it is still there.
+/// exists or deploys to another destination now. A source that a matching
+/// `[[global_rules]]` entry ignores is not for this host, so its record and
+/// destination stay as they are. A source below a skipped path (an
+/// unreadable directory) comes with that path: rustow cannot tell if it is
+/// still there.
 fn orphans<'a, 'd>(
     ctx: &Context,
     discovery: &'d Discovery,
@@ -505,8 +507,9 @@ fn orphans<'a, 'd>(
     for (dest, record) in &state.entries {
         let moved = dests.get(&record.source).is_some_and(|now| now != dest);
         let known = source_exists(ctx, &paths, record) && !moved;
+        let not_for_host = ctx.ignore.ignoring_rule(&record.source, record.folded_dir).is_some();
         let selected = prefixes.is_empty() || prefixes.iter().any(|p| record.source.starts_with(p));
-        if known || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
+        if known || not_for_host || !selected || !dest.starts_with(ctx.target_root(record.scope)) {
             continue;
         }
         let above = present.iter().find(|s| record.source.strip_prefix(&s.path).is_some());
@@ -518,9 +521,9 @@ fn orphans<'a, 'd>(
 /// Names the command that removes one orphaned destination (`undeploy`
 /// with no path would remove every managed destination).
 /// A template whose meta condition turned false names that condition; a
-/// source that a `[[global_rules]]` entry ignores names the rule; a path
-/// that is there but is not a source says why. A source that deploys to
-/// another destination now names `undeploy orphaned`, which keeps the new one.
+/// path that is there but is not a source says why. A source that deploys
+/// to another destination now names `undeploy orphaned`, which keeps the
+/// new one.
 fn orphan_detail(ctx: &Context, discovery: &Discovery, record: &Record) -> String {
     if discovery.sources.iter().any(|s| s.path == record.source) {
         return format!(
@@ -528,11 +531,9 @@ fn orphan_detail(ctx: &Context, discovery: &Discovery, record: &Record) -> Strin
             record.source
         );
     }
-    let inactive = discovery.inactive.iter().find(|s| s.path == record.source);
-    let why = match (inactive, ctx.ignore.ignoring_rule(&record.source, record.folded_dir)) {
-        (Some(s), _) => s.reason.clone(),
-        (None, Some(rule)) => format!("ignored by {rule}"),
-        (None, None) => not_a_source(&ctx.root, &ctx.ignore, &record.source)
+    let why = match discovery.inactive.iter().find(|s| s.path == record.source) {
+        Some(s) => s.reason.clone(),
+        None => not_a_source(&ctx.root, &ctx.ignore, &record.source)
             .map_or_else(|| "source removed".into(), |why| format!("source {why}")),
     };
     format!("{why}; `rustow undeploy {}` removes it", record.source)

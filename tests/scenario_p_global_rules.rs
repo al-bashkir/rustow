@@ -86,27 +86,59 @@ ignore = [".bashrc"]
     );
 }
 
-#[test]
-fn rule_ignore_after_deploy_is_orphaned_and_kept() {
-    let fx = Fixture::new();
-    fx.write("rustow.toml", "version = 1\n");
+/// Deploys `.gitconfig` and `.config/foot/` with `config`, then adds a
+/// matching rule that ignores `pattern`. The next runs report nothing for
+/// the deployed `dest`, and `undeploy orphaned` keeps it.
+fn ignored_after_deploy(fx: &Fixture, config: &str, pattern: &str, dest: &str) {
+    fx.write("rustow.toml", config);
     fx.write(".gitconfig", "g\n");
+    fx.write(".config/foot/foot.ini", "f\n");
+    fx.write(".config/foot/themes/dark.ini", "d\n");
     fx.ok(&["apply"]);
-    fx.write(
-        "rustow.toml",
-        "version = 1\n[[global_rules]]\nfamily = \"unix\"\nignore = [\".gitconfig\"]\n",
-    );
+    let content = read(&fx.home_path(dest));
+    let rule = format!("[[global_rules]]\nfamily = \"unix\"\nignore = [\"{pattern}\"]\n");
+    fx.write("rustow.toml", &format!("{config}{rule}"));
     let out = fx.ok(&["apply"]);
-    let detail = format!("ignored by {RULE1}; `rustow undeploy .gitconfig` removes it");
+    assert!(!out.stdout.contains("orphaned"), "{out:?}");
+    let st = fx.ok(&["status"]);
+    assert!(!st.stdout.contains("ORPHANED"), "{st:?}");
+    fx.ok(&["undeploy", "orphaned"]);
+    assert_eq!(read(&fx.home_path(dest)), content, "kept");
+}
+
+#[test]
+fn rule_ignore_after_deploy_leaves_the_file_and_its_record() {
+    let fx = Fixture::new();
+    ignored_after_deploy(&fx, "version = 1\n", "/.gitconfig", ".gitconfig");
+    let st = fx.ok(&["status", "--ignored"]);
     assert!(
-        out.stdout.contains("orphaned ~/.gitconfig") && out.stdout.contains(&detail),
-        "{out:?}"
+        st.stdout
+            .lines()
+            .any(|l| l.contains("IGNORED") && l.contains(".gitconfig")),
+        "{st:?}"
     );
-    assert!(is_symlink(&fx.home_path(".gitconfig")), "kept");
-    let st = fx.run(&["status"]);
-    assert!(st.stdout.contains("ORPHANED") && st.stdout.contains(&detail), "{st:?}");
-    fx.ok(&["undeploy", ".gitconfig"]);
-    assert!(!is_symlink(&fx.home_path(".gitconfig")));
+    fx.write("rustow.toml", "version = 1\n");
+    // Without the record, the link would be UNMANAGED and status would exit 1.
+    let st = fx.ok(&["status", "-v"]);
+    assert!(st.stdout.contains("LINKED"), "{st:?}");
+}
+
+#[test]
+fn rule_ignore_after_deploy_leaves_an_unfolded_folder() {
+    let config = "version = 1\n[[file_rules]]\nsource = \".config/foot\"\nfold_directories = false\n";
+    let fx = Fixture::new();
+    ignored_after_deploy(&fx, config, ".config/foot/", ".config/foot/foot.ini");
+    assert!(is_symlink(&fx.home_path(".config/foot/foot.ini")));
+    // A path argument still selects the ignored destination.
+    fx.ok(&["undeploy", ".config/foot"]);
+    assert!(!fx.home_path(".config/foot/foot.ini").exists());
+}
+
+#[test]
+fn rule_ignore_after_deploy_leaves_a_folded_folder() {
+    let fx = Fixture::new();
+    ignored_after_deploy(&fx, "version = 1\n", ".config/foot/", ".config/foot/foot.ini");
+    assert!(is_symlink(&fx.home_path(".config/foot")));
 }
 
 #[test]
