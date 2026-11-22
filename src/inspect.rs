@@ -398,14 +398,15 @@ fn row_line(r: &Row, printer: &Printer) -> String {
     format!("{status} {dest}{}{mode}{detail}", shown(&r.source))
 }
 
-/// The tone of a status word: the tone of what `apply` does with the item.
+/// The tone of a status word: the tone of what `apply` does with the item,
+/// except MISSING, which needs attention.
 fn tone(status: &str) -> Tone {
     match status {
-        "MISSING" | "OUTDATED" | "UNWANTED" => Tone::Change,
+        "OUTDATED" | "UNWANTED" => Tone::Change,
         "UNMANAGED" | "ORPHANED" => Tone::Note,
         "ERROR" => Tone::Error,
         "LINKED" | "COPIED" | "TEMPLATED" | "IGNORED" => Tone::Quiet,
-        // MODIFIED, CONFLICT, SKIPPED; a new word needs attention until it gets an arm.
+        // MISSING, MODIFIED, CONFLICT, SKIPPED; a new word needs attention until it gets an arm.
         _ => Tone::Warn,
     }
 }
@@ -708,11 +709,12 @@ mod tests {
     /// On a terminal a status word takes the color of what `apply` does
     /// with the item: green for a change, cyan for a note, yellow for a
     /// conflict or a skip, red for an error, dim when nothing is to do.
+    /// MISSING is yellow: a destination that is not there needs attention.
     #[test]
     fn status_words_are_colored_on_a_terminal() {
         let p = Printer::colored(true);
         for (status, code) in [
-            ("MISSING", "32"),
+            ("MISSING", "33"),
             ("OUTDATED", "32"),
             ("UNWANTED", "32"),
             ("UNMANAGED", "36"),
