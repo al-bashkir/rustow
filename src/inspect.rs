@@ -403,10 +403,9 @@ fn tone(status: &str) -> Tone {
     match status {
         "MISSING" | "OUTDATED" | "UNWANTED" => Tone::Change,
         "UNMANAGED" | "ORPHANED" => Tone::Note,
-        "MODIFIED" | "CONFLICT" | "SKIPPED" => Tone::Warn,
         "ERROR" => Tone::Error,
         "LINKED" | "COPIED" | "TEMPLATED" | "IGNORED" => Tone::Quiet,
-        // A new word needs attention until it gets its own arm.
+        // MODIFIED, CONFLICT, SKIPPED; a new word needs attention until it gets an arm.
         _ => Tone::Warn,
     }
 }

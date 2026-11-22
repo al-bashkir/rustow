@@ -269,7 +269,7 @@ impl Printer {
 }
 
 /// What a status word tells the reader. Each tone has one color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub enum Tone {
     /// A change, done or to do: green.
     Change,
