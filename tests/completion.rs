@@ -108,6 +108,7 @@ fn global_options_show_only_where_a_command_reads_them() {
         (&["enc", "-"], &["-i", "-q"], &["-n", "-v"]),
         (&["file", "add", "-"], &["-n", "-t", "--no-color"], &["-i", "-v"]),
         (&["check", "-"], &["-j", "-r"], &["-n", "-i", "-v", "--no-color"]),
+        (&["doctor", "-"], &["-j", "--no-color"], &["-n", "-v"]),
         (&["completions", "-"], &[], &["-r", "-t", "-R", "-n", "-j", "-q"]),
     ] {
         let opts = options(&fx, words);

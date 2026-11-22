@@ -11,7 +11,7 @@ use crate::crypto;
 use crate::error::Result;
 use crate::fsops::TEMP_PREFIX;
 use crate::repo::Context;
-use crate::report::Printer;
+use crate::report::{Printer, Tone};
 
 struct Check {
     level: &'static str,
@@ -29,6 +29,25 @@ fn check(level: &'static str, name: &'static str, detail: impl Into<String>) -> 
         detail: detail.into(),
         shown: false,
     }
+}
+
+/// One check as text.
+fn line(c: &Check, printer: &Printer) -> String {
+    let detail = match c.shown {
+        true => c.detail.as_str().into(),
+        false => crate::report::shown(&c.detail),
+    };
+    let tone = match c.level {
+        "ok" => Tone::Quiet,
+        "info" => Tone::Note,
+        "fail" => Tone::Error,
+        _ => Tone::Warn, // "warn"
+    };
+    format!(
+        "{}  {}: {detail}",
+        printer.paint(&format!("{:>5}", c.level), tone),
+        c.name
+    )
 }
 
 /// Prints one line per check; exit 1 when any check fails.
@@ -65,11 +84,7 @@ pub fn doctor(ctx: &Context, printer: &Printer) -> Result<i32> {
         outln!("{}", json!({ "checks": list }));
     } else {
         for c in &checks {
-            let detail = match c.shown {
-                true => c.detail.as_str().into(),
-                false => crate::report::shown(&c.detail),
-            };
-            outln!("{:>5}  {}: {detail}", c.level, c.name);
+            outln!("{}", line(c, printer));
         }
     }
     Ok(i32::from(checks.iter().any(|c| c.level == "fail")))
@@ -244,6 +259,21 @@ fn foreign_dirs(dir: &Path, uid: u32, out: &mut Vec<(PathBuf, u32)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On a terminal each level gets its color: ok dim, info cyan, warn
+    /// yellow, fail red.
+    #[test]
+    fn levels_are_colored_on_a_terminal() {
+        let p = Printer::colored(true);
+        for (level, code) in [("ok", "2"), ("info", "36"), ("warn", "33"), ("fail", "31")] {
+            let want = format!("\x1b[{code}m{level:>5}\x1b[0m  gpg: x");
+            assert_eq!(line(&check(level, "gpg", "x"), &p), want, "{level}");
+        }
+        assert_eq!(
+            line(&check("ok", "gpg", "x"), &Printer::colored(false)),
+            "   ok  gpg: x"
+        );
+    }
 
     #[test]
     fn unjournaled_temp_files_skip_git_directories_and_the_journal() {

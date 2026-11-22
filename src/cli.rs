@@ -66,7 +66,7 @@ const TAKES: &[(&str, &[&[&str]])] = &[
     ("file list", &[PLACE]),
     ("template list", &[PLACE]),
     ("check", &[PLACE]),
-    ("doctor", &[PLACE]),
+    ("doctor", &[PLACE, COLOR]),
     ("state export", &[PLACE]),
 ];
 
