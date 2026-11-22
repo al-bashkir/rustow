@@ -222,9 +222,13 @@ impl Printer {
         }
     }
 
-    /// One line of `changes`; its verb is a change unless it is "ok".
+    /// One line of `changes`; its verb is a change unless it is "ok" or "adopt".
     fn change_line(&self, c: &Change) -> String {
-        let tone = if c.action == "ok" { Tone::Quiet } else { Tone::Change };
+        let tone = match c.action {
+            "ok" => Tone::Quiet,
+            "adopt" => Tone::Note,
+            _ => Tone::Change,
+        };
         let verb = self.paint(&format!("{:>8}", c.action), tone);
         format!("{verb} {}{}", shown(&c.path), detail(c.detail.as_deref()))
     }
@@ -504,7 +508,7 @@ mod tests {
     }
 
     /// A change line of init and the file commands: its verb is dim when
-    /// nothing changed, else green, as the summary counts it.
+    /// nothing changed, cyan for adopt (as in `apply`), else green.
     #[test]
     fn change_verbs_are_colored_on_a_terminal() {
         let line = |color, action, detail: Option<&str>| {
@@ -516,6 +520,7 @@ mod tests {
             "\x1b[32m  create\x1b[0m .x: added a"
         );
         assert_eq!(line(true, "unregister", None), "\x1b[32munregister\x1b[0m .x");
+        assert_eq!(line(true, "adopt", None), "\x1b[36m   adopt\x1b[0m .x");
         assert_eq!(line(false, "create", None), "  create .x");
     }
 }
