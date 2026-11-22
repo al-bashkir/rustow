@@ -407,10 +407,9 @@ impl Printer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn printer(color: bool) -> Printer {
+impl Printer {
+    /// A text printer for tests, with colors on or off.
+    pub fn colored(color: bool) -> Printer {
         Printer {
             json: false,
             quiet: false,
@@ -419,6 +418,15 @@ mod tests {
             home: None,
             warnings: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn printer(color: bool) -> Printer {
+        Printer::colored(color)
     }
 
     /// no-color.org: only a NO_COLOR with a value turns colors off.

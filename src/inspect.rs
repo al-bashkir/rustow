@@ -17,7 +17,7 @@ use crate::hash::Hash;
 use crate::paths::RelPath;
 use crate::plan::{self, Conflict, Content, Decision, Deploy, Desired, Plan, PlanItem, Step, resolve_id};
 use crate::repo::Context;
-use crate::report::{self, Printer, shown};
+use crate::report::{self, Printer, Tone, shown};
 use crate::source::{
     Discovery, Mode, Selector, SkipKind, Skipped, Source, check_collisions, not_a_source, shown_label,
 };
@@ -374,21 +374,40 @@ fn print_rows(rows: &[Row], attention: usize, printer: &Printer) {
         .iter()
         .filter(|r| printer.verbose || !CLEAN.contains(&r.status) || matches!(r.status, "IGNORED" | "SKIPPED"))
     {
-        let dest = r
-            .dest
-            .as_deref()
-            .map(|d| format!("{}  <- ", printer.path(d)))
-            .unwrap_or_default();
-        let mode = if r.mode.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", r.mode)
-        };
-        let detail = report::detail(r.detail.as_deref());
-        outln!("{:>9} {dest}{}{mode}{detail}", r.status, shown(&r.source));
+        outln!("{}", row_line(r, printer));
     }
     if !printer.quiet {
         outln!("{}", summary(rows, attention));
+    }
+}
+
+/// One status row as text.
+fn row_line(r: &Row, printer: &Printer) -> String {
+    let dest = r
+        .dest
+        .as_deref()
+        .map(|d| format!("{}  <- ", printer.path(d)))
+        .unwrap_or_default();
+    let mode = if r.mode.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", r.mode)
+    };
+    let detail = report::detail(r.detail.as_deref());
+    let status = printer.paint(&format!("{:>9}", r.status), tone(r.status));
+    format!("{status} {dest}{}{mode}{detail}", shown(&r.source))
+}
+
+/// The tone of a status word: the tone of what `apply` does with the item.
+fn tone(status: &str) -> Tone {
+    match status {
+        "MISSING" | "OUTDATED" | "UNWANTED" => Tone::Change,
+        "UNMANAGED" | "ORPHANED" => Tone::Note,
+        "MODIFIED" | "CONFLICT" | "SKIPPED" => Tone::Warn,
+        "ERROR" => Tone::Error,
+        "LINKED" | "COPIED" | "TEMPLATED" | "IGNORED" => Tone::Quiet,
+        // A new word needs attention until it gets its own arm.
+        _ => Tone::Warn,
     }
 }
 
@@ -671,4 +690,47 @@ fn unknown_names(meta: &Metadata) -> impl Iterator<Item = String> + '_ {
     [(&meta.owner, false), (&meta.group, true)]
         .into_iter()
         .filter_map(|(id, group)| resolve_id(id.as_ref()?, group).err())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(status: &'static str) -> Row {
+        Row {
+            source: ".x".into(),
+            dest: Some("/t/.x".into()),
+            mode: "link".into(),
+            status,
+            detail: None,
+        }
+    }
+
+    /// On a terminal a status word takes the color of what `apply` does
+    /// with the item: green for a change, cyan for a note, yellow for a
+    /// conflict or a skip, red for an error, dim when nothing is to do.
+    #[test]
+    fn status_words_are_colored_on_a_terminal() {
+        let p = Printer::colored(true);
+        for (status, code) in [
+            ("MISSING", "32"),
+            ("OUTDATED", "32"),
+            ("UNWANTED", "32"),
+            ("UNMANAGED", "36"),
+            ("ORPHANED", "36"),
+            ("MODIFIED", "33"),
+            ("CONFLICT", "33"),
+            ("SKIPPED", "33"),
+            ("ERROR", "31"),
+            ("LINKED", "2"),
+            ("COPIED", "2"),
+            ("TEMPLATED", "2"),
+            ("IGNORED", "2"),
+        ] {
+            let want = format!("\x1b[{code}m{status:>9}\x1b[0m /t/.x  <- .x (link)");
+            assert_eq!(row_line(&row(status), &p), want, "{status}");
+        }
+        let plain = row_line(&row("MISSING"), &Printer::colored(false));
+        assert_eq!(plain, "  MISSING /t/.x  <- .x (link)");
+    }
 }

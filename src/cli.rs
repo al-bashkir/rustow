@@ -56,7 +56,7 @@ const TAKES: &[(&str, &[&[&str]])] = &[
     ("cache clean", &[PLACE, DRY]),
     ("state import", &[PLACE, DRY]),
     ("state adopt", &[PLACE, DRY]),
-    ("status", &[PLACE, &["verbose"], UNLOCK]),
+    ("status", &[PLACE, ITEMS, UNLOCK]),
     ("diff", &[PLACE, UNLOCK]),
     ("file diff", &[PLACE, UNLOCK]),
     ("enc", &[PLACE, UNLOCK]),
