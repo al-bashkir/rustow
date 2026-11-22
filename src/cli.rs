@@ -34,6 +34,8 @@ const PLACE: &[&str] = &["repo", "target", "root_target", "json", "quiet"];
 // Item lines: unchanged ones (`-v`) and colored verbs.
 const ITEMS: &[&str] = &["verbose", "no_color"];
 const DRY: &[&str] = &["dry_run"];
+// Lines with a colored status word but no unchanged items to hide.
+const COLOR: &[&str] = &["no_color"];
 // Commands that decrypt or encrypt.
 const UNLOCK: &[&str] = &["interactive"];
 const DEPLOY: &[&[&str]] = &[PLACE, ITEMS, DRY, UNLOCK];
@@ -50,17 +52,17 @@ const TAKES: &[(&str, &[&[&str]])] = &[
     ("unlink", &[PLACE, ITEMS, DRY]),
     ("undeploy", &[PLACE, ITEMS, DRY]),
     ("undeploy orphaned", &[PLACE, ITEMS, DRY]),
-    ("init", &[PLACE, &["verbose"], DRY]),
-    ("file add", &[PLACE, DRY]),
-    ("file remove", &[PLACE, DRY]),
-    ("cache clean", &[PLACE, DRY]),
-    ("state import", &[PLACE, DRY]),
-    ("state adopt", &[PLACE, DRY]),
+    ("init", &[PLACE, ITEMS, DRY]),
+    ("file add", &[PLACE, COLOR, DRY]),
+    ("file remove", &[PLACE, COLOR, DRY]),
+    ("cache clean", &[PLACE, COLOR, DRY]),
+    ("state import", &[PLACE, COLOR, DRY]),
+    ("state adopt", &[PLACE, COLOR, DRY]),
     ("status", &[PLACE, ITEMS, UNLOCK]),
     ("diff", &[PLACE, UNLOCK]),
     ("file diff", &[PLACE, UNLOCK]),
-    ("enc", &[PLACE, UNLOCK]),
-    ("enc edit", &[PLACE, UNLOCK]),
+    ("enc", &[PLACE, COLOR, UNLOCK]),
+    ("enc edit", &[PLACE, COLOR, UNLOCK]),
     ("file list", &[PLACE]),
     ("template list", &[PLACE]),
     ("check", &[PLACE]),

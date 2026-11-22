@@ -214,12 +214,19 @@ impl Printer {
         }
         for c in changes {
             if !self.quiet && (c.action != "ok" || self.verbose || c.detail.is_some()) {
-                outln!("{:>8} {}{}", c.action, shown(&c.path), detail(c.detail.as_deref()));
+                outln!("{}", self.change_line(c));
             }
         }
         if !self.quiet {
             outln!("{}", changes_summary(changes, dry_run));
         }
+    }
+
+    /// One line of `changes`; its verb is a change unless it is "ok".
+    fn change_line(&self, c: &Change) -> String {
+        let tone = if c.action == "ok" { Tone::Quiet } else { Tone::Change };
+        let verb = self.paint(&format!("{:>8}", c.action), tone);
+        format!("{verb} {}{}", shown(&c.path), detail(c.detail.as_deref()))
     }
 
     fn item_line(&self, i: &ItemReport) {
@@ -494,5 +501,21 @@ mod tests {
             assert_eq!(p.verb(action), shown, "{action:?}");
         }
         assert_eq!(printer(false).verb(Action::Create), "  create");
+    }
+
+    /// A change line of init and the file commands: its verb is dim when
+    /// nothing changed, else green, as the summary counts it.
+    #[test]
+    fn change_verbs_are_colored_on_a_terminal() {
+        let line = |color, action, detail: Option<&str>| {
+            printer(color).change_line(&Change::new(".x", action, detail.map(Into::into)))
+        };
+        assert_eq!(line(true, "ok", None), "\x1b[2m      ok\x1b[0m .x");
+        assert_eq!(
+            line(true, "create", Some("added a")),
+            "\x1b[32m  create\x1b[0m .x: added a"
+        );
+        assert_eq!(line(true, "unregister", None), "\x1b[32munregister\x1b[0m .x");
+        assert_eq!(line(false, "create", None), "  create .x");
     }
 }

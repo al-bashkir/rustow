@@ -106,7 +106,7 @@ fn global_options_show_only_where_a_command_reads_them() {
         ),
         (&["status", "-"], &["-i", "-v", "-j", "-R", "--no-color"], &["-n"]),
         (&["enc", "-"], &["-i", "-q"], &["-n", "-v"]),
-        (&["file", "add", "-"], &["-n", "-t"], &["-i", "-v"]),
+        (&["file", "add", "-"], &["-n", "-t", "--no-color"], &["-i", "-v"]),
         (&["check", "-"], &["-j", "-r"], &["-n", "-i", "-v", "--no-color"]),
         (&["completions", "-"], &[], &["-r", "-t", "-R", "-n", "-j", "-q"]),
     ] {
