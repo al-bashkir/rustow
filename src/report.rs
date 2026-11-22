@@ -234,19 +234,46 @@ impl Printer {
     }
 
     fn verb(&self, action: Action) -> String {
-        let text = format!("{:>8}", action.as_str());
+        let tone = match action {
+            Action::Create | Action::Update | Action::Replace | Action::Remove => Tone::Change,
+            Action::Adopt | Action::Metadata | Action::Forget | Action::Orphaned => Tone::Note,
+            Action::Conflict | Action::Skip => Tone::Warn,
+            Action::Fail => Tone::Error,
+            Action::Unchanged => Tone::Quiet,
+        };
+        self.paint(&format!("{:>8}", action.as_str()), tone)
+    }
+
+    /// `text` in the color of `tone` when colors are on. Pad `text` before,
+    /// so that the escape codes do not count in the width.
+    pub fn paint(&self, text: &str, tone: Tone) -> String {
         if !self.color {
-            return text;
+            return text.to_owned();
         }
-        let code = match action {
-            Action::Create | Action::Update | Action::Replace | Action::Remove => "32",
-            Action::Adopt | Action::Metadata | Action::Forget | Action::Orphaned => "36",
-            Action::Conflict | Action::Skip => "33",
-            Action::Fail => "31",
-            Action::Unchanged => "2",
+        let code = match tone {
+            Tone::Change => "32",
+            Tone::Note => "36",
+            Tone::Warn => "33",
+            Tone::Error => "31",
+            Tone::Quiet => "2",
         };
         format!("\x1b[{code}m{text}\x1b[0m")
     }
+}
+
+/// What a status word tells the reader. Each tone has one color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// A change, done or to do: green.
+    Change,
+    /// A note that needs no action now: cyan.
+    Note,
+    /// A conflict, a skip or a warning: yellow.
+    Warn,
+    /// An error: red.
+    Error,
+    /// Nothing to do: dim.
+    Quiet,
 }
 
 /// ": <detail>" for a report line, escaped as `shown`; empty without one.
