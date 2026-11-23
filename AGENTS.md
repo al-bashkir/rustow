@@ -11,7 +11,7 @@ cargo test --all-features
 cargo build --release
 ```
 
-CI (`.github/workflows/ci.yml`) runs these on Linux and macOS. It also runs `cargo audit`.
+CI (`.github/workflows/ci.yml`) runs these on Linux and macOS with the newest stable Rust. On Linux, it also runs `cargo test --all-features` with the Rust version in `rust-version` (`Cargo.toml`). It also runs `cargo audit`. Pin each action to a full commit SHA, with its tag (or branch, if it has no tags) in a comment.
 
 Format Markdown with `dprint fmt`. The configuration is in `dprint.json`. CI does not check it.
 
