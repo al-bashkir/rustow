@@ -822,22 +822,29 @@ fn unsafe_cache(want: &Want, target: &Path) -> Option<&'static str> {
         .then_some("fix the permissions of that path (rustow makes its cache directories with mode 0700)")
 }
 
+/// Why another user can change what rustow does as root from this
+/// repository: the trust rule of link targets (`fsops::trust_cache`), for
+/// the current user, on `rustow.toml`, which decides the destination,
+/// metadata and `[vars]` of system files and which ones a
+/// `[[global_rules]]` entry removes, and on `.rustowignore`, which
+/// decides which system sources exist. `None` when both pass.
+fn untrusted_config(ctx: &Context) -> Option<String> {
+    let me = geteuid().as_raw();
+    [crate::config::CONFIG_FILE, crate::ignore::IGNORE_FILE]
+        .iter()
+        .find_map(|name| fsops::trust_cache(&ctx.root.join(name), me).err())
+}
+
 /// Why another user can change what rustow installs as root from the
-/// system source `source`: the trust rule of link targets
-/// (`fsops::trust_cache`) on its repository path and on `rustow.toml`,
-/// which decides its destination, metadata and `[vars]`, for the current
-/// user. `None` for a home source or a trusted one. `check` reports it too.
+/// system source `source`: `untrusted_config`, or the trust rule on its
+/// repository path. `None` for a home source or a trusted one. `check`
+/// reports it too.
 pub fn untrusted_source(ctx: &Context, source: &Source) -> Option<String> {
     if source.scope != Scope::Root {
         return None;
     }
-    let me = geteuid().as_raw();
-    let why = [
-        ctx.root.join(crate::config::CONFIG_FILE),
-        ctx.root.join(source.path.as_path()),
-    ]
-    .iter()
-    .find_map(|path| fsops::trust_cache(path, me).err())?;
+    let path = ctx.root.join(source.path.as_path());
+    let why = untrusted_config(ctx).or_else(|| fsops::trust_cache(&path, geteuid().as_raw()).err())?;
     Some(format!("{why}; another user can change what rustow installs as root"))
 }
 
@@ -1537,11 +1544,19 @@ fn other_target(dest: &Path, record: &Record) -> Skipped {
 }
 
 /// The removal of the recorded destination `dest` (`rel` below its target
-/// root). An error while rustow looks at it fails this item only.
+/// root). An error while rustow looks at it fails this item only. A system
+/// file stays while `untrusted_config` fails: the configuration chose it.
 fn removal(ctx: &Context, dest: &Path, record: &Record, rel: &Path, created: &BTreeSet<PathBuf>) -> Removal {
-    let (path, verdict) = match observe_recorded(ctx, record, dest, rel) {
-        Ok((path, found)) => (path, removal_verdict(found, record)),
-        Err(e) => (dest.to_path_buf(), Verdict::Fail(with_privilege_hint(e))),
+    let untrusted = (record.scope == Scope::Root).then(|| untrusted_config(ctx)).flatten();
+    let (path, verdict) = match (untrusted, observe_recorded(ctx, record, dest, rel)) {
+        (Some(why), _) => (
+            dest.to_path_buf(),
+            Verdict::Keep(format!(
+                "untrusted source: {why}; another user can change what rustow removes as root"
+            )),
+        ),
+        (None, Ok((path, found))) => (path, removal_verdict(found, record)),
+        (None, Err(e)) => (dest.to_path_buf(), Verdict::Fail(with_privilege_hint(e))),
     };
     let sudo = removal_needs_sudo(record.scope, &verdict, &path, created);
     Removal {

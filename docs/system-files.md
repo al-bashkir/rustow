@@ -121,7 +121,7 @@ A system file never deploys as a symlink. A symlink into a private cache is unus
 
 `rustow link` and `rustow unlink` take symlinks only, so they never deploy or remove a system file. `rustow file apply`, `rustow template apply` and `rustow apply` deploy system files. `rustow undeploy` removes them.
 
-The [trust rule](security.md#trust-rule) checks the repository source of each system file that deploys, and `rustow.toml`. rustow installs it as root, so a source that another user can change is a conflict: "untrusted source: …; another user can change what rustow installs as root". `--force` and `--backup` do not resolve it. `check` reports it.
+The [trust rule](security.md#trust-rule) checks the repository source of each system file that deploys, `rustow.toml` and `.rustowignore`. rustow installs it as root, so a source that another user can change is a conflict: "untrusted source: …; another user can change what rustow installs as root". `--force` and `--backup` do not resolve it. `check` reports it. For the same reason, while `rustow.toml` or `.rustowignore` fails the rule, `apply` and `undeploy` leave each recorded system file in place: "untrusted source: …; another user can change what rustow removes as root".
 
 ## Cache of other users
 

@@ -549,6 +549,79 @@ fn a_configuration_that_others_can_change_blocks_system_files() {
     );
 }
 
+/// A `[[global_rules]]` entry in a rustow.toml that another user can change
+/// must not make rustow remove a system file: the removal is a conflict.
+#[test]
+fn a_global_rule_from_a_configuration_that_others_can_change_removes_no_system_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustowroot/etc/app.conf.tmpl", "x\n");
+    fx.ok(&["apply"]);
+    let config = fx.write(
+        "rustow.toml",
+        "version = 1\n[[global_rules]]\nfamily = \"unix\"\nignore = [\"/rustowroot\"]\n",
+    );
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o666)).unwrap();
+
+    let out = fx.run(&["apply", "--force"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let why = format!(
+        "untrusted source: {} is writable by others; another user can change what rustow removes as root",
+        config.display()
+    );
+    assert!(out.stdout.contains(&why), "{out:?}");
+    assert!(fx.root_path("etc/app.conf").exists(), "{out:?}");
+}
+
+/// .rustowignore decides which system files rustow installs. One that
+/// another user can change makes each system item a conflict.
+#[test]
+fn an_ignore_file_that_others_can_change_blocks_system_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustowroot/etc/app.conf.tmpl", "x\n");
+    let ignore = fx.write(".rustowignore", "");
+    fs::set_permissions(&ignore, fs::Permissions::from_mode(0o666)).unwrap();
+    let why = format!(
+        "untrusted source: {} is writable by others; another user can change what rustow installs as root",
+        ignore.display()
+    );
+
+    let out = fx.run(&["apply", "--force"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(out.stdout.contains(&why), "{out:?}");
+    assert!(!fx.root_path("etc/app.conf").exists());
+    let check = fx.run(&["check"]);
+    assert_eq!(check.code, 1, "{check:?}");
+    assert!(
+        check
+            .stdout
+            .contains(&format!("problem: rustowroot/etc/app.conf.tmpl: {why}")),
+        "{check:?}"
+    );
+}
+
+/// An exclusion in a .rustowignore that another user can change must not
+/// make `undeploy orphaned` remove a system file.
+#[test]
+fn an_ignore_file_that_others_can_change_orphans_no_system_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustowroot/etc/app.conf.tmpl", "x\n");
+    fx.ok(&["apply"]);
+    let ignore = fx.write(".rustowignore", "/rustowroot/etc/app.conf.tmpl\n");
+    fs::set_permissions(&ignore, fs::Permissions::from_mode(0o666)).unwrap();
+
+    let out = fx.run(&["undeploy", "orphaned"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let why = format!(
+        "untrusted source: {} is writable by others; another user can change what rustow removes as root",
+        ignore.display()
+    );
+    assert!(out.stdout.contains(&why), "{out:?}");
+    assert!(fx.root_path("etc/app.conf").exists(), "{out:?}");
+}
+
 /// A symlinked rustow.toml is checked at the file that it names.
 #[test]
 fn a_symlinked_configuration_is_checked_at_its_target() {
