@@ -201,6 +201,20 @@ fn decide_hidden(desired: &Desired, recorded: Recorded) -> Decision {
     }
 }
 
+/// A metadata fix changes the owner and mode of the inode that is there.
+/// Another user who owns it can hold it open and write it after the fix,
+/// so a file that neither root nor `me` owns gets a new inode (`Update`).
+fn not_in_place(decision: Decision, observed: &Observed, me: u32) -> Decision {
+    match (decision, observed) {
+        (Decision::FixMetadata, Observed::File { uid, .. } | Observed::Unreadable { uid, .. })
+            if *uid != 0 && *uid != me =>
+        {
+            Decision::Update
+        }
+        _ => decision,
+    }
+}
+
 /// The file already has the wanted content; `meta_ok` says whether owner and mode match.
 fn file_same_content(want: &Hash, meta_ok: bool, recorded: Recorded) -> Decision {
     match (meta_ok, recorded) {
@@ -1061,7 +1075,7 @@ fn deploy_step(
         Decision::Conflict(Conflict::Unmanaged | Conflict::Modified) if same_link(&path, &observed, &want.desired) => {
             Decision::Update
         }
-        decision => decision,
+        decision => not_in_place(decision, &observed, geteuid().as_raw()),
     };
     let expect = expected(&observed, record);
     let detail = broken_link_detail(&path, &observed, decision).or_else(|| expect.as_ref().map(|_| COMPARED.into()));
@@ -1906,6 +1920,29 @@ mod tests {
             "new files belong to the runner"
         );
         assert_eq!(kept_owner(&existing, &want_link("t")), (None, None));
+    }
+
+    /// Another user who owns the file can hold it open: a metadata change
+    /// then writes a new inode instead of changing that one in place.
+    #[test]
+    fn a_file_that_another_user_owns_gets_a_new_inode() {
+        let me = 1000;
+        let owned = |uid| Observed::File {
+            hash: h("a"),
+            mode: 0o644,
+            uid,
+            gid: uid,
+        };
+        assert_eq!(not_in_place(FixMetadata, &owned(4242), me), Update);
+        let unreadable = Observed::Unreadable {
+            mode: 0o600,
+            uid: 4242,
+            gid: 4242,
+        };
+        assert_eq!(not_in_place(FixMetadata, &unreadable, me), Update);
+        assert_eq!(not_in_place(FixMetadata, &owned(me), me), FixMetadata);
+        assert_eq!(not_in_place(FixMetadata, &owned(0), me), FixMetadata, "root's own file");
+        assert_eq!(not_in_place(Adopt, &owned(4242), me), Adopt);
     }
 
     #[test]
