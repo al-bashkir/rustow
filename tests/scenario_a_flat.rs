@@ -191,6 +191,52 @@ fn unsafe_ancestor_symlink_blocks() {
 
 /// Review I2: without a marker, --repo or RUSTOW_REPO no directory is
 /// silently taken as the repository (bare `rustow` deploys everything).
+/// Another user can put a marker in a shared directory above the working
+/// directory. A repository found that way must pass the trust rule: else
+/// nothing deploys from it, and init writes nothing into it.
+#[test]
+fn a_marker_in_a_directory_that_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fx = Fixture::new();
+    let shared = fx.base.join("shared");
+    write_file(
+        &shared.join("planted.tmpl"),
+        "{%- meta.type = \"copy\" %}\n{%- meta.destination = \".planted\" %}\nx\n",
+    );
+    write_file(&shared.join(".rustowignore"), "");
+    fs::create_dir(shared.join("work")).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    fx.env_repo = false;
+    fx.cwd = shared.join("work");
+    let why = format!("{} is writable by others", shared.display());
+    for args in [&["status"][..], &[], &["init"]] {
+        let out = fx.run(args);
+        assert_eq!(out.code, 2, "{args:?}: {out:?}");
+        assert!(out.stderr.contains(&why) && out.stderr.contains("--repo"), "{out:?}");
+    }
+    assert!(!fx.home_path(".planted").exists());
+    assert!(!shared.join("rustow.toml").exists(), "init wrote nothing");
+}
+
+/// A marker file that others can write is refused the same way.
+#[test]
+fn a_marker_that_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fx = flat();
+    let config = fx.repo.join("rustow.toml");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o666)).unwrap();
+    fx.env_repo = false;
+    fx.cwd = fx.repo.join(".config");
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(
+        out.stderr
+            .contains(&format!("{} is writable by others", config.display())),
+        "{out:?}"
+    );
+    assert!(!is_symlink(&fx.home_path(".bashrc")), "nothing deployed");
+}
+
 #[test]
 fn no_marker_means_no_repository() {
     let mut fx = flat();

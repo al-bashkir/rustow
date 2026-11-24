@@ -12,7 +12,7 @@ rustow picks the repository in this order:
 
 1. `--repo DIR`.
 2. `$RUSTOW_REPO`.
-3. The nearest ancestor of the current directory that has `rustow.toml` or `.rustowignore`. The old names `.rustow.toml` and `.rustowroot` also mark a repository, but every command then stops with exit 2 and asks you to rename them.
+3. The nearest ancestor of the current directory that has `rustow.toml` or `.rustowignore`. The old names `.rustow.toml` and `.rustowroot` also mark a repository, but every command then stops with exit 2 and asks you to rename them. Another user can put a marker in a shared directory such as `/tmp`, so each marker there must pass the [trust rule](security.md#trust-rule): it and each directory above it are owned by root or by you, and no other user may write them. Otherwise every command, `init` too, stops with exit 2: "repository <dir> found from the current directory is not safe: …; pass --repo DIR or set RUSTOW_REPO". `--repo` and `RUSTOW_REPO` are your own choice: rustow does not check them.
 4. The current directory, for `init` only. Every other command stops with exit 2 and asks you to run `rustow init`, pass `--repo` or set `RUSTOW_REPO`. This prevents a bare `rustow` from deploying an unrelated directory into your home.
 
 rustow refuses `/` as repository. It refuses a target directory inside the repository.

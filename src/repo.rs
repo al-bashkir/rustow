@@ -361,13 +361,27 @@ pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_re
 }
 
 /// The nearest ancestor of `cwd` with `rustow.toml`, `.rustowignore` or an
-/// old name.
+/// old name. It is found, not chosen, so each marker there must pass the
+/// trust rule: another user may have put it there.
 fn marked_ancestor(cwd: &Path) -> Result<Option<PathBuf>> {
     let markers = [CONFIG_FILE, IGNORE_FILE]
         .into_iter()
         .chain(OLD_NAMES.map(|(old, _)| old));
-    let found = cwd.ancestors().find(|d| markers.clone().any(|m| d.join(m).exists()));
-    Ok(found.map(Path::to_path_buf))
+    let Some(dir) = cwd.ancestors().find(|d| markers.clone().any(|m| d.join(m).exists())) else {
+        return Ok(None);
+    };
+    let me = nix::unistd::geteuid().as_raw();
+    let present = markers.map(|m| dir.join(m)).filter(|p| p.exists());
+    match present
+        .into_iter()
+        .find_map(|p| crate::fsops::trust_cache(&p, me).err())
+    {
+        Some(why) => Err(Error::Usage(format!(
+            "repository {} found from the current directory is not safe: {why}; pass --repo DIR or set RUSTOW_REPO",
+            dir.display()
+        ))),
+        None => Ok(Some(dir.to_path_buf())),
+    }
 }
 
 /// `--repo`, then `RUSTOW_REPO`: the repository that the user chose.
