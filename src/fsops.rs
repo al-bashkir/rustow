@@ -248,7 +248,7 @@ pub fn remove_empty_tree(dir: &Path) {
 /// Creates `dir` and missing parents with mode 0700. The final directory
 /// must be a real directory that the current user owns; group and other
 /// access is removed (`Dir::private`). So is the setgid bit that a new
-/// parent inherits.
+/// parent inherits. The directories above it must pass the trust rule.
 pub fn ensure_private_dir(dir: &Path) -> Result<()> {
     private_dir(dir).map(drop)
 }
@@ -256,6 +256,8 @@ pub fn ensure_private_dir(dir: &Path) -> Result<()> {
 fn private_dir(dir: &Path) -> Result<Dir> {
     let (parent, name) = split(dir)?;
     let me = geteuid().as_raw();
+    // rustow later uses the path again: no other user may rename a directory above it.
+    trust_cache(parent, me).map_err(|why| Error::Failed(format!("private directory {}: {why}", dir.display())))?;
     let base = (parent.ancestors().find(|a| fs::symlink_metadata(a).is_ok())).unwrap_or(parent);
     let mut cur = open_ready(base, me)?;
     for part in parent.strip_prefix(base).unwrap_or(Path::new("")).components() {
@@ -926,6 +928,26 @@ mod tests {
             let e = ensure_private_dir(Path::new("/usr")).unwrap_err().to_string();
             assert!(e.contains("/usr is owned by uid 0, not by the current user"), "{e}");
         }
+    }
+
+    /// Another user who can write a directory above a private directory
+    /// can rename it away and put another one in its place.
+    #[test]
+    fn a_private_dir_below_a_directory_that_others_can_write_is_refused() {
+        let (_t, d) = tmp();
+        let shared = d.join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        let why = format!("{} is writable by others", shared.display());
+        for dir in [shared.join("x"), shared.join("x/y")] {
+            let e = ensure_private_dir(&dir).unwrap_err().to_string();
+            assert!(e.contains(&why), "{e}");
+        }
+        assert!(!shared.join("x").exists(), "nothing created");
+        let e = private_tree(&shared.join("x"), &shared.join("x/y"))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains(&why), "{e}");
     }
 
     fn dir_id(p: &Path) -> DirId {

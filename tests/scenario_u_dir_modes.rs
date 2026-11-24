@@ -92,3 +92,37 @@ fn the_state_directory_and_its_new_parents_are_0700_under_a_setgid_parent() {
     assert_eq!(mode(&fx.state.join("rustow")), 0o700);
     assert_eq!(mode(&fx.base) & 0o7777, 0o2755, "an existing directory stays as it is");
 }
+
+/// Another user who can write a directory above the state directory can
+/// swap the state directory during a run. rustow refuses to use it.
+#[test]
+fn a_state_directory_below_a_directory_that_others_can_write_is_refused() {
+    let fx = Fixture::new();
+    let shared = fx.base.join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    fx.write(".bashrc", "b\n");
+    let state = shared.join("state");
+    let out = fx.run_env(&["apply"], &[("XDG_STATE_HOME", state.to_str().unwrap())]);
+    assert_eq!(out.code, 4, "{out:?}");
+    let why = format!("{} is writable by others", shared.display());
+    assert!(out.stderr.contains(&why), "{out:?}");
+    assert!(!fx.home_path(".bashrc").exists(), "{out:?}");
+}
+
+/// The same for a cache root: `cache clean` would walk it by path.
+#[test]
+fn cache_clean_refuses_a_cache_below_a_directory_that_others_can_write() {
+    let fx = Fixture::new();
+    let shared = fx.base.join("shared");
+    let cache = shared.join("cache");
+    fs::create_dir_all(cache.join("rendered")).unwrap();
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    let config = format!("version = 1\n[defaults]\ncache_dir = \"{}\"\n", cache.display());
+    fx.write("rustow.toml", &config);
+    let out = fx.run(&["cache", "clean"]);
+    assert_eq!(out.code, 4, "{out:?}");
+    let why = format!("{} is writable by others", shared.display());
+    assert!(out.stderr.contains(&why), "{out:?}");
+}
