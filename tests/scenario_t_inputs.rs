@@ -143,6 +143,22 @@ fn a_fifo_as_state_file_is_refused() {
     refused(&fx, &["status"], &state.display().to_string(), "is not a regular file");
 }
 
+/// The state decides what rustow removes. A state file that another user
+/// can change is refused, as rustow refuses one that is not a regular file.
+#[test]
+fn a_state_file_that_others_can_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write(".bashrc", "b\n");
+    fx.ok(&["apply"]);
+    let state = state_file(&fx);
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o666)).unwrap();
+    for args in [&["status"][..], &["undeploy", "--yes"]] {
+        refused(&fx, args, &state.display().to_string(), "is writable by others");
+    }
+    assert!(is_symlink(&fx.home_path(".bashrc")), "nothing removed");
+}
+
 /// rustow never follows a symlink at the state file: it is not a regular
 /// file either, wherever it points.
 #[test]

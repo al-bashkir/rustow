@@ -195,6 +195,10 @@ impl State {
             }
             Err(e) => return Err(e),
         };
+        // The state decides what rustow removes: no other user may change it.
+        if let Err(why) = fsops::trust_cache(&file, nix::unistd::geteuid().as_raw()) {
+            return Err(Error::Config(format!("state file {}: {why}", file.display())));
+        }
         let bad = |why: String| {
             Error::Failed(format!(
                 "state file {}: {why}; move it away to start over",
