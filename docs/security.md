@@ -20,6 +20,8 @@
 
 A symlink must point only at a file that other users cannot change. rustow checks each path on the chain of the link target: the repository source of an ordinary link, or the cache entry of a template or a decrypted file. Only home files deploy as symlinks. System files are always copies; the rule checks their sources (see below).
 
+A folded directory link shows every entry below the directory, so each entry must pass the rule too. A directory with an entry that fails does not fold: each file deploys as its own link, and the one that fails is a conflict. A folded link that is already there stays, because rustow unfolds only when it can deploy every file below it again. `apply` then reports the entry as a conflict.
+
 - Each path must be owned by root or by the owner of the destination directory. Otherwise the cause is "<path> is owned by uid N, not by root or uid M".
 - No path may be writable by others. A sticky directory that root owns, such as `/tmp`, is the exception.
 - A path may be writable by its group only when that group is the user-private group of the owner: the primary group of the owner, with the owner's name and no other members. An account in `/etc/passwd` whose primary group it is counts as a member. Thus a repository made with the default umask 002 of such systems is trusted.

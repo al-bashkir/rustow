@@ -197,3 +197,41 @@ fn a_rule_cannot_fold_a_direct_child_of_local() {
     fx.ok(&["apply"]);
     assert!(is_dir(&fx.home_path(".local/bin")));
 }
+
+/// A folded link exposes every entry below the directory. An entry that
+/// another user can change is refused, as it is for a link to one file.
+#[test]
+fn a_directory_with_an_entry_that_others_can_write_does_not_fold() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    let conf = fx.write(".config/app/conf", "c\n");
+    fx.write(".config/app/sub/plugin", "p\n");
+    let sub = fx.repo.join(".config/app/sub");
+    fs::set_permissions(&conf, fs::Permissions::from_mode(0o666)).unwrap();
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o777)).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    assert!(!is_symlink(&fx.home_path(".config/app")), "no folded link: {out:?}");
+    for path in [&conf, &sub] {
+        let why = format!("{} is writable by others", path.display());
+        assert!(out.stdout.contains(&why), "{out:?}");
+    }
+}
+
+/// The same for a recorded fold when an entry below it becomes writable
+/// by others later.
+#[test]
+fn a_recorded_fold_with_an_entry_that_others_can_write_is_a_conflict() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    fx.write("rustow.toml", "version = 1\n");
+    let conf = fx.write(".config/app/conf", "c\n");
+    fx.ok(&["apply"]);
+    assert!(is_symlink(&fx.home_path(".config/app")));
+    fs::set_permissions(&conf, fs::Permissions::from_mode(0o666)).unwrap();
+    let out = fx.run(&["apply"]);
+    assert_eq!(out.code, 3, "{out:?}");
+    let why = format!("{} is writable by others", conf.display());
+    assert!(out.stdout.contains(&why), "{out:?}");
+}

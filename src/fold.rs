@@ -282,9 +282,10 @@ struct Contents<'a> {
 
 impl Contents<'_> {
     /// No entry below `dir` is reserved (cache, state, `.git`), not even a
-    /// cache or state directory that does not exist yet, and every
-    /// non-directory entry is a source that the fold may hold (`linked`
-    /// for a `recorded` fold, else `chosen`): the fold would expose them.
+    /// cache or state directory that does not exist yet, every entry passes
+    /// the trust rule of link targets, and every non-directory entry is a
+    /// source that the fold may hold (`linked` for a `recorded` fold, else
+    /// `chosen`): the fold would expose them.
     fn holds_only(&mut self, ctx: &Context, dir: &RelPath, recorded: bool) -> Result<bool> {
         if ctx.ignore.holds_internal(dir) {
             return Ok(false);
@@ -301,9 +302,12 @@ impl Contents<'_> {
     /// (`entries_below`).
     fn walk(&mut self, ctx: &Context, dir: &RelPath) -> Result<()> {
         self.walked.insert(dir.clone());
+        let me = geteuid().as_raw();
         for (path, is_dir) in entries_below(ctx, dir)? {
-            let reserved = ctx.ignore.is_reserved(&path, is_dir);
-            let exposed = |allowed: &BTreeSet<&RelPath>| reserved || !is_dir && !allowed.contains(&path);
+            // A link to each file would check it; the fold links to all of them.
+            let refused = ctx.ignore.is_reserved(&path, is_dir)
+                || fsops::trust_cache(&ctx.root.join(path.as_path()), me).is_err();
+            let exposed = |allowed: &BTreeSet<&RelPath>| refused || !is_dir && !allowed.contains(&path);
             if exposed(&self.linked) {
                 add_up(&mut self.not_linked, Some(path.clone()));
             }
