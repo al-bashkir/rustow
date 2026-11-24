@@ -363,6 +363,8 @@ fn home_link_into_writable_source_tree_is_refused() {
 /// With umask 002, a repository is group-writable. That is trusted only
 /// when the group is the user's private group (named like the user, no
 /// other members); a shared primary group, as on some CI runners, is not.
+/// Only HOME and below change: the state directory is outside it, so its
+/// own check does not stop the run first.
 #[test]
 fn group_writable_repository_is_trusted_only_in_a_user_private_group() {
     use nix::unistd::{Group, User, geteuid};
@@ -372,7 +374,7 @@ fn group_writable_repository_is_trusted_only_in_a_user_private_group() {
     let user = User::from_uid(geteuid()).unwrap().expect("test user");
     let group = Group::from_gid(user.gid).unwrap().expect("primary group");
     let private = group.name == user.name && group.mem.iter().all(|m| *m == user.name);
-    for p in src.ancestors().take_while(|p| p.starts_with(&fx.base)) {
+    for p in src.ancestors().take_while(|p| p.starts_with(&fx.home)) {
         std::os::unix::fs::chown(p, None, Some(user.gid.as_raw())).unwrap();
         let mode = fs::metadata(p).unwrap().permissions().mode();
         fs::set_permissions(p, fs::Permissions::from_mode(mode | 0o020)).unwrap();
