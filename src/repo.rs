@@ -360,22 +360,35 @@ pub fn find_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_re
     }
 }
 
-/// `--repo`, then `RUSTOW_REPO`, then the nearest ancestor of the working
-/// directory with `rustow.toml`, `.rustowignore` or an old name; for `init`
-/// only, the working directory.
-fn locate_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_repo: bool) -> Result<PathBuf> {
-    if let Some(p) = &opts.repo {
-        return canonical_dir(&env.absolute(p)?, "--repo");
-    }
-    if let Some(p) = &env.repo {
-        return canonical_dir(&env.absolute(p)?, "RUSTOW_REPO");
-    }
-    let cwd = canonical_dir(env.current_dir()?, "current directory")?;
+/// The nearest ancestor of `cwd` with `rustow.toml`, `.rustowignore` or an
+/// old name.
+fn marked_ancestor(cwd: &Path) -> Result<Option<PathBuf>> {
     let markers = [CONFIG_FILE, IGNORE_FILE]
         .into_iter()
         .chain(OLD_NAMES.map(|(old, _)| old));
-    if let Some(dir) = cwd.ancestors().find(|d| markers.clone().any(|m| d.join(m).exists())) {
-        return Ok(dir.to_path_buf());
+    let found = cwd.ancestors().find(|d| markers.clone().any(|m| d.join(m).exists()));
+    Ok(found.map(Path::to_path_buf))
+}
+
+/// `--repo`, then `RUSTOW_REPO`: the repository that the user chose.
+fn chosen_root(opts: &GlobalOpts, env: &Env) -> Result<Option<PathBuf>> {
+    let (path, what) = match (&opts.repo, &env.repo) {
+        (Some(p), _) => (p, "--repo"),
+        (None, Some(p)) => (p, "RUSTOW_REPO"),
+        (None, None) => return Ok(None),
+    };
+    canonical_dir(&env.absolute(path)?, what).map(Some)
+}
+
+/// `chosen_root`, then `marked_ancestor` of the working directory; for
+/// `init` only, the working directory.
+fn locate_root(opts: &GlobalOpts, env: &Env, notices: &mut Vec<String>, new_repo: bool) -> Result<PathBuf> {
+    if let Some(root) = chosen_root(opts, env)? {
+        return Ok(root);
+    }
+    let cwd = canonical_dir(env.current_dir()?, "current directory")?;
+    if let Some(dir) = marked_ancestor(&cwd)? {
+        return Ok(dir);
     }
     // Only `init` may adopt an unmarked directory; anything else could
     // deploy a random directory (bare `rustow` = apply) into HOME.

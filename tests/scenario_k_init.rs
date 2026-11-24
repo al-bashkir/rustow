@@ -238,6 +238,20 @@ fn repo_flag_and_subdirectory_resolve_root() {
     assert!(!fx.repo.join(".config/sub/rustow.toml").exists());
 }
 
+/// Only init adopts an unmarked working directory, and it says so.
+#[test]
+fn init_adopts_an_unmarked_working_directory() {
+    let mut fx = Fixture::new();
+    fx.env_repo = false;
+    let out = fx.ok(&["init"]);
+    let notice = format!(
+        "note: initializing the current directory {} as a new repository",
+        fx.repo.display()
+    );
+    assert!(out.stderr.contains(&notice), "{out:?}");
+    assert!(fx.repo.join("rustow.toml").exists());
+}
+
 #[test]
 fn custom_cache_dir_is_created_and_ignored() {
     let fx = Fixture::new();
